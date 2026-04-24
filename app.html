@@ -1014,10 +1014,13 @@ function handleDrop(e){e.preventDefault();document.getElementById('idz').style.b
 
 async function handleIF(file) {
   if(!file)return;
+  impRows=[];
+  document.getElementById('ipa').style.display='none';
   const text=await new Promise(r=>{const rd=new FileReader();rd.onload=e=>r(e.target.result);rd.readAsText(file);});
   const rows=parseCSV(text);
   if(!rows.length){toast('Could not read file — try CSV','err');return;}
   impRows=rows;
+  toast('File loaded: '+rows.length+' rows','ok');
   document.getElementById('ifn').textContent=file.name+' · '+rows.length+' rows';
   const keys=Object.keys(rows[0]);
   document.getElementById('ipt').innerHTML=`<table class="tbl"><thead><tr>${keys.map(k=>`<th>${k}</th>`).join('')}</tr></thead><tbody>${rows.slice(0,8).map(r=>`<tr>${keys.map(k=>`<td>${r[k]||''}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
@@ -1072,11 +1075,19 @@ async function confImport() {
     if(matched&&u>0)await sb.from('inventory_transactions').insert({product_id:matched.product_id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,created_by:CU?.id});
   }
   if(lines.length)await sb.from('sales_lines').insert(lines);
-  toast('Import complete! '+lines.length+' products imported.','ok');
-  cancImport(); await loadProds(); loadIH();
+  toast('Import complete! '+lines.length+' rows imported.','ok');
+  cancImport();
+  await loadProds();
+  loadIH();
 }
 
-function cancImport(){impRows=[];document.getElementById('ipa').style.display='none';document.getElementById('ifl').value='';}
+function cancImport(){
+  impRows=[];
+  document.getElementById('ipa').style.display='none';
+  document.getElementById('ifl').value='';
+  document.getElementById('ipt').innerHTML='';
+  document.getElementById('ifn').textContent='Preview';
+}
 
 async function loadIH() {
   const {data}=await sb.from('sales_imports').select('*').order('imported_at',{ascending:false}).limit(10);
