@@ -390,12 +390,39 @@ body{font-family:var(--fb);background:var(--g50);color:var(--g900);min-height:10
             <button class="tab-btn" onclick="switchRT('top',this)">Top sellers</button>
             <button class="tab-btn" onclick="switchRT('bottom',this)">Bottom sellers</button>
           </div>
+          <!-- Weekly picker -->
+          <div id="rpt-weekly-picker" style="display:none;margin-bottom:14px">
+            <div class="card" style="padding:12px">
+              <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+                <div class="fg" style="margin:0"><label class="fl">Select week</label><select class="fs" id="rpt-week-select" style="width:260px" onchange="runWeeklyReport()"><option value="">Loading weeks...</option></select></div>
+              </div>
+            </div>
+          </div>
+          <!-- Monthly picker -->
+          <div id="rpt-monthly-picker" style="display:none;margin-bottom:14px">
+            <div class="card" style="padding:12px">
+              <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+                <div class="fg" style="margin:0"><label class="fl">Select month</label><select class="fs" id="rpt-month-select" style="width:220px" onchange="runMonthlyReport()"><option value="">Loading months...</option></select></div>
+              </div>
+            </div>
+          </div>
+          <!-- Custom date picker -->
           <div id="rpt-custom-dates" style="display:none;margin-bottom:14px">
             <div class="card" style="padding:12px">
               <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
                 <div class="fg" style="margin:0"><label class="fl">Start date</label><input class="fi" type="date" id="rpt-start" style="width:160px"></div>
                 <div class="fg" style="margin:0"><label class="fl">End date</label><input class="fi" type="date" id="rpt-end" style="width:160px"></div>
                 <button class="btn btn-p" onclick="runCustomReport()">Run report</button>
+              </div>
+            </div>
+          </div>
+          <!-- COGS date picker -->
+          <div id="rpt-cogs-dates" style="display:none;margin-bottom:14px">
+            <div class="card" style="padding:12px">
+              <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+                <div class="fg" style="margin:0"><label class="fl">Start date</label><input class="fi" type="date" id="rpt-cogs-start" style="width:160px"></div>
+                <div class="fg" style="margin:0"><label class="fl">End date</label><input class="fi" type="date" id="rpt-cogs-end" style="width:160px"></div>
+                <button class="btn btn-p" onclick="runCogsReport()">Run COGS report</button>
               </div>
             </div>
           </div>
@@ -1126,19 +1153,98 @@ function switchRT(tab,btn){
   document.querySelectorAll('.tab-bar .tab-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   curRT=tab;
-  const customDates=document.getElementById('rpt-custom-dates');
-  if(tab==='custom'){
-    customDates.style.display='block';
-    // Set default dates to last 30 days
+  // Hide all pickers first
+  ['rpt-weekly-picker','rpt-monthly-picker','rpt-custom-dates','rpt-cogs-dates'].forEach(id=>{
+    document.getElementById(id).style.display='none';
+  });
+  if(tab==='weekly'){
+    document.getElementById('rpt-weekly-picker').style.display='block';
+    loadWeekOptions();
+  } else if(tab==='monthly'){
+    document.getElementById('rpt-monthly-picker').style.display='block';
+    loadMonthOptions();
+  } else if(tab==='custom'){
+    document.getElementById('rpt-custom-dates').style.display='block';
     const now=new Date();
     const ago=new Date(now-30*86400000);
     if(!document.getElementById('rpt-start').value) document.getElementById('rpt-start').value=ago.toISOString().split('T')[0];
     if(!document.getElementById('rpt-end').value) document.getElementById('rpt-end').value=now.toISOString().split('T')[0];
     document.getElementById('rc').innerHTML='<div class="muted">Set your date range above and click Run report.</div>';
+  } else if(tab==='cogs'){
+    document.getElementById('rpt-cogs-dates').style.display='block';
+    const now=new Date();
+    const ago=new Date(now-30*86400000);
+    if(!document.getElementById('rpt-cogs-start').value) document.getElementById('rpt-cogs-start').value=ago.toISOString().split('T')[0];
+    if(!document.getElementById('rpt-cogs-end').value) document.getElementById('rpt-cogs-end').value=now.toISOString().split('T')[0];
+    document.getElementById('rc').innerHTML='<div class="muted">Set your date range above and click Run COGS report.</div>';
   } else {
-    customDates.style.display='none';
     loadRpt(tab);
   }
+}
+
+async function loadWeekOptions(){
+  const {data}=await sb.from('sales_imports').select('report_start_date,report_end_date').order('report_start_date',{ascending:false});
+  const sel=document.getElementById('rpt-week-select');
+  if(!data||!data.length){sel.innerHTML='<option>No imports found</option>';return;}
+  // Filter to weekly imports (7 days or less)
+  const weeks=data.filter(r=>{
+    if(!r.report_start_date||!r.report_end_date)return false;
+    const diff=(new Date(r.report_end_date)-new Date(r.report_start_date))/(86400000);
+    return diff<=7;
+  });
+  if(!weeks.length){sel.innerHTML='<option>No weekly imports found</option>';return;}
+  sel.innerHTML=weeks.map(r=>`<option value="${r.report_start_date}|${r.report_end_date}">${r.report_start_date} to ${r.report_end_date}</option>`).join('');
+  runWeeklyReport();
+}
+
+async function runWeeklyReport(){
+  const val=document.getElementById('rpt-week-select').value;
+  if(!val)return;
+  const [start,end]=val.split('|');
+  const el=document.getElementById('rc');
+  el.innerHTML='<div class="muted">Loading...</div>';
+  const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').eq('period_start_date',start).eq('period_end_date',end);
+  const bp=aggS(sl||[]);
+  const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
+  const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
+  el.innerHTML='<div style="font-size:12px;color:var(--g400);margin-bottom:10px;font-weight:500">Week: '+start+' to '+end+'</div>'+
+    rHdr([['Week sales',fmt(ts)],['Units sold',tu],['COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+sTbl(sr);
+}
+
+async function loadMonthOptions(){
+  const {data}=await sb.from('sales_imports').select('report_start_date,report_end_date').order('report_start_date',{ascending:false});
+  const sel=document.getElementById('rpt-month-select');
+  if(!data||!data.length){sel.innerHTML='<option>No imports found</option>';return;}
+  // Group by month
+  const months={};
+  data.forEach(r=>{
+    if(!r.report_start_date)return;
+    const d=new Date(r.report_start_date);
+    const key=d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0');
+    const label=d.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    if(!months[key])months[key]={label,start:r.report_start_date,end:r.report_end_date};
+    if(r.report_end_date>months[key].end)months[key].end=r.report_end_date;
+    if(r.report_start_date<months[key].start)months[key].start=r.report_start_date;
+  });
+  const sorted=Object.entries(months).sort((a,b)=>b[0].localeCompare(a[0]));
+  sel.innerHTML=sorted.map(([k,v])=>`<option value="${v.start}|${v.end}">${v.label}</option>`).join('');
+  runMonthlyReport();
+}
+
+async function runMonthlyReport(){
+  const val=document.getElementById('rpt-month-select').value;
+  if(!val)return;
+  const [start,end]=val.split('|');
+  const el=document.getElementById('rc');
+  el.innerHTML='<div class="muted">Loading...</div>';
+  const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').gte('period_start_date',start).lte('period_end_date',end);
+  const bp=aggS(sl||[]);
+  const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
+  const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
+  const d=new Date(start);
+  const label=d.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+  el.innerHTML='<div style="font-size:12px;color:var(--g400);margin-bottom:10px;font-weight:500">Month: '+label+'</div>'+
+    rHdr([['Month sales',fmt(ts)],['Units sold',tu],['COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+sTbl(sr);
 }
 
 async function runCustomReport() {
@@ -1151,27 +1257,32 @@ async function runCustomReport() {
   const bp=aggS(sl||[]);
   const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
   const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
-  el.innerHTML=rHdr([['Sales',fmt(ts)],['Units',tu],['COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+
-    '<div style="font-size:12px;color:var(--g400);margin-bottom:10px">Period: '+start+' to '+end+'</div>'+sTbl(sr);
+  el.innerHTML='<div style="font-size:12px;color:var(--g400);margin-bottom:10px;font-weight:500">Custom period: '+start+' to '+end+'</div>'+
+    rHdr([['Sales',fmt(ts)],['Units',tu],['COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+sTbl(sr);
+}
+
+async function runCogsReport(){
+  const start=document.getElementById('rpt-cogs-start').value;
+  const end=document.getElementById('rpt-cogs-end').value;
+  if(!start||!end){toast('Please select dates','err');return;}
+  const el=document.getElementById('rc');
+  el.innerHTML='<div class="muted">Loading...</div>';
+  const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').gte('period_start_date',start).lte('period_end_date',end);
+  const bp=aggS(sl||[]);
+  const sr=Object.values(bp).filter(r=>r.u>0).sort((a,b)=>b.c-a.c);
+  const ts=sr.reduce((s,r)=>s+r.s,0),tc=sr.reduce((s,r)=>s+r.c,0);
+  el.innerHTML='<div style="font-size:12px;color:var(--g400);margin-bottom:10px;font-weight:500">Period: '+start+' to '+end+'</div>'+
+    rHdr([['Total sales',fmt(ts)],['Total COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+
+    `<div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">COGS by product</div>
+    <table class="tbl"><thead><tr><th>#</th><th>Product</th><th>Units sold</th><th>Avg cost/unit</th><th>Total COGS</th><th>% of COGS</th><th>Revenue</th><th>Margin</th></tr></thead><tbody>
+    ${sr.map((r,i)=>{const mg=r.s>0?((r.s-r.c)/r.s*100).toFixed(1):0;return`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${r.u>0?fmt(r.c/r.u):'—'}</td><td>${fmt(r.c)}</td><td>${tc>0?(r.c/tc*100).toFixed(1)+'%':'—'}</td><td>${fmt(r.s)}</td><td class="${mg>=40?'tg':mg>=20?'ta':'tr'}">${mg}%</td></tr>`;}).join('')}
+    </tbody></table></div>`;
 }
 
 async function loadRpt(tab) {
   const el=document.getElementById('rc');
   el.innerHTML='<div class="muted">Loading...</div>';
-  const now=new Date();
-  if(tab==='weekly'){
-    const wa=new Date(now-7*86400000).toISOString();
-    const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').gte('created_at',wa);
-    const bp=aggS(sl||[]);const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
-    const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
-    el.innerHTML=rHdr([['Week sales',fmt(ts)],['Units',tu],['COGS',fmt(tc)],['Gross profit',fmt(ts-tc)]])+sTbl(sr);
-  } else if(tab==='monthly'){
-    const ma=new Date(now.getFullYear(),now.getMonth()-1,now.getDate()).toISOString();
-    const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').gte('created_at',ma);
-    const bp=aggS(sl||[]);const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
-    const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
-    el.innerHTML=rHdr([['Month sales',fmt(ts)],['Units',tu],['COGS',fmt(tc)],['Gross profit',fmt(ts-tc)]])+sTbl(sr);
-  } else if(tab==='inventory'){
+  if(tab==='inventory'){
     const tv=AP.reduce((s,p)=>s+(parseFloat(p.inventory_value)||0),0);
     el.innerHTML=rHdr([['Total value',fmt(tv)],['Products',AP.length],['Need reorder',AP.filter(p=>p.stock_status==='REORDER').length],['Active',AP.filter(p=>p.is_active).length]])+
       `<div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Inventory valuation</div><table class="tbl"><thead><tr><th>Product</th><th>On hand</th><th>Avg cost</th><th>Price</th><th>Value</th><th>Margin</th><th>Status</th></tr></thead><tbody>
@@ -1183,16 +1294,6 @@ async function loadRpt(tab) {
   } else if(tab==='bottom'){
     const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').not('product_id','is',null);
     el.innerHTML=`<div style="background:var(--red2);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--red)">These products have the lowest sales.</div><div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Bottom sellers — all time</div>`+sTbl(Object.values(aggS(sl||[])).sort((a,b)=>a.s-b.s).slice(0,20))+'</div>';
-  } else if(tab==='cogs'){
-    const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').not('product_id','is',null);
-    const bp=aggS(sl||[]);
-    const sr=Object.values(bp).sort((a,b)=>b.c-a.c);
-    const ts=sr.reduce((s,r)=>s+r.s,0),tc=sr.reduce((s,r)=>s+r.c,0);
-    el.innerHTML=rHdr([['Total sales',fmt(ts)],['Total COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Overall margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+
-      `<div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">COGS breakdown by product — all time</div>
-      <table class="tbl"><thead><tr><th>#</th><th>Product</th><th>Units sold</th><th>Avg cost/unit</th><th>Total COGS</th><th>% of total COGS</th></tr></thead><tbody>
-      ${sr.map((r,i)=>`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${r.u>0?fmt(r.c/r.u):'—'}</td><td>${fmt(r.c)}</td><td>${tc>0?(r.c/tc*100).toFixed(1)+'%':'—'}</td></tr>`).join('')}
-      </tbody></table></div>`;
   } else if(tab==='pl'){
     const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').not('product_id','is',null);
     const bp=aggS(sl||[]);
@@ -1220,10 +1321,6 @@ async function loadRpt(tab) {
       </div>`;
   }
 }
-
-function aggS(rows){const m={};rows.forEach(r=>{const k=r.product_id||r.raw_product_name,nm=r.products?.name||r.raw_product_name,c=parseFloat(r.products?.average_cost||0);if(!m[k])m[k]={name:nm,s:0,u:0,c:0};m[k].s+=parseFloat(r.sales_amount||0);m[k].u+=parseInt(r.units_sold||0);m[k].c+=parseInt(r.units_sold||0)*c;});return m;}
-function rHdr(items){return`<div style="display:grid;grid-template-columns:repeat(${items.length},1fr);gap:9px;margin-bottom:12px">${items.map(([l,v])=>`<div class="stat"><div class="stat-lbl">${l}</div><div class="stat-val">${v}</div></div>`).join('')}</div>`;}
-function sTbl(rows){return`<div class="card"><table class="tbl"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Sales</th><th>COGS</th><th>Profit</th><th>Margin</th></tr></thead><tbody>${rows.map((r,i)=>{const pr=r.s-r.c,mg=r.s>0?((pr/r.s)*100).toFixed(1):0;return`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${fmt(r.s)}</td><td>${fmt(r.c)}</td><td class="${pr>=0?'tg':'tr'}">${fmt(pr)}</td><td class="${mg>=40?'tg':mg>=20?'ta':'tr'}">${mg}%</td></tr>`;}).join('')}</tbody></table></div>`;}
 
 async function loadSets(){
   await loadCats();await loadSups();
