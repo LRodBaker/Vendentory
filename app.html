@@ -1203,7 +1203,20 @@ async function runWeeklyReport(){
   const [start,end]=val.split('|');
   const el=document.getElementById('rc');
   el.innerHTML='<div class="muted">Loading...</div>';
-  const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').eq('period_start_date',start).eq('period_end_date',end);
+  const {data:sl,error}=await sb.from('sales_lines').select('*,products(name,average_cost)')
+    .gte('period_start_date',start).lte('period_start_date',start);
+  if(error){el.innerHTML='<div style="color:var(--red)">Error: '+error.message+'</div>';return;}
+  if(!sl||!sl.length){
+    // Try broader query
+    const {data:sl2}=await sb.from('sales_lines').select('*,products(name,average_cost)')
+      .gte('period_start_date',start).lte('period_end_date',end);
+    const bp2=aggS(sl2||[]);
+    const sr2=Object.values(bp2).sort((a,b)=>b.s-a.s);
+    const ts2=sr2.reduce((s,r)=>s+r.s,0),tu2=sr2.reduce((s,r)=>s+r.u,0),tc2=sr2.reduce((s,r)=>s+r.c,0);
+    el.innerHTML='<div style="font-size:12px;color:var(--g400);margin-bottom:10px;font-weight:500">Week: '+start+' to '+end+'</div>'+
+      rHdr([['Week sales',fmt(ts2)],['Units sold',tu2],['COGS',fmt(tc2)],['Gross profit',fmt(ts2-tc2)],['Margin',ts2>0?((ts2-tc2)/ts2*100).toFixed(1)+'%':'—']])+sTbl(sr2);
+    return;
+  }
   const bp=aggS(sl||[]);
   const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
   const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
@@ -1237,11 +1250,13 @@ async function runMonthlyReport(){
   const [start,end]=val.split('|');
   const el=document.getElementById('rc');
   el.innerHTML='<div class="muted">Loading...</div>';
-  const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').gte('period_start_date',start).lte('period_end_date',end);
+  const {data:sl,error}=await sb.from('sales_lines').select('*,products(name,average_cost)')
+    .gte('period_start_date',start).lte('period_start_date',end);
+  if(error){el.innerHTML='<div style="color:var(--red)">Error: '+error.message+'</div>';return;}
   const bp=aggS(sl||[]);
   const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
   const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
-  const d=new Date(start);
+  const d=new Date(start+'T12:00:00');
   const label=d.toLocaleDateString('en-US',{month:'long',year:'numeric'});
   el.innerHTML='<div style="font-size:12px;color:var(--g400);margin-bottom:10px;font-weight:500">Month: '+label+'</div>'+
     rHdr([['Month sales',fmt(ts)],['Units sold',tu],['COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+sTbl(sr);
@@ -1253,11 +1268,13 @@ async function runCustomReport() {
   if(!start||!end){toast('Please select start and end dates','err');return;}
   const el=document.getElementById('rc');
   el.innerHTML='<div class="muted">Loading...</div>';
-  const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').gte('period_start_date',start).lte('period_end_date',end);
+  const {data:sl,error}=await sb.from('sales_lines').select('*,products(name,average_cost)')
+    .gte('period_start_date',start).lte('period_start_date',end);
+  if(error){el.innerHTML='<div style="color:var(--red)">Error: '+error.message+'</div>';return;}
   const bp=aggS(sl||[]);
   const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
   const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
-  el.innerHTML='<div style="font-size:12px;color:var(--g400);margin-bottom:10px;font-weight:500">Custom period: '+start+' to '+end+'</div>'+
+  el.innerHTML='<div style="font-size:12px;color:var(--g400);margin-bottom:10px;font-weight:500">Period: '+start+' to '+end+'</div>'+
     rHdr([['Sales',fmt(ts)],['Units',tu],['COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+sTbl(sr);
 }
 
@@ -1267,7 +1284,9 @@ async function runCogsReport(){
   if(!start||!end){toast('Please select dates','err');return;}
   const el=document.getElementById('rc');
   el.innerHTML='<div class="muted">Loading...</div>';
-  const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').gte('period_start_date',start).lte('period_end_date',end);
+  const {data:sl,error}=await sb.from('sales_lines').select('*,products(name,average_cost)')
+    .gte('period_start_date',start).lte('period_start_date',end);
+  if(error){el.innerHTML='<div style="color:var(--red)">Error: '+error.message+'</div>';return;}
   const bp=aggS(sl||[]);
   const sr=Object.values(bp).filter(r=>r.u>0).sort((a,b)=>b.c-a.c);
   const ts=sr.reduce((s,r)=>s+r.s,0),tc=sr.reduce((s,r)=>s+r.c,0);
@@ -1289,10 +1308,11 @@ async function loadRpt(tab) {
       ${AP.map(p=>{const m=p.selling_price>0&&p.average_cost>0?(((p.selling_price-p.average_cost)/p.selling_price)*100).toFixed(1):0;return`<tr><td><strong>${p.name}</strong></td><td>${p.on_hand_qty}</td><td>${fmt(p.average_cost)}</td><td>${fmt(p.selling_price)}</td><td>${fmt(p.inventory_value)}</td><td class="${m>=40?'tg':m>=20?'ta':'tr'}">${m}%</td><td><span class="badge ${p.stock_status==='REORDER'?'b-red':'b-ok'}">${p.stock_status}</span></td></tr>`;}).join('')}
       </tbody></table></div>`;
   } else if(tab==='top'){
-    const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').not('product_id','is',null);
-    el.innerHTML=`<div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Top sellers — all time</div>`+sTbl(Object.values(aggS(sl||[])).sort((a,b)=>b.s-a.s).slice(0,20))+'</div>';
+    const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').not('product_id','is',null).limit(1000);
+    const sr=Object.values(aggS(sl||[])).sort((a,b)=>b.s-a.s).slice(0,20);
+    el.innerHTML=`<div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Top sellers — all time</div>`+(sr.length?sTbl(sr):'<div class="muted">No sales data found</div>')+'</div>';
   } else if(tab==='bottom'){
-    const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').not('product_id','is',null);
+    const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').not('product_id','is',null).limit(1000);
     el.innerHTML=`<div style="background:var(--red2);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--red)">These products have the lowest sales.</div><div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Bottom sellers — all time</div>`+sTbl(Object.values(aggS(sl||[])).sort((a,b)=>a.s-b.s).slice(0,20))+'</div>';
   } else if(tab==='pl'){
     const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').not('product_id','is',null);
