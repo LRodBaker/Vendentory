@@ -383,9 +383,21 @@ body{font-family:var(--fb);background:var(--g50);color:var(--g900);min-height:10
           <div class="tab-bar">
             <button class="tab-btn active" onclick="switchRT('weekly',this)">Weekly</button>
             <button class="tab-btn" onclick="switchRT('monthly',this)">Monthly</button>
+            <button class="tab-btn" onclick="switchRT('custom',this)">Custom dates</button>
+            <button class="tab-btn" onclick="switchRT('cogs',this)">COGS</button>
+            <button class="tab-btn" onclick="switchRT('pl',this)">P&amp;L</button>
             <button class="tab-btn" onclick="switchRT('inventory',this)">Inventory</button>
             <button class="tab-btn" onclick="switchRT('top',this)">Top sellers</button>
             <button class="tab-btn" onclick="switchRT('bottom',this)">Bottom sellers</button>
+          </div>
+          <div id="rpt-custom-dates" style="display:none;margin-bottom:14px">
+            <div class="card" style="padding:12px">
+              <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+                <div class="fg" style="margin:0"><label class="fl">Start date</label><input class="fi" type="date" id="rpt-start" style="width:160px"></div>
+                <div class="fg" style="margin:0"><label class="fl">End date</label><input class="fi" type="date" id="rpt-end" style="width:160px"></div>
+                <button class="btn btn-p" onclick="runCustomReport()">Run report</button>
+              </div>
+            </div>
           </div>
           <div id="rc"><div class="muted">Loading...</div></div>
         </div>
@@ -1110,7 +1122,38 @@ async function loadIH() {
   document.getElementById('ih').innerHTML=(data||[]).length?`<table class="tbl"><thead><tr><th>Date</th><th>Source</th><th>Period</th><th>Status</th></tr></thead><tbody>${(data||[]).map(r=>`<tr><td>${fmtD(r.imported_at)}</td><td>${r.source_system}</td><td>${r.report_start_date||'—'} to ${r.report_end_date||'—'}</td><td><span class="badge b-ok">${r.status}</span></td></tr>`).join('')}</tbody></table>`:'<div class="muted">No imports yet</div>';
 }
 
-function switchRT(tab,btn){document.querySelectorAll('.tab-bar .tab-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');curRT=tab;loadRpt(tab);}
+function switchRT(tab,btn){
+  document.querySelectorAll('.tab-bar .tab-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  curRT=tab;
+  const customDates=document.getElementById('rpt-custom-dates');
+  if(tab==='custom'){
+    customDates.style.display='block';
+    // Set default dates to last 30 days
+    const now=new Date();
+    const ago=new Date(now-30*86400000);
+    if(!document.getElementById('rpt-start').value) document.getElementById('rpt-start').value=ago.toISOString().split('T')[0];
+    if(!document.getElementById('rpt-end').value) document.getElementById('rpt-end').value=now.toISOString().split('T')[0];
+    document.getElementById('rc').innerHTML='<div class="muted">Set your date range above and click Run report.</div>';
+  } else {
+    customDates.style.display='none';
+    loadRpt(tab);
+  }
+}
+
+async function runCustomReport() {
+  const start=document.getElementById('rpt-start').value;
+  const end=document.getElementById('rpt-end').value;
+  if(!start||!end){toast('Please select start and end dates','err');return;}
+  const el=document.getElementById('rc');
+  el.innerHTML='<div class="muted">Loading...</div>';
+  const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').gte('period_start_date',start).lte('period_end_date',end);
+  const bp=aggS(sl||[]);
+  const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
+  const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
+  el.innerHTML=rHdr([['Sales',fmt(ts)],['Units',tu],['COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+
+    '<div style="font-size:12px;color:var(--g400);margin-bottom:10px">Period: '+start+' to '+end+'</div>'+sTbl(sr);
+}
 
 async function loadRpt(tab) {
   const el=document.getElementById('rc');
@@ -1140,6 +1183,41 @@ async function loadRpt(tab) {
   } else if(tab==='bottom'){
     const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').not('product_id','is',null);
     el.innerHTML=`<div style="background:var(--red2);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--red)">These products have the lowest sales.</div><div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Bottom sellers — all time</div>`+sTbl(Object.values(aggS(sl||[])).sort((a,b)=>a.s-b.s).slice(0,20))+'</div>';
+  } else if(tab==='cogs'){
+    const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').not('product_id','is',null);
+    const bp=aggS(sl||[]);
+    const sr=Object.values(bp).sort((a,b)=>b.c-a.c);
+    const ts=sr.reduce((s,r)=>s+r.s,0),tc=sr.reduce((s,r)=>s+r.c,0);
+    el.innerHTML=rHdr([['Total sales',fmt(ts)],['Total COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Overall margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+
+      `<div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">COGS breakdown by product — all time</div>
+      <table class="tbl"><thead><tr><th>#</th><th>Product</th><th>Units sold</th><th>Avg cost/unit</th><th>Total COGS</th><th>% of total COGS</th></tr></thead><tbody>
+      ${sr.map((r,i)=>`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${r.u>0?fmt(r.c/r.u):'—'}</td><td>${fmt(r.c)}</td><td>${tc>0?(r.c/tc*100).toFixed(1)+'%':'—'}</td></tr>`).join('')}
+      </tbody></table></div>`;
+  } else if(tab==='pl'){
+    const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').not('product_id','is',null);
+    const bp=aggS(sl||[]);
+    const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
+    const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
+    const gp=ts-tc;
+    const margin=ts>0?(gp/ts*100).toFixed(1):0;
+    el.innerHTML=`
+      <div class="card" style="margin-bottom:12px">
+        <div style="font-size:14px;font-weight:700;font-family:var(--fh);margin-bottom:14px">Profit & Loss Summary — All time</div>
+        <div class="ir"><div style="font-weight:600">Total Revenue</div><div style="font-weight:700;font-size:15px">${fmt(ts)}</div></div>
+        <div class="ir"><div style="color:var(--g400)">Cost of Goods Sold (COGS)</div><div style="color:var(--red);font-weight:600">(${fmt(tc)})</div></div>
+        <div class="ir" style="border-top:2px solid var(--border);margin-top:6px;padding-top:10px"><div style="font-weight:700">Gross Profit</div><div style="font-weight:700;font-size:16px;color:${gp>=0?'var(--green)':'var(--red)'}">${fmt(gp)}</div></div>
+        <div class="ir"><div style="color:var(--g400)">Gross Margin</div><div style="font-weight:600;color:${margin>=40?'var(--green)':margin>=20?'var(--amber)':'var(--red)'}">${margin}%</div></div>
+        <div class="ir"><div style="color:var(--g400)">Total units sold</div><div style="font-weight:500">${tu}</div></div>
+        <div class="ir"><div style="color:var(--g400)">Avg revenue per unit</div><div style="font-weight:500">${tu>0?fmt(ts/tu):'—'}</div></div>
+        <div class="ir"><div style="color:var(--g400)">Avg cost per unit</div><div style="font-weight:500">${tu>0?fmt(tc/tu):'—'}</div></div>
+        <div class="ir"><div style="color:var(--g400)">Avg profit per unit</div><div style="font-weight:500">${tu>0?fmt(gp/tu):'—'}</div></div>
+      </div>
+      <div class="card">
+        <div style="font-size:13px;font-weight:600;margin-bottom:10px">Product P&L breakdown</div>
+        <table class="tbl"><thead><tr><th>Product</th><th>Units</th><th>Revenue</th><th>COGS</th><th>Gross profit</th><th>Margin</th></tr></thead><tbody>
+        ${sr.map(r=>{const pr=r.s-r.c;const mg=r.s>0?((pr/r.s)*100).toFixed(1):0;return`<tr><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${fmt(r.s)}</td><td>${fmt(r.c)}</td><td class="${pr>=0?'tg':'tr'}">${fmt(pr)}</td><td class="${mg>=40?'tg':mg>=20?'ta':'tr'}">${mg}%</td></tr>`;}).join('')}
+        </tbody></table>
+      </div>`;
   }
 }
 
