@@ -1016,15 +1016,31 @@ async function handleIF(file) {
   if(!file)return;
   impRows=[];
   document.getElementById('ipa').style.display='none';
+  document.getElementById('ipt').innerHTML='';
+
+  // Auto-detect dates from filename e.g. Product_Sales_from_03_24_2026_to_03_27_2026.csv
+  const fname = file.name;
+  const dateMatch = fname.match(/from[_\s](\d{2})[_\s](\d{2})[_\s](\d{4})[_\s]to[_\s](\d{2})[_\s](\d{2})[_\s](\d{4})/i);
+  if (dateMatch) {
+    const startDate = dateMatch[3]+'-'+dateMatch[1]+'-'+dateMatch[2];
+    const endDate = dateMatch[6]+'-'+dateMatch[4]+'-'+dateMatch[5];
+    document.getElementById('isd').value = startDate;
+    document.getElementById('ied').value = endDate;
+    toast('Dates detected: '+startDate+' to '+endDate,'ok');
+  }
+
   const text=await new Promise(r=>{const rd=new FileReader();rd.onload=e=>r(e.target.result);rd.readAsText(file);});
   const rows=parseCSV(text);
   if(!rows.length){toast('Could not read file — try CSV','err');return;}
   impRows=rows;
-  toast('File loaded: '+rows.length+' rows','ok');
+  toast('File loaded: '+rows.length+' rows ready to import','ok');
   document.getElementById('ifn').textContent=file.name+' · '+rows.length+' rows';
   const keys=Object.keys(rows[0]);
   document.getElementById('ipt').innerHTML=`<table class="tbl"><thead><tr>${keys.map(k=>`<th>${k}</th>`).join('')}</tr></thead><tbody>${rows.slice(0,8).map(r=>`<tr>${keys.map(k=>`<td>${r[k]||''}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
   document.getElementById('ipa').style.display='block';
+
+  // Reset file input so same file can be dropped again if needed
+  document.getElementById('ifl').value='';
 }
 
 function parseCSV(text){
