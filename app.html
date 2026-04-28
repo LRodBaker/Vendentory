@@ -836,6 +836,8 @@ function openAP() {
   document.getElementById('piurl').value='';
   document.getElementById('pip').style.display='none';
   document.getElementById('pph').style.display='block';
+  _newImageDataUrl = null;
+  document.getElementById('pii').value = '';
   loadCats(); loadSups();
   openM('mprod');
 }
@@ -858,16 +860,25 @@ async function openEP(id) {
   document.getElementById('psp').value=p.selling_price||0;
   document.getElementById('pac').value=p.is_active?'true':'false';
   document.getElementById('piurl').value=p.image_url||'';
+  _newImageDataUrl = null;
+  document.getElementById('pii').value = '';
   await loadCats(); await loadSups();
   setTimeout(()=>{if(p.category_id)document.getElementById('pca').value=p.category_id;if(p.last_supplier_id)document.getElementById('psu').value=p.last_supplier_id;},80);
   if(p.image_url){document.getElementById('pip').src=p.image_url;document.getElementById('pip').style.display='block';document.getElementById('pph').style.display='none';}
   openM('mprod');
 }
 
+let _newImageDataUrl = null;
+
 function prevPI(input) {
   if(!input.files[0])return;
   const r=new FileReader();
-  r.onload=e=>{document.getElementById('pip').src=e.target.result;document.getElementById('pip').style.display='block';document.getElementById('pph').style.display='none';};
+  r.onload=e=>{
+    _newImageDataUrl = e.target.result;
+    document.getElementById('pip').src=e.target.result;
+    document.getElementById('pip').style.display='block';
+    document.getElementById('pph').style.display='none';
+  };
   r.readAsDataURL(input.files[0]);
 }
 
@@ -892,6 +903,7 @@ async function saveProd() {
       average_cost:parseFloat(document.getElementById('plc').value)||0,
       selling_price:parseFloat(document.getElementById('psp').value)||0,
       is_active:document.getElementById('pac').value==='true',
+      image_url: _newImageDataUrl !== null ? _newImageDataUrl : (document.getElementById('piurl').value||null),
       updated_at:new Date().toISOString()
     };
     toast('Step 2: sending to database','ok');
