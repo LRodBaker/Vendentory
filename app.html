@@ -407,9 +407,36 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
           <div class="tab-bar">
             <button class="tab-btn active" onclick="switchRT('weekly',this)">Weekly</button>
             <button class="tab-btn" onclick="switchRT('monthly',this)">Monthly</button>
+            <button class="tab-btn" onclick="switchRT('custom',this)">Custom dates</button>
+            <button class="tab-btn" onclick="switchRT('cogs',this)">COGS</button>
+            <button class="tab-btn" onclick="switchRT('pl',this)">P&amp;L</button>
             <button class="tab-btn" onclick="switchRT('inventory',this)">Inventory</button>
             <button class="tab-btn" onclick="switchRT('top',this)">Top sellers</button>
             <button class="tab-btn" onclick="switchRT('bottom',this)">Bottom sellers</button>
+          </div>
+          <div id="rpt-wpick" style="margin-bottom:14px">
+            <div style="background:var(--white);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+              <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">Select week</label><select class="fs" id="rpt-wsel" style="width:260px" onchange="runWeekRpt()"><option value="">Loading...</option></select></div>
+            </div>
+          </div>
+          <div id="rpt-mpick" style="display:none;margin-bottom:14px">
+            <div style="background:var(--white);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+              <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">Select month</label><select class="fs" id="rpt-msel" style="width:220px" onchange="runMonthRpt()"><option value="">Loading...</option></select></div>
+            </div>
+          </div>
+          <div id="rpt-cpick" style="display:none;margin-bottom:14px">
+            <div style="background:var(--white);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+              <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">Start date</label><input class="fi" type="date" id="rpt-cs" style="width:160px"></div>
+              <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">End date</label><input class="fi" type="date" id="rpt-ce" style="width:160px"></div>
+              <button class="btn btn-p" onclick="runCustomRpt()">Run report</button>
+            </div>
+          </div>
+          <div id="rpt-gpick" style="display:none;margin-bottom:14px">
+            <div style="background:var(--white);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+              <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">Start date</label><input class="fi" type="date" id="rpt-gs" style="width:160px"></div>
+              <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">End date</label><input class="fi" type="date" id="rpt-ge" style="width:160px"></div>
+              <button class="btn btn-p" onclick="runCogsRpt()">Run COGS report</button>
+            </div>
           </div>
           <div id="rc"><div class="tm">Loading...</div></div>
         </div>
@@ -643,7 +670,11 @@ function nav(pg) {
   if(pg==='dashboard') loadDash();
   if(pg==='products') renderProds();
   if(pg==='adjustments'){loadRAJ();setDates();}
-  if(pg==='reports') loadRpt(curRT);
+  if(pg==='reports'){
+    document.getElementById('rpt-wpick').style.display='block';
+    ['rpt-mpick','rpt-cpick','rpt-gpick'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
+    loadWeekOpts();
+  }
   if(pg==='settings'){loadSets();loadProf();}
   if(pg==='imports') loadIH();
 }
@@ -687,11 +718,16 @@ async function loadDash() {
   document.getElementById('siv').textContent=fmt(tv);
   document.getElementById('sr').textContent=rc;
   const now=new Date();
-  const wa=new Date(now-7*86400000).toISOString().split('T')[0];
-  const ma=new Date(now.getFullYear(),now.getMonth()-1,now.getDate()).toISOString().split('T')[0];
+  // Current week Monday to today
+  const dow=now.getDay(),dtm=dow===0?6:dow-1;
+  const mon=new Date(now);mon.setDate(now.getDate()-dtm);
+  const monStr=mon.toISOString().split('T')[0];
+  // Current month 1st to today
+  const mStart=new Date(now.getFullYear(),now.getMonth(),1).toISOString().split('T')[0];
+  const todayStr=now.toISOString().split('T')[0];
   const [{data:ws},{data:ms}]=await Promise.all([
-    sb.from('sales_lines').select('sales_amount').gte('created_at',wa),
-    sb.from('sales_lines').select('sales_amount').gte('created_at',ma)
+    sb.from('sales_lines').select('sales_amount').gte('period_start_date',monStr).lte('period_start_date',todayStr),
+    sb.from('sales_lines').select('sales_amount').gte('period_start_date',mStart).lte('period_start_date',todayStr)
   ]);
   document.getElementById('sw').textContent=fmt((ws||[]).reduce((s,r)=>s+parseFloat(r.sales_amount||0),0));
   document.getElementById('sm').textContent=fmt((ms||[]).reduce((s,r)=>s+parseFloat(r.sales_amount||0),0));
@@ -1119,50 +1155,190 @@ async function loadIH(){
   document.getElementById('ih').innerHTML=(data||[]).length?`<table class="tbl"><thead><tr><th>Date</th><th>Source</th><th>Period</th><th>Status</th></tr></thead><tbody>${(data||[]).map(r=>`<tr><td>${fmtD(r.imported_at)}</td><td>${r.source_system}</td><td>${r.report_start_date||'—'} to ${r.report_end_date||'—'}</td><td><span class="badge b-ok">${r.status}</span></td></tr>`).join('')}</tbody></table>`:'<div class="tm">No imports yet</div>';
 }
 
-function switchRT(tab,btn){document.querySelectorAll('.tab-bar .tab-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');curRT=tab;loadRpt(tab);}
-
-async function loadRpt(tab){
-  const el=document.getElementById('rc');
-  el.innerHTML='<div class="tm">Loading...</div>';
-  const now=new Date();
+function switchRT(tab,btn){
+  document.querySelectorAll('.tab-bar .tab-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active'); curRT=tab;
+  ['rpt-wpick','rpt-mpick','rpt-cpick','rpt-gpick'].forEach(id=>{
+    const el=document.getElementById(id);if(el)el.style.display='none';
+  });
   if(tab==='weekly'){
-    const wa=new Date(now-7*86400000).toISOString().split('T')[0];
-    const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').gte('created_at',wa);
-    const bp=aggSales(sl||[]);const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
-    const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
-    el.innerHTML=rHdr([['Week sales',fmt(ts)],['Units sold',tu],['COGS',fmt(tc)],['Gross profit',fmt(ts-tc)]])+sTbl(sr);
+    const el=document.getElementById('rpt-wpick');if(el)el.style.display='block';
+    loadWeekOpts();
   } else if(tab==='monthly'){
-    const ma=new Date(now.getFullYear(),now.getMonth()-1,now.getDate()).toISOString().split('T')[0];
-    const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').gte('created_at',ma);
-    const bp=aggSales(sl||[]);const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
-    const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
-    el.innerHTML=rHdr([['Month sales',fmt(ts)],['Units sold',tu],['COGS',fmt(tc)],['Gross profit',fmt(ts-tc)]])+sTbl(sr);
-  } else if(tab==='inventory'){
-    const tv=AP.reduce((s,p)=>s+(parseFloat(p.inventory_value)||0),0);
-    el.innerHTML=rHdr([['Total value',fmt(tv)],['Products',AP.length],['Need reorder',AP.filter(p=>p.stock_status==='REORDER').length],['Active',AP.filter(p=>p.is_active).length]])+
-      `<div class="card"><div class="card-title">Inventory valuation</div><table class="tbl"><thead><tr><th>Product</th><th>On hand</th><th>Avg cost</th><th>Price</th><th>Value</th><th>Margin</th><th>Status</th></tr></thead><tbody>
-      ${AP.map(p=>{const m=p.selling_price>0&&p.average_cost>0?(((p.selling_price-p.average_cost)/p.selling_price)*100).toFixed(1):0;return`<tr><td><strong>${p.name}</strong></td><td>${p.on_hand_qty}</td><td>${fmt(p.average_cost)}</td><td>${fmt(p.selling_price)}</td><td>${fmt(p.inventory_value)}</td><td class="${m>=40?'tg':m>=20?'ta':'tr'}">${m}%</td><td><span class="badge ${p.stock_status==='REORDER'?'b-red':'b-ok'}">${p.stock_status}</span></td></tr>`;}).join('')}
-      </tbody></table></div>`;
-  } else if(tab==='top'){
-    const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').not('product_id','is',null);
-    const bp=aggSales(sl||[]);const sr=Object.values(bp).sort((a,b)=>b.s-a.s).slice(0,20);
-    el.innerHTML=`<div class="card"><div class="card-title">Top sellers — all time</div>`+sTbl(sr)+'</div>';
-  } else if(tab==='bottom'){
-    const {data:sl}=await sb.from('sales_lines').select('*,products(name,average_cost)').not('product_id','is',null);
-    const bp=aggSales(sl||[]);const sr=Object.values(bp).sort((a,b)=>a.s-b.s).slice(0,20);
-    el.innerHTML=`<div style="background:var(--red-light);border-radius:10px;padding:11px 15px;margin-bottom:13px;font-size:13px;color:var(--red)">These products have the lowest sales — consider replacing or repricing them.</div><div class="card"><div class="card-title">Bottom sellers — all time</div>`+sTbl(sr)+'</div>';
-  }
+    const el=document.getElementById('rpt-mpick');if(el)el.style.display='block';
+    loadMonthOpts();
+  } else if(tab==='custom'){
+    const el=document.getElementById('rpt-cpick');if(el)el.style.display='block';
+    const now=new Date(),ago=new Date(now-30*86400000);
+    const cs=document.getElementById('rpt-cs'),ce=document.getElementById('rpt-ce');
+    if(cs&&!cs.value)cs.value=ago.toISOString().split('T')[0];
+    if(ce&&!ce.value)ce.value=now.toISOString().split('T')[0];
+    document.getElementById('rc').innerHTML='<div class="muted">Set your date range and click Run report.</div>';
+  } else if(tab==='cogs'){
+    const el=document.getElementById('rpt-gpick');if(el)el.style.display='block';
+    const now=new Date(),ago=new Date(now-30*86400000);
+    const gs=document.getElementById('rpt-gs'),ge=document.getElementById('rpt-ge');
+    if(gs&&!gs.value)gs.value=ago.toISOString().split('T')[0];
+    if(ge&&!ge.value)ge.value=now.toISOString().split('T')[0];
+    document.getElementById('rc').innerHTML='<div class="muted">Set your date range and click Run COGS report.</div>';
+  } else if(tab==='inventory'){loadInvRpt();}
+  else if(tab==='top'){loadTopRpt();}
+  else if(tab==='bottom'){loadBotRpt();}
+  else if(tab==='pl'){loadPLRpt();}
 }
 
-function aggSales(rows){
+async function loadWeekOpts(){
+  const {data}=await sb.from('sales_imports').select('report_start_date,report_end_date').order('report_start_date',{ascending:false});
+  const sel=document.getElementById('rpt-wsel'); if(!sel)return;
+  if(!data||!data.length){sel.innerHTML='<option>No imports found</option>';document.getElementById('rc').innerHTML='<div class="muted">No sales data imported yet.</div>';return;}
+  const weeks=data.filter(r=>r.report_start_date&&r.report_end_date);
+  sel.innerHTML=weeks.map(r=>`<option value="${r.report_start_date}|${r.report_end_date}">${r.report_start_date} to ${r.report_end_date}</option>`).join('');
+  runWeekRpt();
+}
+
+async function runWeekRpt(){
+  const sel=document.getElementById('rpt-wsel'); if(!sel||!sel.value)return;
+  const [start,end]=sel.value.split('|');
+  document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
+  const {data:sl,error}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').eq('period_start_date',start);
+  if(error){document.getElementById('rc').innerHTML='<div style="color:var(--red)">Error: '+error.message+'</div>';return;}
+  renderSalesRpt(sl||[],'Week: '+start+' to '+end);
+}
+
+async function loadMonthOpts(){
+  const {data}=await sb.from('sales_imports').select('report_start_date,report_end_date').order('report_start_date',{ascending:false});
+  const sel=document.getElementById('rpt-msel'); if(!sel)return;
+  if(!data||!data.length){sel.innerHTML='<option>No imports found</option>';return;}
+  const months={};
+  data.forEach(r=>{
+    if(!r.report_start_date)return;
+    const d=new Date(r.report_start_date+'T12:00:00');
+    const key=d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0');
+    const label=d.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    if(!months[key])months[key]={label,starts:[],end:r.report_end_date};
+    months[key].starts.push(r.report_start_date);
+    if(r.report_end_date>months[key].end)months[key].end=r.report_end_date;
+  });
+  const sorted=Object.entries(months).sort((a,b)=>b[0].localeCompare(a[0]));
+  sel.innerHTML=sorted.map(([k,v])=>`<option value="${v.starts.join(',')}|${v.end}">${v.label}</option>`).join('');
+  runMonthRpt();
+}
+
+async function runMonthRpt(){
+  const sel=document.getElementById('rpt-msel'); if(!sel||!sel.value)return;
+  const parts=sel.value.split('|');
+  const starts=parts[0].split(',');
+  document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
+  let allRows=[];
+  for(const start of starts){
+    const {data:sl}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').eq('period_start_date',start);
+    if(sl)allRows=allRows.concat(sl);
+  }
+  const d=new Date(starts[0]+'T12:00:00');
+  const label=d.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+  renderSalesRpt(allRows,'Month: '+label);
+}
+
+async function runCustomRpt(){
+  const start=document.getElementById('rpt-cs')?.value,end=document.getElementById('rpt-ce')?.value;
+  if(!start||!end){toast('Please select dates','err');return;}
+  document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
+  const {data:sl,error}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').gte('period_start_date',start).lte('period_start_date',end);
+  if(error){document.getElementById('rc').innerHTML='<div style="color:var(--red)">Error: '+error.message+'</div>';return;}
+  renderSalesRpt(sl||[],'Custom: '+start+' to '+end);
+}
+
+async function runCogsRpt(){
+  const start=document.getElementById('rpt-gs')?.value,end=document.getElementById('rpt-ge')?.value;
+  if(!start||!end){toast('Please select dates','err');return;}
+  document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
+  const {data:sl,error}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').gte('period_start_date',start).lte('period_start_date',end).not('product_id','is',null);
+  if(error){document.getElementById('rc').innerHTML='<div style="color:var(--red)">Error: '+error.message+'</div>';return;}
+  const bp=aggS(sl||[]);
+  const sr=Object.values(bp).filter(r=>r.u>0).sort((a,b)=>b.c-a.c);
+  const ts=sr.reduce((s,r)=>s+r.s,0),tc=sr.reduce((s,r)=>s+r.c,0);
+  document.getElementById('rc').innerHTML=
+    '<div style="font-size:12px;color:var(--g400);margin-bottom:10px;font-weight:500">COGS Report: '+start+' to '+end+'</div>'+
+    rHdr([['Total sales',fmt(ts)],['Total COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+
+    `<div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">COGS by product</div>
+    <table class="tbl"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Avg cost/unit</th><th>Total COGS</th><th>% of COGS</th><th>Revenue</th><th>Margin</th></tr></thead><tbody>
+    ${sr.map((r,i)=>{const mg=r.s>0?((r.s-r.c)/r.s*100).toFixed(1):0;return`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${r.u>0?fmt(r.c/r.u):'—'}</td><td>${fmt(r.c)}</td><td>${tc>0?(r.c/tc*100).toFixed(1)+'%':'—'}</td><td>${fmt(r.s)}</td><td class="${mg>=40?'tg':mg>=20?'ta':'tr'}">${mg}%</td></tr>`;}).join('')}
+    </tbody></table></div>`;
+}
+
+function renderSalesRpt(rows,label){
+  const bp=aggS(rows);
+  const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
+  const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
+  document.getElementById('rc').innerHTML=
+    '<div style="font-size:12px;color:var(--g400);margin-bottom:10px;font-weight:500">'+label+'</div>'+
+    rHdr([['Sales',fmt(ts)],['Units',tu],['COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+
+    sTbl(sr);
+}
+
+function loadInvRpt(){
+  const tv=AP.reduce((s,p)=>s+(parseFloat(p.inventory_value)||0),0);
+  document.getElementById('rc').innerHTML=rHdr([['Total value',fmt(tv)],['Products',AP.length],['Need reorder',AP.filter(p=>p.stock_status==='REORDER').length],['Active',AP.filter(p=>p.is_active).length]])+
+    `<div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:6px">Inventory valuation</div><div style="font-size:12px;color:var(--g400);margin-bottom:10px">${AP.length} products total</div><table class="tbl"><thead><tr><th>#</th><th>Product</th><th>On hand</th><th>Avg cost</th><th>Price</th><th>Value</th><th>Margin</th><th>Status</th></tr></thead><tbody>
+    ${AP.map((p,i)=>{const m=p.selling_price>0&&p.average_cost>0?(((p.selling_price-p.average_cost)/p.selling_price)*100).toFixed(1):0;return`<tr><td style="color:var(--g400);font-weight:600">${i+1}</td><td><strong>${p.name}</strong></td><td>${p.on_hand_qty}</td><td>${fmt(p.average_cost)}</td><td>${fmt(p.selling_price)}</td><td>${fmt(p.inventory_value)}</td><td class="${m>=40?'tg':m>=20?'ta':'tr'}">${m}%</td><td><span class="badge ${p.stock_status==='REORDER'?'b-red':'b-ok'}">${p.stock_status}</span></td></tr>`;}).join('')}
+    </tbody></table></div>`;
+}
+
+async function loadTopRpt(){
+  document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
+  const {data:sl}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').not('product_id','is',null);
+  const sr=Object.values(aggS(sl||[])).sort((a,b)=>b.s-a.s).slice(0,25);
+  document.getElementById('rc').innerHTML='<div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Top sellers — all time</div>'+sTbl(sr)+'</div>';
+}
+
+async function loadBotRpt(){
+  document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
+  const {data:sl}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').not('product_id','is',null);
+  const sr=Object.values(aggS(sl||[])).filter(r=>r.u>0).sort((a,b)=>a.s-b.s).slice(0,25);
+  document.getElementById('rc').innerHTML='<div style="background:var(--red2);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--red)">These products have the lowest sales — consider replacing or repricing.</div><div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Bottom sellers — all time</div>'+sTbl(sr)+'</div>';
+}
+
+async function loadPLRpt(){
+  document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
+  const {data:sl}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').not('product_id','is',null);
+  const bp=aggS(sl||[]);
+  const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
+  const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
+  const gp=ts-tc,margin=ts>0?(gp/ts*100).toFixed(1):0;
+  document.getElementById('rc').innerHTML=`
+    <div class="card" style="margin-bottom:12px">
+      <div style="font-size:14px;font-weight:700;font-family:var(--fh);margin-bottom:14px">Profit &amp; Loss — All time</div>
+      <div class="ir"><div style="font-weight:600">Total Revenue</div><div style="font-weight:700;font-size:15px">${fmt(ts)}</div></div>
+      <div class="ir"><div class="muted">Cost of Goods Sold (COGS)</div><div style="color:var(--red);font-weight:600">(${fmt(tc)})</div></div>
+      <div class="ir" style="border-top:2px solid var(--border);margin-top:6px;padding-top:10px"><div style="font-weight:700">Gross Profit</div><div style="font-weight:700;font-size:16px;color:${gp>=0?'var(--green)':'var(--red)'}">${fmt(gp)}</div></div>
+      <div class="ir"><div class="muted">Gross Margin</div><div style="font-weight:600;color:${margin>=40?'var(--green)':margin>=20?'var(--amber)':'var(--red)'}">${margin}%</div></div>
+      <div class="ir"><div class="muted">Total units sold</div><div style="font-weight:500">${tu}</div></div>
+      <div class="ir"><div class="muted">Avg revenue per unit</div><div style="font-weight:500">${tu>0?fmt(ts/tu):'—'}</div></div>
+      <div class="ir"><div class="muted">Avg cost per unit</div><div style="font-weight:500">${tu>0?fmt(tc/tu):'—'}</div></div>
+      <div class="ir"><div class="muted">Avg profit per unit</div><div style="font-weight:500">${tu>0?fmt(gp/tu):'—'}</div></div>
+    </div>
+    <div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Product P&amp;L breakdown</div>
+    <table class="tbl"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Revenue</th><th>COGS</th><th>Gross profit</th><th>Margin</th></tr></thead><tbody>
+    ${sr.map((r,i)=>{const pr=r.s-r.c,mg=r.s>0?((pr/r.s)*100).toFixed(1):0;return`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${fmt(r.s)}</td><td>${fmt(r.c)}</td><td class="${pr>=0?'tg':'tr'}">${fmt(pr)}</td><td class="${mg>=40?'tg':mg>=20?'ta':'tr'}">${mg}%</td></tr>`;}).join('')}
+    </tbody></table></div>`;
+}
+
+function aggS(rows){
   const m={};
-  rows.forEach(r=>{const k=r.product_id||r.raw_product_name,nm=r.products?.name||r.raw_product_name,c=parseFloat(r.products?.average_cost||0);if(!m[k])m[k]={name:nm,s:0,u:0,c:0};m[k].s+=parseFloat(r.sales_amount||0);m[k].u+=parseInt(r.units_sold||0);m[k].c+=parseInt(r.units_sold||0)*c;});
+  rows.forEach(r=>{
+    const k=r.product_id||r.raw_product_name;
+    const nm=r.products?.name||r.raw_product_name;
+    const c=parseFloat(r.products?.average_cost||0);
+    if(!m[k])m[k]={name:nm,s:0,u:0,c:0};
+    m[k].s+=parseFloat(r.sales_amount||0);
+    m[k].u+=parseInt(r.units_sold||0);
+    m[k].c+=parseInt(r.units_sold||0)*c;
+  });
   return m;
 }
 
-function rHdr(items){return`<div style="display:grid;grid-template-columns:repeat(${items.length},1fr);gap:10px;margin-bottom:13px">${items.map(([l,v])=>`<div class="rc"><div class="rl">${l}</div><div class="rv">${v}</div></div>`).join('')}</div>`;}
-
-function sTbl(rows){return`<div class="card"><table class="tbl"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Sales</th><th>COGS</th><th>Profit</th><th>Margin</th></tr></thead><tbody>${rows.map((r,i)=>{const pr=r.s-r.c,mg=r.s>0?((pr/r.s)*100).toFixed(1):0;return`<tr><td style="color:var(--gray-400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${fmt(r.s)}</td><td>${fmt(r.c)}</td><td class="${pr>=0?'tg':'tr'}">${fmt(pr)}</td><td class="${mg>=40?'tg':mg>=20?'ta':'tr'}">${mg}%</td></tr>`;}).join('')}</tbody></table></div>`;}
+function rHdr(items){return`<div style="display:grid;grid-template-columns:repeat(${items.length},1fr);gap:9px;margin-bottom:12px">${items.map(([l,v])=>`<div class="stat-card"><div class="stat-label">${l}</div><div class="stat-val">${v}</div></div>`).join('')}</div>`;}
+function sTbl(rows){return`<div class="card"><table class="tbl"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Sales</th><th>COGS</th><th>Profit</th><th>Margin</th></tr></thead><tbody>${rows.map((r,i)=>{const pr=r.s-r.c,mg=r.s>0?((pr/r.s)*100).toFixed(1):0;return`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${fmt(r.s)}</td><td>${fmt(r.c)}</td><td class="${pr>=0?'tg':'tr'}">${fmt(pr)}</td><td class="${mg>=40?'tg':mg>=20?'ta':'tr'}">${mg}%</td></tr>`;}).join('')}</tbody></table></div>`;}
 
 async function loadSets(){
   await loadCats();await loadSups();
