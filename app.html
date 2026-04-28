@@ -523,8 +523,9 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
 <!-- CAMERA SCANNER MODAL -->
 <div id="cam-modal" class="cam-modal" style="display:none">
   <button class="cam-close" onclick="stopCam()">&#10005;</button>
-  <button class="cam-torch" id="cam-torch-btn" onclick="toggleTorch()" title="Toggle flashlight">&#128294;</button>
+  <button class="cam-torch" id="cam-torch-btn" onclick="toggleTorch()" title="Toggle flashlight" style="display:none">&#128294;</button>
   <video id="cam-video" class="cam-video" autoplay playsinline muted></video>
+  <canvas id="cam-canvas" style="display:none"></canvas>
   <div class="cam-overlay">
     <div class="cam-frame"><div class="cam-scanline"></div></div>
     <div class="cam-hint">Point camera at barcode</div>
@@ -947,63 +948,115 @@ async function saveProd() {
   }
 }
 
-// ── CAMERA BARCODE SCANNER ──────────────────────────────────────────────────
-let _camStream=null, _camDetector=null, _camLoop=null, _torchOn=false, _camTrack=null;
+// ── CAMERA BARCODE SCANNER (jsQR + ZXing fallback, works on iOS Safari/Chrome)
+let _camStream=null,_camLoop=null,_torchOn=false,_camTrack=null,_zxing=null,_jsqrLoaded=false;
+
+// Dynamically load jsQR (QR + many 1D barcodes) and ZXing (full barcode support)
+function _loadScanLibs(){
+  return new Promise(res=>{
+    if(window.ZXing){res();return;}
+    const s=document.createElement('script');
+    s.src='https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js';
+    s.onload=()=>res();
+    s.onerror=()=>{
+      // fallback: load jsQR only
+      const s2=document.createElement('script');
+      s2.src='https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+      s2.onload=()=>{_jsqrLoaded=true;res();};
+      s2.onerror=()=>res();
+      document.head.appendChild(s2);
+    };
+    document.head.appendChild(s);
+  });
+}
 
 async function startCam(){
   const modal=document.getElementById('cam-modal');
   const video=document.getElementById('cam-video');
   const status=document.getElementById('cam-status');
-  status.textContent='Starting camera...';
+  status.textContent='Loading scanner...';
   modal.style.display='flex';
+  document.body.style.overflow='hidden';
 
-  // Check for BarcodeDetector support
-  if(!('BarcodeDetector' in window)){
-    status.textContent='Camera barcode detection not supported in this browser. Use Chrome on iPhone or Android.';
-    return;
+  await _loadScanLibs();
+
+  // Try ZXing first (supports UPC-A, EAN-13, Code128, etc.)
+  if(window.ZXing){
+    try{
+      const hints=new Map();
+      hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+      _zxing=new ZXing.BrowserMultiFormatReader(hints);
+      status.textContent='Aim at barcode...';
+      // ZXing handles camera itself
+      await _zxing.decodeFromConstraints(
+        {video:{facingMode:{ideal:'environment'}}},
+        video,
+        (result,err)=>{
+          if(result){
+            const bc=result.getText();
+            stopCam();
+            document.getElementById('si').value=bc;
+            lookupBC();
+          }
+        }
+      );
+      _camStream=video.srcObject;
+      _camTrack=_camStream?.getVideoTracks?.()?.[0];
+      const caps=_camTrack?.getCapabilities?.();
+      document.getElementById('cam-torch-btn').style.display=(caps?.torch)?'flex':'none';
+      return;
+    }catch(e){
+      // ZXing failed, fall through to manual approach
+      if(_zxing){try{_zxing.reset();}catch(_){}} _zxing=null;
+    }
   }
 
-  try {
-    // Prefer rear camera on mobile
+  // Manual camera + jsQR fallback
+  try{
     _camStream=await navigator.mediaDevices.getUserMedia({
       video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}
     });
     video.srcObject=_camStream;
     _camTrack=_camStream.getVideoTracks()[0];
-
-    // Show/hide torch button based on capability
-    const caps=_camTrack.getCapabilities?.();
+    const caps=_camTrack?.getCapabilities?.();
     document.getElementById('cam-torch-btn').style.display=(caps?.torch)?'flex':'none';
+    status.textContent='Aim at barcode...';
 
-    _camDetector=new BarcodeDetector({formats:['upc_a','upc_e','ean_13','ean_8','code_128','code_39','qr_code','itf','codabar']});
-    status.textContent='Aim at a barcode...';
+    const canvas=document.createElement('canvas');
+    const ctx=canvas.getContext('2d');
+    _camLoop=setInterval(()=>{
+      if(video.readyState!==video.HAVE_ENOUGH_DATA)return;
+      canvas.width=video.videoWidth;
+      canvas.height=video.videoHeight;
+      ctx.drawImage(video,0,0,canvas.width,canvas.height);
+      const img=ctx.getImageData(0,0,canvas.width,canvas.height);
 
-    // Scan loop
-    _camLoop=setInterval(async()=>{
-      if(video.readyState===video.HAVE_ENOUGH_DATA){
-        try{
-          const codes=await _camDetector.detect(video);
-          if(codes.length>0){
-            const bc=codes[0].rawValue;
-            stopCam();
-            document.getElementById('si').value=bc;
-            status.textContent='';
-            lookupBC();
-          }
-        }catch(_){}
+      // Try BarcodeDetector if available (Chrome desktop/Android)
+      if('BarcodeDetector' in window){
+        new BarcodeDetector({formats:['upc_a','upc_e','ean_13','ean_8','code_128','code_39','qr_code']})
+          .detect(video).then(codes=>{
+            if(codes.length){stopCam();document.getElementById('si').value=codes[0].rawValue;lookupBC();}
+          }).catch(()=>{});
       }
-    },300);
-  } catch(e){
-    status.textContent='Camera access denied. Please allow camera in browser settings.';
+      // jsQR for QR codes
+      if(window.jsQR){
+        const qr=jsQR(img.data,img.width,img.height,{inversionAttempts:'dontInvert'});
+        if(qr){stopCam();document.getElementById('si').value=qr.data;lookupBC();}
+      }
+    },400);
+  }catch(e){
+    status.textContent='Camera access denied. In Safari: Settings → Safari → Camera → Allow. In Chrome: tap the camera icon in the address bar.';
   }
 }
 
 function stopCam(){
+  if(_zxing){try{_zxing.reset();}catch(_){}} _zxing=null;
   clearInterval(_camLoop); _camLoop=null;
   if(_camStream){_camStream.getTracks().forEach(t=>t.stop()); _camStream=null;}
   _camTrack=null; _torchOn=false;
   document.getElementById('cam-modal').style.display='none';
   document.getElementById('cam-status').textContent='';
+  document.body.style.overflow='';
 }
 
 async function toggleTorch(){
