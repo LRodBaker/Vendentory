@@ -130,6 +130,16 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
 .iu img{width:100%;height:100%;object-fit:cover;border-radius:10px}
 .sp{border:3px solid var(--gray-100);border-top-color:var(--teal);border-radius:50%;width:20px;height:20px;animation:spin .7s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
+/* Camera scanner */
+.cam-modal{position:fixed;inset:0;z-index:900;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.cam-video{width:100%;max-width:500px;border-radius:12px;display:block}
+.cam-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
+.cam-frame{width:240px;height:240px;border:3px solid var(--teal-mid);border-radius:16px;box-shadow:0 0 0 9999px rgba(0,0,0,0.55);position:relative}
+.cam-scanline{position:absolute;width:80%;height:2px;background:var(--teal-mid);left:10%;animation:sl 1.6s infinite ease-in-out;box-shadow:0 0 8px var(--teal-mid)}
+.cam-hint{color:rgba(255,255,255,0.8);font-size:14px;margin-top:22px;text-align:center;font-weight:500}
+.cam-status{color:#fff;font-size:13px;margin-top:10px;min-height:20px;text-align:center}
+.cam-close{position:absolute;top:20px;right:20px;background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:50%;width:40px;height:40px;font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;pointer-events:all;backdrop-filter:blur(4px)}
+.cam-torch{position:absolute;top:20px;left:20px;background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:50%;width:40px;height:40px;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;pointer-events:all;backdrop-filter:blur(4px)}
 .lo{position:fixed;inset:0;background:rgba(255,255,255,0.85);z-index:999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px}
 .hb{display:none;background:none;border:none;cursor:pointer;padding:4px;font-size:22px;color:var(--gray-700)}
 .ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:150}
@@ -269,9 +279,10 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
             <div class="scan-box">
               <div style="font-size:12px;color:rgba(255,255,255,0.4);margin-bottom:12px">Use iPhone camera, Bluetooth scanner, or type barcode below</div>
               <div class="scan-frame"><div style="font-size:36px">&#128247;</div><div class="scan-line"></div></div>
-              <div style="display:flex;gap:8px;justify-content:center">
-                <input id="si" class="fi" style="max-width:240px;background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.15);color:#fff" placeholder="Scan or type barcode..." autocomplete="off" onkeydown="if(event.key==='Enter')lookupBC()">
+              <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+                <input id="si" class="fi" style="max-width:220px;background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.15);color:#fff" placeholder="Scan or type barcode..." autocomplete="off" onkeydown="if(event.key==='Enter')lookupBC()">
                 <button class="btn btn-p" onclick="lookupBC()">Look up</button>
+                <button class="btn" style="background:rgba(255,255,255,0.1);border-color:rgba(255,255,255,0.2);color:#fff" onclick="startCam()" title="Use phone/webcam camera">&#128247; Camera</button>
               </div>
             </div>
             <div id="sres" style="display:none"></div>
@@ -506,6 +517,18 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
 
       </div>
     </div>
+  </div>
+</div>
+
+<!-- CAMERA SCANNER MODAL -->
+<div id="cam-modal" class="cam-modal" style="display:none">
+  <button class="cam-close" onclick="stopCam()">&#10005;</button>
+  <button class="cam-torch" id="cam-torch-btn" onclick="toggleTorch()" title="Toggle flashlight">&#128294;</button>
+  <video id="cam-video" class="cam-video" autoplay playsinline muted></video>
+  <div class="cam-overlay">
+    <div class="cam-frame"><div class="cam-scanline"></div></div>
+    <div class="cam-hint">Point camera at barcode</div>
+    <div class="cam-status" id="cam-status"></div>
   </div>
 </div>
 
@@ -822,27 +845,8 @@ async function openPD(id) {
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
       <button class="btn btn-p btn-sm" onclick="closeM('mpd');nav('purchases')">Receive inventory</button>
       <button class="btn btn-sm" onclick="closeM('mpd');nav('adjustments')">Adjust quantity</button>
-    </div>
-    <div style="margin-top:16px">
-      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);margin-bottom:8px">Price history</div>
-      <div id="ph-loading" style="font-size:13px;color:var(--gray-400)">Loading...</div>
-      <div id="ph-table"></div>
     </div>`;
   openM('mpd');
-  // Load price history async
-  const {data:ph}=await sb.from('price_history').select('*').eq('product_id',id).order('effective_date',{ascending:false}).limit(20);
-  document.getElementById('ph-loading').style.display='none';
-  if(!ph||!ph.length){
-    document.getElementById('ph-table').innerHTML='<div style="font-size:13px;color:var(--gray-400);padding:4px 0">No price changes recorded yet.</div>';
-  } else {
-    document.getElementById('ph-table').innerHTML=`<table class="tbl"><thead><tr><th>Date</th><th>Type</th><th>From</th><th>To</th><th>Source</th></tr></thead><tbody>${ph.map(r=>`<tr>
-      <td>${fmtD(r.effective_date)}</td>
-      <td><span class="badge ${r.price_type==='cost'?'b-gray':'b-teal'}">${r.price_type==='cost'?'Cost':'Sell'}</span></td>
-      <td style="color:var(--gray-400)">${r.old_price!=null?fmt(r.old_price):'—'}</td>
-      <td style="font-weight:600">${fmt(r.new_price)}</td>
-      <td style="font-size:11px;color:var(--gray-400)">${r.source}</td>
-    </tr>`).join('')}</tbody></table>`;
-  }
 }
 
 function openAP() {
@@ -904,18 +908,8 @@ function prevPI(input) {
 async function saveProd() {
   const nm=document.getElementById('pn').value.trim();
   if(!nm){toast('Product name is required','err');return;}
+  toast('Step 1: building payload','ok');
   try {
-    const newCost=parseFloat(document.getElementById('plc').value)||0;
-    const newSell=parseFloat(document.getElementById('psp').value)||0;
-    const eid=document.getElementById('peid').value;
-
-    // Capture old prices before save (for change logging)
-    let oldCost=null, oldSell=null;
-    if(eid){
-      const existing=AP.find(p=>p.product_id===eid||p.id===eid);
-      if(existing){ oldCost=parseFloat(existing.last_cost||0); oldSell=parseFloat(existing.selling_price||0); }
-    }
-
     const pl={
       name:nm,
       barcode:document.getElementById('pb').value||null,
@@ -928,41 +922,99 @@ async function saveProd() {
       units_per_case:parseInt(document.getElementById('pupc').value)||1,
       reorder_point:parseInt(document.getElementById('prp').value)||0,
       order_up_to_level:parseInt(document.getElementById('pou').value)||0,
-      last_cost:newCost,
-      average_cost:newCost,
-      selling_price:newSell,
+      last_cost:parseFloat(document.getElementById('plc').value)||0,
+      average_cost:parseFloat(document.getElementById('plc').value)||0,
+      selling_price:parseFloat(document.getElementById('psp').value)||0,
       is_active:document.getElementById('pac').value==='true',
       image_url: _newImageDataUrl !== null ? _newImageDataUrl : (document.getElementById('piurl').value||null),
       updated_at:new Date().toISOString()
     };
-
-    let res, savedId=eid;
+    toast('Step 2: sending to database','ok');
+    const eid=document.getElementById('peid').value;
+    let res;
     if(eid){res=await sb.from('products').update(pl).eq('id',eid);}
-    else{
-      const ins=await sb.from('products').insert(pl).select().single();
-      res=ins; savedId=ins.data?.id;
-    }
-    if(res.error){toast('DB Error: '+res.error.message,'err');return;}
-
-    // Log price history if prices changed (edit only)
-    if(eid && savedId){
-      const today=new Date().toISOString().split('T')[0];
-      const logs=[];
-      if(oldCost!==null && Math.abs(newCost-oldCost)>0.0001)
-        logs.push({product_id:savedId,price_type:'cost',old_price:oldCost,new_price:newCost,effective_date:today,source:'manual'});
-      if(oldSell!==null && Math.abs(newSell-oldSell)>0.0001)
-        logs.push({product_id:savedId,price_type:'sell',old_price:oldSell,new_price:newSell,effective_date:today,source:'manual'});
-      if(logs.length) await sb.from('price_history').insert(logs);
-    }
-
+    else{res=await sb.from('products').insert(pl);}
+    toast('Step 3: got response','ok');
+    if(res.error){toast('DB Error: '+res.error.message+' ('+res.error.code+')','err');return;}
+    toast('Step 4: saved! closing modal','ok');
     document.getElementById('mprod').style.display='none';
+    toast('Step 5: reloading products','ok');
     await loadProds2();
     renderProds();
-    toast('Product saved!','ok');
+    toast('Done!','ok');
   } catch(e) {
-    toast('Error: '+e.message,'err');
+    toast('Exception at: '+e.message,'err');
   }
 }
+
+// ── CAMERA BARCODE SCANNER ──────────────────────────────────────────────────
+let _camStream=null, _camDetector=null, _camLoop=null, _torchOn=false, _camTrack=null;
+
+async function startCam(){
+  const modal=document.getElementById('cam-modal');
+  const video=document.getElementById('cam-video');
+  const status=document.getElementById('cam-status');
+  status.textContent='Starting camera...';
+  modal.style.display='flex';
+
+  // Check for BarcodeDetector support
+  if(!('BarcodeDetector' in window)){
+    status.textContent='Camera barcode detection not supported in this browser. Use Chrome on iPhone or Android.';
+    return;
+  }
+
+  try {
+    // Prefer rear camera on mobile
+    _camStream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}
+    });
+    video.srcObject=_camStream;
+    _camTrack=_camStream.getVideoTracks()[0];
+
+    // Show/hide torch button based on capability
+    const caps=_camTrack.getCapabilities?.();
+    document.getElementById('cam-torch-btn').style.display=(caps?.torch)?'flex':'none';
+
+    _camDetector=new BarcodeDetector({formats:['upc_a','upc_e','ean_13','ean_8','code_128','code_39','qr_code','itf','codabar']});
+    status.textContent='Aim at a barcode...';
+
+    // Scan loop
+    _camLoop=setInterval(async()=>{
+      if(video.readyState===video.HAVE_ENOUGH_DATA){
+        try{
+          const codes=await _camDetector.detect(video);
+          if(codes.length>0){
+            const bc=codes[0].rawValue;
+            stopCam();
+            document.getElementById('si').value=bc;
+            status.textContent='';
+            lookupBC();
+          }
+        }catch(_){}
+      }
+    },300);
+  } catch(e){
+    status.textContent='Camera access denied. Please allow camera in browser settings.';
+  }
+}
+
+function stopCam(){
+  clearInterval(_camLoop); _camLoop=null;
+  if(_camStream){_camStream.getTracks().forEach(t=>t.stop()); _camStream=null;}
+  _camTrack=null; _torchOn=false;
+  document.getElementById('cam-modal').style.display='none';
+  document.getElementById('cam-status').textContent='';
+}
+
+async function toggleTorch(){
+  if(!_camTrack)return;
+  try{
+    _torchOn=!_torchOn;
+    await _camTrack.applyConstraints({advanced:[{torch:_torchOn}]});
+    document.getElementById('cam-torch-btn').style.background=_torchOn?'rgba(255,220,50,0.4)':'rgba(255,255,255,0.15)';
+  }catch(_){}
+}
+// ───────────────────────────────────────────────────────────────────────────
 
 async function lookupBC() {
   const bc=document.getElementById('si').value.trim();
@@ -1093,12 +1145,6 @@ async function savePur() {
     const cq=parseFloat(prod.on_hand_qty)||0,cc=parseFloat(prod.average_cost)||0;
     const nq=cq+l.units,na=nq>0?((cq*cc)+(l.units*l.unit_cost))/nq:l.unit_cost;
     await sb.from('products').update({average_cost:na,last_cost:l.unit_cost,updated_at:new Date().toISOString()}).eq('id',l.product_id);
-    // Log cost price change if it differs from current last_cost
-    const oldCost=parseFloat(prod.last_cost||0);
-    if(Math.abs(l.unit_cost-oldCost)>0.0001){
-      const pd=document.getElementById('pud').value||new Date().toISOString().split('T')[0];
-      await sb.from('price_history').insert({product_id:l.product_id,price_type:'cost',old_price:oldCost,new_price:l.unit_cost,effective_date:pd,source:'purchase',notes:'Purchase received, WAC updated to '+na.toFixed(4)});
-    }
   }
   hideL();
   toast('Purchase received! Inventory updated.','ok');
@@ -1197,8 +1243,6 @@ async function confImport(){
   const sf2=fndKey(impRows[0],['Sales','sales','Revenue','Amount']);
   const af=fndKey(impRows[0],['Avg Price','avg price','AvgPrice']);
   const lines=[];
-  const priceChangeLogs=[];
-  const effectiveDate=sd||new Date().toISOString().split('T')[0];
   for(const row of impRows){
     const rn=(row[pf]||'').trim();
     if(!rn||rn.toLowerCase().includes('total'))continue;
@@ -1206,24 +1250,12 @@ async function confImport(){
     const s=parseFloat((row[sf2]||'0').replace(/[^0-9.-]/g,''))||0;
     const ap2=parseFloat((row[af]||'0').replace(/[^0-9.-]/g,''))||0;
     const matched=AP.find(p=>p.name.toLowerCase()===rn.toLowerCase()||p.name.toLowerCase().includes(rn.toLowerCase())||rn.toLowerCase().includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
-    // Snapshot sell price: use avg_price from report if available, else current selling_price
-    const snapSellPrice = ap2>0 ? ap2 : (matched?.selling_price||0);
-    lines.push({sales_import_id:ir.id,product_id:matched?.product_id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_sell_price:snapSellPrice,period_start_date:sd||null,period_end_date:ed||null});
-    if(matched&&u>0){
-      await sb.from('inventory_transactions').insert({product_id:matched.product_id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
-      // Log sell price change if avg price in report differs from current selling_price
-      if(ap2>0 && Math.abs(ap2-(matched.selling_price||0))>0.0001){
-        priceChangeLogs.push({product_id:matched.product_id,price_type:'sell',old_price:matched.selling_price||0,new_price:ap2,effective_date:effectiveDate,source:'import',notes:'Price detected from sales import '+sd+' to '+ed});
-        // Update product selling_price to match what was actually charged
-        await sb.from('products').update({selling_price:ap2,updated_at:new Date().toISOString()}).eq('id',matched.product_id);
-      }
-    }
+    lines.push({sales_import_id:ir.id,product_id:matched?.product_id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,period_start_date:sd||null,period_end_date:ed||null});
+    if(matched&&u>0)await sb.from('inventory_transactions').insert({product_id:matched.product_id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
   }
   if(lines.length)await sb.from('sales_lines').insert(lines);
-  if(priceChangeLogs.length)await sb.from('price_history').insert(priceChangeLogs);
   hideL();
-  const priceMsg=priceChangeLogs.length>0?` ${priceChangeLogs.length} price change(s) logged.`:'';
-  toast('Import complete! '+lines.length+' products imported.'+priceMsg,'ok');
+  toast('Import complete! '+lines.length+' products imported.','ok');
   cancImport(); await loadProds2(); loadIH();
 }
 
@@ -1429,9 +1461,7 @@ function aggS(rows){
     if(!m[k])m[k]={name:nm,s:0,u:0,c:0};
     m[k].s+=parseFloat(r.sales_amount||0);
     m[k].u+=parseInt(r.units_sold||0);
-    // Use snapshotted cost if available, else fall back to current average_cost
-    const unitCost = parseFloat(r.unit_cost_snapshot||c||0);
-    m[k].c+=parseInt(r.units_sold||0)*unitCost;
+    m[k].c+=parseInt(r.units_sold||0)*c;
   });
   return m;
 }
