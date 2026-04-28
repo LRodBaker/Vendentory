@@ -438,6 +438,13 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
               <button class="btn btn-p" onclick="runCogsRpt()">Run COGS report</button>
             </div>
           </div>
+          <div id="rpt-plpick" style="display:none;margin-bottom:14px">
+            <div style="background:var(--white);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+              <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">Start date</label><input class="fi" type="date" id="rpt-ps" style="width:160px"></div>
+              <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">End date</label><input class="fi" type="date" id="rpt-pe" style="width:160px"></div>
+              <button class="btn btn-p" onclick="runPLRpt()">Run P&amp;L report</button>
+            </div>
+          </div>
           <div id="rc"><div class="tm">Loading...</div></div>
         </div>
 
@@ -672,7 +679,7 @@ function nav(pg) {
   if(pg==='adjustments'){loadRAJ();setDates();}
   if(pg==='reports'){
     document.getElementById('rpt-wpick').style.display='block';
-    ['rpt-mpick','rpt-cpick','rpt-gpick'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
+    ['rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
     loadWeekOpts();
   }
   if(pg==='settings'){loadSets();loadProf();}
@@ -1158,7 +1165,7 @@ async function loadIH(){
 function switchRT(tab,btn){
   document.querySelectorAll('.tab-bar .tab-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active'); curRT=tab;
-  ['rpt-wpick','rpt-mpick','rpt-cpick','rpt-gpick'].forEach(id=>{
+  ['rpt-wpick','rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.style.display='none';
   });
   if(tab==='weekly'){
@@ -1184,7 +1191,14 @@ function switchRT(tab,btn){
   } else if(tab==='inventory'){loadInvRpt();}
   else if(tab==='top'){loadTopRpt();}
   else if(tab==='bottom'){loadBotRpt();}
-  else if(tab==='pl'){loadPLRpt();}
+  else if(tab==='pl'){
+    const el=document.getElementById('rpt-plpick');if(el)el.style.display='block';
+    const now=new Date(),ago=new Date(now-30*86400000);
+    const ps=document.getElementById('rpt-ps'),pe=document.getElementById('rpt-pe');
+    if(ps&&!ps.value)ps.value=ago.toISOString().split('T')[0];
+    if(pe&&!pe.value)pe.value=now.toISOString().split('T')[0];
+    document.getElementById('rc').innerHTML='<div class="muted">Set your date range and click Run P&L report.</div>';
+  }
 }
 
 async function loadWeekOpts(){
@@ -1256,13 +1270,19 @@ async function runCogsRpt(){
   if(error){document.getElementById('rc').innerHTML='<div style="color:var(--red)">Error: '+error.message+'</div>';return;}
   const bp=aggS(sl||[]);
   const sr=Object.values(bp).filter(r=>r.u>0).sort((a,b)=>b.c-a.c);
-  const ts=sr.reduce((s,r)=>s+r.s,0),tc=sr.reduce((s,r)=>s+r.c,0);
+  const ts=sr.reduce((s,r)=>s+r.s,0),tc=sr.reduce((s,r)=>s+r.c,0),tu=sr.reduce((s,r)=>s+r.u,0);
+  const tableId='cogs-tbl-'+Date.now();
   document.getElementById('rc').innerHTML=
     '<div style="font-size:12px;color:var(--g400);margin-bottom:10px;font-weight:500">COGS Report: '+start+' to '+end+'</div>'+
     rHdr([['Total sales',fmt(ts)],['Total COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+
-    `<div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">COGS by product</div>
-    <table class="tbl"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Avg cost/unit</th><th>Total COGS</th><th>% of COGS</th><th>Revenue</th><th>Margin</th></tr></thead><tbody>
-    ${sr.map((r,i)=>{const mg=r.s>0?((r.s-r.c)/r.s*100).toFixed(1):0;return`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${r.u>0?fmt(r.c/r.u):'—'}</td><td>${fmt(r.c)}</td><td>${tc>0?(r.c/tc*100).toFixed(1)+'%':'—'}</td><td>${fmt(r.s)}</td><td class="${mg>=40?'tg':mg>=20?'ta':'tr'}">${mg}%</td></tr>`;}).join('')}
+    `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:600">COGS by product</div>
+      <button class="btn btn-sm" onclick="downloadCSV('cogs-table','COGS_${start}_${end}.csv')">&#11015; Download CSV</button>
+    </div>
+    <table class="tbl" id="cogs-table"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Avg cost/unit</th><th>Total COGS</th><th>% of COGS</th><th>Revenue</th><th>Margin</th></tr></thead><tbody>
+    ${sr.map((r,i)=>{const mg=r.s>0?((r.s-r.c)/r.s*100).toFixed(1):0;return`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${r.u>0?fmt(r.c/r.u):'—'}</td><td>${fmt(r.c)}</td><td>${tc>0?(r.c/tc*100).toFixed(1)+'%':'—'}</td><td>${fmt(r.s)}</td><td>${mg}%</td></tr>`;}).join('')}
+    <tr style="border-top:2px solid var(--border)"><td colspan="2"><strong>TOTAL</strong></td><td><strong>${tu}</strong></td><td>—</td><td><strong>${fmt(tc)}</strong></td><td>100%</td><td><strong>${fmt(ts)}</strong></td><td><strong>${ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—'}</strong></td></tr>
     </tbody></table></div>`;
 }
 
@@ -1298,16 +1318,21 @@ async function loadBotRpt(){
   document.getElementById('rc').innerHTML='<div style="background:var(--red2);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--red)">These products have the lowest sales — consider replacing or repricing.</div><div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Bottom sellers — all time</div>'+sTbl(sr)+'</div>';
 }
 
-async function loadPLRpt(){
+async function runPLRpt(){
+  const start=document.getElementById('rpt-ps')?.value,end=document.getElementById('rpt-pe')?.value;
+  if(!start||!end){toast('Please select dates','err');return;}
   document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
-  const {data:sl}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').not('product_id','is',null);
+  const {data:sl}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').not('product_id','is',null).gte('period_start_date',start).lte('period_start_date',end);
   const bp=aggS(sl||[]);
   const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
   const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
   const gp=ts-tc,margin=ts>0?(gp/ts*100).toFixed(1):0;
   document.getElementById('rc').innerHTML=`
     <div class="card" style="margin-bottom:12px">
-      <div style="font-size:14px;font-weight:700;font-family:var(--fh);margin-bottom:14px">Profit &amp; Loss — All time</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:14px;font-weight:700;font-family:var(--fh)">Profit &amp; Loss: ${start} to ${end}</div>
+        <button class="btn btn-sm" onclick="downloadCSV('pl-table','PL_${start}_${end}.csv')">&#11015; Download CSV</button>
+      </div>
       <div class="ir"><div style="font-weight:600">Total Revenue</div><div style="font-weight:700;font-size:15px">${fmt(ts)}</div></div>
       <div class="ir"><div class="muted">Cost of Goods Sold (COGS)</div><div style="color:var(--red);font-weight:600">(${fmt(tc)})</div></div>
       <div class="ir" style="border-top:2px solid var(--border);margin-top:6px;padding-top:10px"><div style="font-weight:700">Gross Profit</div><div style="font-weight:700;font-size:16px;color:${gp>=0?'var(--green)':'var(--red)'}">${fmt(gp)}</div></div>
@@ -1318,7 +1343,7 @@ async function loadPLRpt(){
       <div class="ir"><div class="muted">Avg profit per unit</div><div style="font-weight:500">${tu>0?fmt(gp/tu):'—'}</div></div>
     </div>
     <div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Product P&amp;L breakdown</div>
-    <table class="tbl"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Revenue</th><th>COGS</th><th>Gross profit</th><th>Margin</th></tr></thead><tbody>
+    <table class="tbl" id="pl-table"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Revenue</th><th>COGS</th><th>Gross profit</th><th>Margin</th></tr></thead><tbody>
     ${sr.map((r,i)=>{const pr=r.s-r.c,mg=r.s>0?((pr/r.s)*100).toFixed(1):0;return`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${fmt(r.s)}</td><td>${fmt(r.c)}</td><td class="${pr>=0?'tg':'tr'}">${fmt(pr)}</td><td class="${mg>=40?'tg':mg>=20?'ta':'tr'}">${mg}%</td></tr>`;}).join('')}
     </tbody></table></div>`;
 }
@@ -1360,6 +1385,26 @@ async function chgPW(){
 
 async function addCat(){const n=document.getElementById('nc').value.trim();if(!n)return;await sb.from('categories').insert({name:n});document.getElementById('nc').value='';await loadCats();loadSets();toast('Category added!','ok');}
 async function addSup(){const n=document.getElementById('ns').value.trim();if(!n)return;await sb.from('suppliers').insert({name:n});document.getElementById('ns').value='';await loadSups();loadSets();toast('Supplier added!','ok');}
+
+function downloadCSV(tableId, filename) {
+  const table = document.getElementById(tableId);
+  if (!table) { toast('Table not found', 'err'); return; }
+  const rows = Array.from(table.querySelectorAll('tr'));
+  const csv = rows.map(row => {
+    const cells = Array.from(row.querySelectorAll('th,td'));
+    return cells.map(cell => {
+      const text = cell.innerText.replace(/"/g, '""');
+      return '"' + text + '"';
+    }).join(',');
+  }).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+  toast('Downloaded ' + filename, 'ok');
+}
 
 function fmt(v){return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(parseFloat(v)||0);}
 function fmtD(dt){if(!dt)return'—';const d=new Date(dt);return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});}
