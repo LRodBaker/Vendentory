@@ -936,7 +936,7 @@ async function saveProd() {
   try {
     const eid=document.getElementById('peid').value;
     const lastCost=parseFloat(document.getElementById('plc').value)||0;
-    toast('Step 1: building payload, eid='+(eid||'NEW'),'ok');
+
     const pl={
       name:nm,
       barcode:document.getElementById('pb').value||null,
@@ -953,9 +953,10 @@ async function saveProd() {
       average_cost:lastCost,
       selling_price:parseFloat(document.getElementById('psp').value)||0,
       is_active:document.getElementById('pac').value==='true',
+      image_url: _newImageDataUrl !== null ? _newImageDataUrl : (document.getElementById('piurl').value||null),
       updated_at:new Date().toISOString()
     };
-    toast('Step 2: calling Supabase '+( eid?'UPDATE':'INSERT'),'ok');
+
     let dbError = null;
     try {
       if(eid){
@@ -978,13 +979,13 @@ async function saveProd() {
           dbError={message:txt||('HTTP '+resp.status)};
         }
       }
-      toast('Step 3: got response, error='+(dbError?dbError.message:'none'),'ok');
+
     } catch(dbErr) {
       toast('Step 3 EXCEPTION: '+dbErr.message,'err');
       return;
     }
     if(dbError){toast('DB Error: '+dbError.message,'err');return;}
-    toast('Step 4: success, closing modal','ok');
+
     document.getElementById('mprod').style.display='none';
     await loadProds2();
     renderProds();
