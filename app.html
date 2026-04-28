@@ -957,8 +957,8 @@ async function saveProd() {
     // Only set average_cost on new products (WAC manages it on existing ones via purchases)
     if(!eid) pl.average_cost = lastCost;
     let res;
-    if(eid){res=await sb.from('products').update(pl).eq('id',eid);}
-    else{res=await sb.from('products').insert(pl);}
+    if(eid){res=await sb.from('products').update(pl).eq('id',eid).select();}
+    else{res=await sb.from('products').insert(pl).select();}
     if(res.error){toast('DB Error: '+res.error.message,'err');return;}
     document.getElementById('mprod').style.display='none';
     await loadProds2();
