@@ -1163,14 +1163,16 @@ async function togglePurLines(id,btn){
   if(el.style.display!=='none'){el.style.display='none';btn.textContent='▸ Details';return;}
   el.style.display='block';
   btn.textContent='▾ Hide';
-  if(el.innerHTML){return;} // already loaded
+  if(el.dataset.loaded==='1')return; // already loaded
+  el.dataset.loaded='1';
   el.innerHTML='<div class="tm" style="font-size:12px">Loading...</div>';
-  const {data:lines}=await sb.from('purchase_lines').select('*,products(name)').eq('purchase_id',id).order('id');
+  const {data:lines,error}=await sb.from('purchase_lines').select('*,products(name)').eq('purchase_id',id).order('id');
+  if(error){el.innerHTML='<div class="tm" style="font-size:12px;color:var(--red)">Error: '+error.message+'</div>';el.dataset.loaded='';return;}
   if(!lines||!lines.length){el.innerHTML='<div class="tm" style="font-size:12px">No line items found</div>';return;}
   el.innerHTML=`<table class="tbl" style="font-size:12px">
     <thead><tr><th>Product</th><th>Cases</th><th>Units</th><th>Unit cost</th><th>Total</th></tr></thead>
     <tbody>${lines.map(l=>`<tr>
-      <td>${l.products?.name||l.product_id||'—'}</td>
+      <td>${l.products?.name||'—'}</td>
       <td>${l.cases||'—'}</td>
       <td>${l.units_received}</td>
       <td>${fmt(l.unit_cost)}</td>
