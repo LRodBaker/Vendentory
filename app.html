@@ -956,16 +956,34 @@ async function saveProd() {
       updated_at:new Date().toISOString()
     };
     toast('Step 2: calling Supabase '+( eid?'UPDATE':'INSERT'),'ok');
-    let res;
+    let dbError = null;
     try {
-      if(eid){res=await sb.from('products').update(pl).eq('id',eid);}
-      else{res=await sb.from('products').insert(pl);}
-      toast('Step 3: got response, error='+(res.error?res.error.message:'none'),'ok');
+      if(eid){
+        const r=await sb.from('products').update(pl).eq('id',eid);
+        dbError=r.error;
+      } else {
+        // Use fetch directly for INSERT — avoids JS client hang on some Supabase versions
+        const resp = await fetch(SURL+'/rest/v1/products', {
+          method:'POST',
+          headers:{
+            'apikey':SKEY,
+            'Authorization':'Bearer '+SKEY,
+            'Content-Type':'application/json',
+            'Prefer':'return=minimal'
+          },
+          body:JSON.stringify(pl)
+        });
+        if(!resp.ok){
+          const txt=await resp.text();
+          dbError={message:txt||('HTTP '+resp.status)};
+        }
+      }
+      toast('Step 3: got response, error='+(dbError?dbError.message:'none'),'ok');
     } catch(dbErr) {
       toast('Step 3 EXCEPTION: '+dbErr.message,'err');
       return;
     }
-    if(res.error){toast('DB Error: '+res.error.message+' code='+res.error.code,'err');return;}
+    if(dbError){toast('DB Error: '+dbError.message,'err');return;}
     toast('Step 4: success, closing modal','ok');
     document.getElementById('mprod').style.display='none';
     await loadProds2();
