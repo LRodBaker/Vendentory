@@ -554,7 +554,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
       </div>
       <input type="file" id="pii" accept="image/*" style="display:none" onchange="prevPI(this)">
       <div style="flex:1">
-        <div class="fg"><label class="fl">Barcode</label><div style="display:flex;gap:6px"><input class="fi" id="pb" placeholder="UPC / EAN..."><button class="btn btn-sm" onclick="nav('scan')">&#128247;</button></div></div>
+        <div class="fg"><label class="fl">Barcode</label><div style="display:flex;gap:6px"><input class="fi" id="pb" placeholder="UPC / EAN — scan or type..."><button class="btn btn-sm" title="Click then scan with Bluetooth/USB scanner" onclick="document.getElementById('pb').focus();document.getElementById('pb').select()">&#128247;</button></div></div>
         <div class="fg"><label class="fl">Product name *</label><input class="fi" id="pn" placeholder="e.g. Monster Zero Ultra Can 16 oz"></div>
       </div>
     </div>
@@ -877,10 +877,21 @@ function openAP() {
 }
 
 async function openEP(id) {
-  const {data:p}=await sb.from('products').select('*').eq('id',id).single();
-  if(!p)return;
+  // First try local cache (view uses product_id, table uses id — both are the same UUID)
+  let p = AP.find(x => x.product_id === id || x.id === id);
+  if (!p) {
+    // Fallback: fetch from DB trying both column names
+    let res = await sb.from('products').select('*').eq('id', id).single();
+    if (!res.data) res = await sb.from('products').select('*').eq('product_id', id).single();
+    if (!res.data) { toast('Could not load product', 'err'); return; }
+    p = res.data;
+  } else {
+    // Re-fetch full record to get all fields (view may not have all columns)
+    const {data:full} = await sb.from('products').select('*').eq('id', p.product_id || p.id).single();
+    if (full) p = full;
+  }
   document.getElementById('mpt').textContent='Edit product';
-  document.getElementById('peid').value=p.id;
+  document.getElementById('peid').value=p.id||p.product_id;
   document.getElementById('pb').value=p.barcode||'';
   document.getElementById('pn').value=p.name||'';
   document.getElementById('pco').value=p.product_code||'';
@@ -899,6 +910,7 @@ async function openEP(id) {
   await loadCats(); await loadSups();
   setTimeout(()=>{if(p.category_id)document.getElementById('pca').value=p.category_id;if(p.last_supplier_id)document.getElementById('psu').value=p.last_supplier_id;},80);
   if(p.image_url){document.getElementById('pip').src=p.image_url;document.getElementById('pip').style.display='block';document.getElementById('pph').style.display='none';}
+  else{document.getElementById('pip').style.display='none';document.getElementById('pph').style.display='block';}
   openM('mprod');
 }
 
@@ -919,7 +931,6 @@ function prevPI(input) {
 async function saveProd() {
   const nm=document.getElementById('pn').value.trim();
   if(!nm){toast('Product name is required','err');return;}
-  toast('Step 1: building payload','ok');
   try {
     const pl={
       name:nm,
@@ -940,21 +951,17 @@ async function saveProd() {
       image_url: _newImageDataUrl !== null ? _newImageDataUrl : (document.getElementById('piurl').value||null),
       updated_at:new Date().toISOString()
     };
-    toast('Step 2: sending to database','ok');
     const eid=document.getElementById('peid').value;
     let res;
     if(eid){res=await sb.from('products').update(pl).eq('id',eid);}
     else{res=await sb.from('products').insert(pl);}
-    toast('Step 3: got response','ok');
-    if(res.error){toast('DB Error: '+res.error.message+' ('+res.error.code+')','err');return;}
-    toast('Step 4: saved! closing modal','ok');
+    if(res.error){toast('Error: '+res.error.message,'err');return;}
     document.getElementById('mprod').style.display='none';
-    toast('Step 5: reloading products','ok');
     await loadProds2();
     renderProds();
-    toast('Done!','ok');
+    toast(eid?'Product updated!':'Product added!','ok');
   } catch(e) {
-    toast('Exception at: '+e.message,'err');
+    toast('Error: '+e.message,'err');
   }
 }
 
