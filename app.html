@@ -936,6 +936,7 @@ async function saveProd() {
   try {
     const eid=document.getElementById('peid').value;
     const lastCost=parseFloat(document.getElementById('plc').value)||0;
+    toast('Step 1: building payload, eid='+(eid||'NEW'),'ok');
     const pl={
       name:nm,
       barcode:document.getElementById('pb').value||null,
@@ -949,23 +950,29 @@ async function saveProd() {
       reorder_point:parseInt(document.getElementById('prp').value)||0,
       order_up_to_level:parseInt(document.getElementById('pou').value)||0,
       last_cost:lastCost,
+      average_cost:lastCost,
       selling_price:parseFloat(document.getElementById('psp').value)||0,
       is_active:document.getElementById('pac').value==='true',
-      image_url: _newImageDataUrl !== null ? _newImageDataUrl : (document.getElementById('piurl').value||null),
       updated_at:new Date().toISOString()
     };
-    // Only set average_cost on new products (WAC manages it on existing ones via purchases)
-    if(!eid) pl.average_cost = lastCost;
+    toast('Step 2: calling Supabase '+( eid?'UPDATE':'INSERT'),'ok');
     let res;
-    if(eid){res=await sb.from('products').update(pl).eq('id',eid).select();}
-    else{res=await sb.from('products').insert(pl).select();}
-    if(res.error){toast('DB Error: '+res.error.message,'err');return;}
+    try {
+      if(eid){res=await sb.from('products').update(pl).eq('id',eid);}
+      else{res=await sb.from('products').insert(pl);}
+      toast('Step 3: got response, error='+(res.error?res.error.message:'none'),'ok');
+    } catch(dbErr) {
+      toast('Step 3 EXCEPTION: '+dbErr.message,'err');
+      return;
+    }
+    if(res.error){toast('DB Error: '+res.error.message+' code='+res.error.code,'err');return;}
+    toast('Step 4: success, closing modal','ok');
     document.getElementById('mprod').style.display='none';
     await loadProds2();
     renderProds();
     toast(eid?'Product updated!':'Product added!','ok');
   } catch(e) {
-    toast('Error: '+e.message,'err');
+    toast('Outer error: '+e.message,'err');
   } finally {
     if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='Save product';}
   }
