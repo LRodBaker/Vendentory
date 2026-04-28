@@ -931,7 +931,11 @@ function prevPI(input) {
 async function saveProd() {
   const nm=document.getElementById('pn').value.trim();
   if(!nm){toast('Product name is required','err');return;}
+  const saveBtn=document.querySelector('#mprod .btn-p');
+  if(saveBtn){saveBtn.disabled=true;saveBtn.textContent='Saving...';}
   try {
+    const eid=document.getElementById('peid').value;
+    const lastCost=parseFloat(document.getElementById('plc').value)||0;
     const pl={
       name:nm,
       barcode:document.getElementById('pb').value||null,
@@ -944,24 +948,26 @@ async function saveProd() {
       units_per_case:parseInt(document.getElementById('pupc').value)||1,
       reorder_point:parseInt(document.getElementById('prp').value)||0,
       order_up_to_level:parseInt(document.getElementById('pou').value)||0,
-      last_cost:parseFloat(document.getElementById('plc').value)||0,
-      average_cost:parseFloat(document.getElementById('plc').value)||0,
+      last_cost:lastCost,
       selling_price:parseFloat(document.getElementById('psp').value)||0,
       is_active:document.getElementById('pac').value==='true',
       image_url: _newImageDataUrl !== null ? _newImageDataUrl : (document.getElementById('piurl').value||null),
       updated_at:new Date().toISOString()
     };
-    const eid=document.getElementById('peid').value;
+    // Only set average_cost on new products (WAC manages it on existing ones via purchases)
+    if(!eid) pl.average_cost = lastCost;
     let res;
     if(eid){res=await sb.from('products').update(pl).eq('id',eid);}
     else{res=await sb.from('products').insert(pl);}
-    if(res.error){toast('Error: '+res.error.message,'err');return;}
+    if(res.error){toast('DB Error: '+res.error.message,'err');return;}
     document.getElementById('mprod').style.display='none';
     await loadProds2();
     renderProds();
     toast(eid?'Product updated!':'Product added!','ok');
   } catch(e) {
     toast('Error: '+e.message,'err');
+  } finally {
+    if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='Save product';}
   }
 }
 
