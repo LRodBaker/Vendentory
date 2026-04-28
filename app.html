@@ -822,8 +822,27 @@ async function openPD(id) {
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
       <button class="btn btn-p btn-sm" onclick="closeM('mpd');nav('purchases')">Receive inventory</button>
       <button class="btn btn-sm" onclick="closeM('mpd');nav('adjustments')">Adjust quantity</button>
+    </div>
+    <div style="margin-top:16px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);margin-bottom:8px">Price history</div>
+      <div id="ph-loading" style="font-size:13px;color:var(--gray-400)">Loading...</div>
+      <div id="ph-table"></div>
     </div>`;
   openM('mpd');
+  // Load price history async
+  const {data:ph}=await sb.from('price_history').select('*').eq('product_id',id).order('effective_date',{ascending:false}).limit(20);
+  document.getElementById('ph-loading').style.display='none';
+  if(!ph||!ph.length){
+    document.getElementById('ph-table').innerHTML='<div style="font-size:13px;color:var(--gray-400);padding:4px 0">No price changes recorded yet.</div>';
+  } else {
+    document.getElementById('ph-table').innerHTML=`<table class="tbl"><thead><tr><th>Date</th><th>Type</th><th>From</th><th>To</th><th>Source</th></tr></thead><tbody>${ph.map(r=>`<tr>
+      <td>${fmtD(r.effective_date)}</td>
+      <td><span class="badge ${r.price_type==='cost'?'b-gray':'b-teal'}">${r.price_type==='cost'?'Cost':'Sell'}</span></td>
+      <td style="color:var(--gray-400)">${r.old_price!=null?fmt(r.old_price):'—'}</td>
+      <td style="font-weight:600">${fmt(r.new_price)}</td>
+      <td style="font-size:11px;color:var(--gray-400)">${r.source}</td>
+    </tr>`).join('')}</tbody></table>`;
+  }
 }
 
 function openAP() {
@@ -885,8 +904,18 @@ function prevPI(input) {
 async function saveProd() {
   const nm=document.getElementById('pn').value.trim();
   if(!nm){toast('Product name is required','err');return;}
-  toast('Step 1: building payload','ok');
   try {
+    const newCost=parseFloat(document.getElementById('plc').value)||0;
+    const newSell=parseFloat(document.getElementById('psp').value)||0;
+    const eid=document.getElementById('peid').value;
+
+    // Capture old prices before save (for change logging)
+    let oldCost=null, oldSell=null;
+    if(eid){
+      const existing=AP.find(p=>p.product_id===eid||p.id===eid);
+      if(existing){ oldCost=parseFloat(existing.last_cost||0); oldSell=parseFloat(existing.selling_price||0); }
+    }
+
     const pl={
       name:nm,
       barcode:document.getElementById('pb').value||null,
@@ -899,28 +928,39 @@ async function saveProd() {
       units_per_case:parseInt(document.getElementById('pupc').value)||1,
       reorder_point:parseInt(document.getElementById('prp').value)||0,
       order_up_to_level:parseInt(document.getElementById('pou').value)||0,
-      last_cost:parseFloat(document.getElementById('plc').value)||0,
-      average_cost:parseFloat(document.getElementById('plc').value)||0,
-      selling_price:parseFloat(document.getElementById('psp').value)||0,
+      last_cost:newCost,
+      average_cost:newCost,
+      selling_price:newSell,
       is_active:document.getElementById('pac').value==='true',
       image_url: _newImageDataUrl !== null ? _newImageDataUrl : (document.getElementById('piurl').value||null),
       updated_at:new Date().toISOString()
     };
-    toast('Step 2: sending to database','ok');
-    const eid=document.getElementById('peid').value;
-    let res;
+
+    let res, savedId=eid;
     if(eid){res=await sb.from('products').update(pl).eq('id',eid);}
-    else{res=await sb.from('products').insert(pl);}
-    toast('Step 3: got response','ok');
-    if(res.error){toast('DB Error: '+res.error.message+' ('+res.error.code+')','err');return;}
-    toast('Step 4: saved! closing modal','ok');
+    else{
+      const ins=await sb.from('products').insert(pl).select().single();
+      res=ins; savedId=ins.data?.id;
+    }
+    if(res.error){toast('DB Error: '+res.error.message,'err');return;}
+
+    // Log price history if prices changed (edit only)
+    if(eid && savedId){
+      const today=new Date().toISOString().split('T')[0];
+      const logs=[];
+      if(oldCost!==null && Math.abs(newCost-oldCost)>0.0001)
+        logs.push({product_id:savedId,price_type:'cost',old_price:oldCost,new_price:newCost,effective_date:today,source:'manual'});
+      if(oldSell!==null && Math.abs(newSell-oldSell)>0.0001)
+        logs.push({product_id:savedId,price_type:'sell',old_price:oldSell,new_price:newSell,effective_date:today,source:'manual'});
+      if(logs.length) await sb.from('price_history').insert(logs);
+    }
+
     document.getElementById('mprod').style.display='none';
-    toast('Step 5: reloading products','ok');
     await loadProds2();
     renderProds();
-    toast('Done!','ok');
+    toast('Product saved!','ok');
   } catch(e) {
-    toast('Exception at: '+e.message,'err');
+    toast('Error: '+e.message,'err');
   }
 }
 
@@ -1053,6 +1093,12 @@ async function savePur() {
     const cq=parseFloat(prod.on_hand_qty)||0,cc=parseFloat(prod.average_cost)||0;
     const nq=cq+l.units,na=nq>0?((cq*cc)+(l.units*l.unit_cost))/nq:l.unit_cost;
     await sb.from('products').update({average_cost:na,last_cost:l.unit_cost,updated_at:new Date().toISOString()}).eq('id',l.product_id);
+    // Log cost price change if it differs from current last_cost
+    const oldCost=parseFloat(prod.last_cost||0);
+    if(Math.abs(l.unit_cost-oldCost)>0.0001){
+      const pd=document.getElementById('pud').value||new Date().toISOString().split('T')[0];
+      await sb.from('price_history').insert({product_id:l.product_id,price_type:'cost',old_price:oldCost,new_price:l.unit_cost,effective_date:pd,source:'purchase',notes:'Purchase received, WAC updated to '+na.toFixed(4)});
+    }
   }
   hideL();
   toast('Purchase received! Inventory updated.','ok');
@@ -1151,6 +1197,8 @@ async function confImport(){
   const sf2=fndKey(impRows[0],['Sales','sales','Revenue','Amount']);
   const af=fndKey(impRows[0],['Avg Price','avg price','AvgPrice']);
   const lines=[];
+  const priceChangeLogs=[];
+  const effectiveDate=sd||new Date().toISOString().split('T')[0];
   for(const row of impRows){
     const rn=(row[pf]||'').trim();
     if(!rn||rn.toLowerCase().includes('total'))continue;
@@ -1158,12 +1206,24 @@ async function confImport(){
     const s=parseFloat((row[sf2]||'0').replace(/[^0-9.-]/g,''))||0;
     const ap2=parseFloat((row[af]||'0').replace(/[^0-9.-]/g,''))||0;
     const matched=AP.find(p=>p.name.toLowerCase()===rn.toLowerCase()||p.name.toLowerCase().includes(rn.toLowerCase())||rn.toLowerCase().includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
-    lines.push({sales_import_id:ir.id,product_id:matched?.product_id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,period_start_date:sd||null,period_end_date:ed||null});
-    if(matched&&u>0)await sb.from('inventory_transactions').insert({product_id:matched.product_id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
+    // Snapshot sell price: use avg_price from report if available, else current selling_price
+    const snapSellPrice = ap2>0 ? ap2 : (matched?.selling_price||0);
+    lines.push({sales_import_id:ir.id,product_id:matched?.product_id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_sell_price:snapSellPrice,period_start_date:sd||null,period_end_date:ed||null});
+    if(matched&&u>0){
+      await sb.from('inventory_transactions').insert({product_id:matched.product_id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
+      // Log sell price change if avg price in report differs from current selling_price
+      if(ap2>0 && Math.abs(ap2-(matched.selling_price||0))>0.0001){
+        priceChangeLogs.push({product_id:matched.product_id,price_type:'sell',old_price:matched.selling_price||0,new_price:ap2,effective_date:effectiveDate,source:'import',notes:'Price detected from sales import '+sd+' to '+ed});
+        // Update product selling_price to match what was actually charged
+        await sb.from('products').update({selling_price:ap2,updated_at:new Date().toISOString()}).eq('id',matched.product_id);
+      }
+    }
   }
   if(lines.length)await sb.from('sales_lines').insert(lines);
+  if(priceChangeLogs.length)await sb.from('price_history').insert(priceChangeLogs);
   hideL();
-  toast('Import complete! '+lines.length+' products imported.','ok');
+  const priceMsg=priceChangeLogs.length>0?` ${priceChangeLogs.length} price change(s) logged.`:'';
+  toast('Import complete! '+lines.length+' products imported.'+priceMsg,'ok');
   cancImport(); await loadProds2(); loadIH();
 }
 
@@ -1369,7 +1429,9 @@ function aggS(rows){
     if(!m[k])m[k]={name:nm,s:0,u:0,c:0};
     m[k].s+=parseFloat(r.sales_amount||0);
     m[k].u+=parseInt(r.units_sold||0);
-    m[k].c+=parseInt(r.units_sold||0)*c;
+    // Use snapshotted cost if available, else fall back to current average_cost
+    const unitCost = parseFloat(r.unit_cost_snapshot||c||0);
+    m[k].c+=parseInt(r.units_sold||0)*unitCost;
   });
   return m;
 }
