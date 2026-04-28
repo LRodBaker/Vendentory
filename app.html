@@ -206,7 +206,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
         <div class="nav-item" data-page="scan">&#9641; Scan Product</div>
         <div class="sb-section">Inventory</div>
         <div class="nav-item" data-page="products">&#9634; Products</div>
-        <div class="nav-item" data-page="purchases">&#9684; Receive Purchases</div>
+        <div class="nav-item" data-page="purchases">&#9684; Purchases</div>
         <div class="nav-item" data-page="adjustments">&#9650; Adjustments</div>
         <div class="sb-section">Reporting</div>
         <div class="nav-item" data-page="imports">&#9776; Import Sales</div>
@@ -252,7 +252,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
             <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-400);margin-bottom:9px">Quick actions</div>
             <div class="g4">
               <div class="card" style="cursor:pointer;text-align:center;padding:14px" onclick="nav('scan')"><div style="font-size:22px;margin-bottom:5px">&#128247;</div><div style="font-size:12px;font-weight:600">Scan Product</div></div>
-              <div class="card" style="cursor:pointer;text-align:center;padding:14px" onclick="nav('purchases')"><div style="font-size:22px;margin-bottom:5px">&#128230;</div><div style="font-size:12px;font-weight:600">Receive Purchase</div></div>
+              <div class="card" style="cursor:pointer;text-align:center;padding:14px" onclick="nav('purchases')"><div style="font-size:22px;margin-bottom:5px">&#128230;</div><div style="font-size:12px;font-weight:600">Purchases</div></div>
               <div class="card" style="cursor:pointer;text-align:center;padding:14px" onclick="nav('imports')"><div style="font-size:22px;margin-bottom:5px">&#128202;</div><div style="font-size:12px;font-weight:600">Import Sales</div></div>
               <div class="card" style="cursor:pointer;text-align:center;padding:14px" onclick="openAP()"><div style="font-size:22px;margin-bottom:5px">&#43;</div><div style="font-size:12px;font-weight:600">Add Product</div></div>
             </div>
@@ -334,6 +334,17 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
                 <button class="btn btn-p" onclick="savePur()">Save &amp; receive purchase</button>
                 <button class="btn" onclick="clrPur()">Clear</button>
               </div>
+            </div>
+            <!-- PURCHASE HISTORY -->
+            <div class="card" style="margin-top:14px">
+              <div class="card-header">
+                <div class="card-title" style="margin:0">Purchase history</div>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <input class="fi" type="month" id="ph-month" style="width:160px" onchange="loadPurHistory()">
+                  <button class="btn btn-sm" onclick="document.getElementById('ph-month').value='';loadPurHistory()">All</button>
+                </div>
+              </div>
+              <div id="pur-history"><div class="tm">Loading...</div></div>
             </div>
           </div>
         </div>
@@ -685,7 +696,7 @@ async function loadProf() {
   if(document.getElementById('sro')) document.getElementById('sro').value=rl;
 }
 
-const PTITLES={dashboard:'Dashboard',scan:'Scan Product',products:'Products',purchases:'Receive Purchases',adjustments:'Adjustments',imports:'Import Sales',reports:'Reports',machines:'Machines',settings:'Settings'};
+const PTITLES={dashboard:'Dashboard',scan:'Scan Product',products:'Products',purchases:'Purchases',adjustments:'Adjustments',imports:'Import Sales',reports:'Reports',machines:'Machines',settings:'Settings'};
 
 function nav(pg) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
@@ -704,6 +715,7 @@ function nav(pg) {
     ['rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
     loadWeekOpts();
   }
+  if(pg==='purchases') loadPurHistory();
   if(pg==='settings'){loadSets();loadProf();}
   if(pg==='imports') loadIH();
 }
@@ -1112,6 +1124,61 @@ function updPL(i,f,v){
 function rmPL(i){PL.splice(i,1);renderPL();}
 function clrPur(){PL=[];renderPL();['pui','pun'].forEach(id=>document.getElementById(id).value='');['push','putx','puex'].forEach(id=>document.getElementById(id).value='0');}
 
+async function loadPurHistory(){
+  const el=document.getElementById('pur-history');
+  if(!el)return;
+  el.innerHTML='<div class="tm">Loading...</div>';
+  const monthVal=document.getElementById('ph-month')?.value;
+  let query=sb.from('purchases').select('id,purchase_date,invoice_number,status,subtotal_amount,shipping_cost,tax_amount,extra_costs,total_amount,notes,suppliers(name)').order('purchase_date',{ascending:false}).limit(50);
+  if(monthVal){
+    const start=monthVal+'-01';
+    const end=new Date(monthVal.split('-')[0],monthVal.split('-')[1],0).toISOString().split('T')[0];
+    query=query.gte('purchase_date',start).lte('purchase_date',end);
+  }
+  const {data:purs,error}=await query;
+  if(error){el.innerHTML='<div class="tm">Error loading history</div>';return;}
+  if(!purs||!purs.length){el.innerHTML='<div class="tm">No purchases found</div>';return;}
+  el.innerHTML=purs.map(p=>`
+    <div style="border-bottom:0.5px solid var(--border);padding:11px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <div>
+          <div style="font-weight:600;font-size:13px">${p.suppliers?.name||'Unknown supplier'} <span class="badge b-gray" style="margin-left:4px">${p.status}</span></div>
+          <div style="font-size:12px;color:var(--gray-400);margin-top:2px">${fmtD(p.purchase_date)}${p.invoice_number?' · Invoice: '+p.invoice_number:''}${p.notes?' · '+p.notes:''}</div>
+          <div style="font-size:11px;color:var(--gray-400);margin-top:1px">
+            Sub: ${fmt(p.subtotal_amount)}${p.shipping_cost>0?' · Ship: '+fmt(p.shipping_cost):''}${p.tax_amount>0?' · Tax: '+fmt(p.tax_amount):''}${p.extra_costs>0?' · Extra: '+fmt(p.extra_costs):''}
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="font-size:16px;font-weight:700;font-family:var(--font-head)">${fmt(p.total_amount)}</div>
+          <button class="btn btn-sm" onclick="togglePurLines('${p.id}',this)">▸ Details</button>
+        </div>
+      </div>
+      <div id="phl-${p.id}" style="display:none;margin-top:10px"></div>
+    </div>`).join('');
+}
+
+async function togglePurLines(id,btn){
+  const el=document.getElementById('phl-'+id);
+  if(!el)return;
+  if(el.style.display!=='none'){el.style.display='none';btn.textContent='▸ Details';return;}
+  el.style.display='block';
+  btn.textContent='▾ Hide';
+  if(el.innerHTML){return;} // already loaded
+  el.innerHTML='<div class="tm" style="font-size:12px">Loading...</div>';
+  const {data:lines}=await sb.from('purchase_lines').select('*,products(name)').eq('purchase_id',id).order('id');
+  if(!lines||!lines.length){el.innerHTML='<div class="tm" style="font-size:12px">No line items found</div>';return;}
+  el.innerHTML=`<table class="tbl" style="font-size:12px">
+    <thead><tr><th>Product</th><th>Cases</th><th>Units</th><th>Unit cost</th><th>Total</th></tr></thead>
+    <tbody>${lines.map(l=>`<tr>
+      <td>${l.products?.name||l.product_id||'—'}</td>
+      <td>${l.cases||'—'}</td>
+      <td>${l.units_received}</td>
+      <td>${fmt(l.unit_cost)}</td>
+      <td style="font-weight:600">${fmt(l.line_total)}</td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
 function updPT(){
   const sub=PL.reduce((s,l)=>s+l.total,0);
   const sh=parseFloat(document.getElementById('push').value)||0;
@@ -1153,7 +1220,7 @@ async function savePur() {
   }
   hideL();
   toast('Purchase received! Inventory updated.','ok');
-  clrPur(); await loadProds2(); renderProds();
+  clrPur(); await loadProds2(); renderProds(); loadPurHistory();
 }
 
 async function srchAdj(){
