@@ -523,13 +523,10 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
 <!-- CAMERA SCANNER MODAL -->
 <div id="cam-modal" class="cam-modal" style="display:none">
   <button class="cam-close" onclick="stopCam()">&#10005;</button>
-  <button class="cam-torch" id="cam-torch-btn" onclick="toggleTorch()" title="Toggle flashlight" style="display:none">&#128294;</button>
-  <video id="cam-video" class="cam-video" autoplay playsinline muted></video>
-  <canvas id="cam-canvas" style="display:none"></canvas>
-  <div class="cam-overlay">
-    <div class="cam-frame"><div class="cam-scanline"></div></div>
-    <div class="cam-hint">Point camera at barcode</div>
-    <div class="cam-status" id="cam-status"></div>
+  <div style="width:100%;max-width:500px;padding:0 16px">
+    <div id="cam-reader" style="width:100%;border-radius:12px;overflow:hidden"></div>
+    <div class="cam-status" id="cam-status" style="color:rgba(255,255,255,0.8);text-align:center;padding:12px 0;font-size:13px"></div>
+    <div style="text-align:center;color:rgba(255,255,255,0.4);font-size:12px;padding-bottom:16px">Point camera at any barcode — it detects automatically</div>
   </div>
 </div>
 
@@ -948,124 +945,75 @@ async function saveProd() {
   }
 }
 
-// ── CAMERA BARCODE SCANNER (jsQR + ZXing fallback, works on iOS Safari/Chrome)
-let _camStream=null,_camLoop=null,_torchOn=false,_camTrack=null,_zxing=null,_jsqrLoaded=false;
+// ── CAMERA BARCODE SCANNER (html5-qrcode — works on iOS Safari & Chrome) ───
+let _html5Scanner=null;
 
-// Dynamically load jsQR (QR + many 1D barcodes) and ZXing (full barcode support)
-function _loadScanLibs(){
-  return new Promise(res=>{
-    if(window.ZXing){res();return;}
+function _loadHtml5QR(){
+  return new Promise((res,rej)=>{
+    if(window.Html5Qrcode){res();return;}
     const s=document.createElement('script');
-    s.src='https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js';
+    s.src='https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
     s.onload=()=>res();
-    s.onerror=()=>{
-      // fallback: load jsQR only
-      const s2=document.createElement('script');
-      s2.src='https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
-      s2.onload=()=>{_jsqrLoaded=true;res();};
-      s2.onerror=()=>res();
-      document.head.appendChild(s2);
-    };
+    s.onerror=()=>rej(new Error('Failed to load scanner library'));
     document.head.appendChild(s);
   });
 }
 
 async function startCam(){
   const modal=document.getElementById('cam-modal');
-  const video=document.getElementById('cam-video');
   const status=document.getElementById('cam-status');
-  status.textContent='Loading scanner...';
   modal.style.display='flex';
   document.body.style.overflow='hidden';
+  status.textContent='Loading scanner...';
 
-  await _loadScanLibs();
-
-  // Try ZXing first (supports UPC-A, EAN-13, Code128, etc.)
-  if(window.ZXing){
-    try{
-      const hints=new Map();
-      hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
-      _zxing=new ZXing.BrowserMultiFormatReader(hints);
-      status.textContent='Aim at barcode...';
-      // ZXing handles camera itself
-      await _zxing.decodeFromConstraints(
-        {video:{facingMode:{ideal:'environment'}}},
-        video,
-        (result,err)=>{
-          if(result){
-            const bc=result.getText();
-            stopCam();
-            document.getElementById('si').value=bc;
-            lookupBC();
-          }
-        }
-      );
-      _camStream=video.srcObject;
-      _camTrack=_camStream?.getVideoTracks?.()?.[0];
-      const caps=_camTrack?.getCapabilities?.();
-      document.getElementById('cam-torch-btn').style.display=(caps?.torch)?'flex':'none';
-      return;
-    }catch(e){
-      // ZXing failed, fall through to manual approach
-      if(_zxing){try{_zxing.reset();}catch(_){}} _zxing=null;
-    }
+  try{
+    await _loadHtml5QR();
+  }catch(e){
+    status.textContent='Could not load scanner. Check your internet connection.';
+    return;
   }
 
-  // Manual camera + jsQR fallback
+  // html5-qrcode needs a div to render into — use cam-reader inside the modal
+  document.getElementById('cam-reader').innerHTML='';
+  status.textContent='Starting camera...';
+
   try{
-    _camStream=await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}
-    });
-    video.srcObject=_camStream;
-    _camTrack=_camStream.getVideoTracks()[0];
-    const caps=_camTrack?.getCapabilities?.();
-    document.getElementById('cam-torch-btn').style.display=(caps?.torch)?'flex':'none';
-    status.textContent='Aim at barcode...';
-
-    const canvas=document.createElement('canvas');
-    const ctx=canvas.getContext('2d');
-    _camLoop=setInterval(()=>{
-      if(video.readyState!==video.HAVE_ENOUGH_DATA)return;
-      canvas.width=video.videoWidth;
-      canvas.height=video.videoHeight;
-      ctx.drawImage(video,0,0,canvas.width,canvas.height);
-      const img=ctx.getImageData(0,0,canvas.width,canvas.height);
-
-      // Try BarcodeDetector if available (Chrome desktop/Android)
-      if('BarcodeDetector' in window){
-        new BarcodeDetector({formats:['upc_a','upc_e','ean_13','ean_8','code_128','code_39','qr_code']})
-          .detect(video).then(codes=>{
-            if(codes.length){stopCam();document.getElementById('si').value=codes[0].rawValue;lookupBC();}
-          }).catch(()=>{});
-      }
-      // jsQR for QR codes
-      if(window.jsQR){
-        const qr=jsQR(img.data,img.width,img.height,{inversionAttempts:'dontInvert'});
-        if(qr){stopCam();document.getElementById('si').value=qr.data;lookupBC();}
-      }
-    },400);
+    _html5Scanner=new Html5Qrcode('cam-reader');
+    const config={
+      fps:10,
+      qrbox:{width:250,height:180},
+      aspectRatio:1.0,
+      supportedScanTypes:[Html5QrcodeScanType.SCAN_TYPE_CAMERA],
+      rememberLastUsedCamera:true,
+      showTorchButtonIfSupported:true,
+    };
+    await _html5Scanner.start(
+      {facingMode:'environment'},
+      config,
+      (decodedText)=>{
+        // Got a barcode!
+        stopCam();
+        document.getElementById('si').value=decodedText;
+        lookupBC();
+      },
+      ()=>{} // scan failure per frame — ignore
+    );
+    status.textContent='';
   }catch(e){
-    status.textContent='Camera access denied. In Safari: Settings → Safari → Camera → Allow. In Chrome: tap the camera icon in the address bar.';
+    status.textContent='Camera blocked. On iPhone: go to Settings → Safari → Camera → Allow. Then reload the page and try again.';
   }
 }
 
 function stopCam(){
-  if(_zxing){try{_zxing.reset();}catch(_){}} _zxing=null;
-  clearInterval(_camLoop); _camLoop=null;
-  if(_camStream){_camStream.getTracks().forEach(t=>t.stop()); _camStream=null;}
-  _camTrack=null; _torchOn=false;
+  if(_html5Scanner){
+    _html5Scanner.stop().catch(()=>{});
+    _html5Scanner.clear();
+    _html5Scanner=null;
+  }
   document.getElementById('cam-modal').style.display='none';
   document.getElementById('cam-status').textContent='';
+  document.getElementById('cam-reader').innerHTML='';
   document.body.style.overflow='';
-}
-
-async function toggleTorch(){
-  if(!_camTrack)return;
-  try{
-    _torchOn=!_torchOn;
-    await _camTrack.applyConstraints({advanced:[{torch:_torchOn}]});
-    document.getElementById('cam-torch-btn').style.background=_torchOn?'rgba(255,220,50,0.4)':'rgba(255,255,255,0.15)';
-  }catch(_){}
 }
 // ───────────────────────────────────────────────────────────────────────────
 
