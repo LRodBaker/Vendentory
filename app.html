@@ -1597,8 +1597,48 @@ function sTbl(rows){return`<div class="card"><table class="tbl"><thead><tr><th>#
 
 async function loadSets(){
   await loadCats();await loadSups();
-  document.getElementById('catl').innerHTML=AC.map(c=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--border);font-size:13px"><span>${c.name}</span></div>`).join('');
-  document.getElementById('supl').innerHTML=AS2.map(s=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--border);font-size:13px"><span>${s.name}</span></div>`).join('');
+  document.getElementById('catl').innerHTML=AC.map(c=>`
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--border);font-size:13px" id="crow-${c.id}">
+      <span id="clbl-${c.id}">${c.name}</span>
+      <div id="cbtn-${c.id}">
+        <button class="btn btn-sm" style="padding:2px 10px;font-size:12px" onclick="editCat('${c.id}','${c.name.replace(/'/g,String.fromCharCode(92,39))}')">✏️ Edit</button>
+      </div>
+    </div>`).join('');
+  document.getElementById('supl').innerHTML=AS2.map(s=>`
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--border);font-size:13px" id="srow-${s.id}">
+      <span id="slbl-${s.id}">${s.name}</span>
+      <div id="sbtn-${s.id}">
+        <button class="btn btn-sm" style="padding:2px 10px;font-size:12px" onclick="editSup('${s.id}','${s.name.replace(/'/g,String.fromCharCode(92,39))}')">✏️ Edit</button>
+      </div>
+    </div>`).join('');
+}
+
+function editCat(id,name){
+  document.getElementById('clbl-'+id).innerHTML='<input class="fi" id="cedit-'+id+'" value="'+name+'" style="padding:3px 8px;height:28px;font-size:13px;width:160px">';
+  document.getElementById('cbtn-'+id).innerHTML='<button class="btn btn-sm btn-p" style="padding:2px 10px;font-size:12px" onclick="saveCat(''+id+'')">Save</button> <button class="btn btn-sm" style="padding:2px 10px;font-size:12px" onclick="loadSets()">Cancel</button>';
+  setTimeout(()=>{const el=document.getElementById('cedit-'+id);if(el){el.focus();el.select();}},50);
+}
+
+async function saveCat(id){
+  const val=document.getElementById('cedit-'+id).value.trim();
+  if(!val){toast('Name cannot be empty','err');return;}
+  const {error}=await sb.from('categories').update({name:val}).eq('id',id);
+  if(error){toast('Error: '+error.message,'err');return;}
+  await loadCats();loadSets();toast('Category updated!','ok');
+}
+
+function editSup(id,name){
+  document.getElementById('slbl-'+id).innerHTML='<input class="fi" id="sedit-'+id+'" value="'+name+'" style="padding:3px 8px;height:28px;font-size:13px;width:160px">';
+  document.getElementById('sbtn-'+id).innerHTML='<button class="btn btn-sm btn-p" style="padding:2px 10px;font-size:12px" onclick="saveSup(''+id+'')">Save</button> <button class="btn btn-sm" style="padding:2px 10px;font-size:12px" onclick="loadSets()">Cancel</button>';
+  setTimeout(()=>{const el=document.getElementById('sedit-'+id);if(el){el.focus();el.select();}},50);
+}
+
+async function saveSup(id){
+  const val=document.getElementById('sedit-'+id).value.trim();
+  if(!val){toast('Name cannot be empty','err');return;}
+  const {error}=await sb.from('suppliers').update({name:val}).eq('id',id);
+  if(error){toast('Error: '+error.message,'err');return;}
+  await loadSups();loadSets();toast('Supplier updated!','ok');
 }
 
 async function savePro(){const nm=document.getElementById('sn').value.trim();if(!nm)return;await sb.from('user_profiles').update({full_name:nm,updated_at:new Date().toISOString()}).eq('id',CU.id);toast('Profile updated!','ok');await loadProf();}
