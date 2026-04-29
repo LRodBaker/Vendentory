@@ -849,7 +849,7 @@ async function openPD(id) {
           ${p.category_name?`<span class="badge b-gray">${p.category_name}</span>`:''}
         </div>
       </div>
-      <button class="btn btn-sm" onclick="closeM('mpd');openEP('${id}')">Edit</button>
+      <button class="btn btn-sm" onclick="closeM('mpd');setTimeout(()=>openEP('${id}'),50)">Edit</button>
     </div>
     <div class="g2">
       <div>
