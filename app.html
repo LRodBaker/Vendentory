@@ -1000,9 +1000,17 @@ async function saveProd() {
     if(dbError){toast('DB Error: '+dbError.message,'err');return;}
 
     document.getElementById('mprod').style.display='none';
-    await loadProds2();
-    renderProds();
     toast(eid?'Product updated!':'Product added!','ok');
+
+    // Update local cache immediately so grid reflects change right away
+    if(eid){
+      const idx=AP.findIndex(x=>x.product_id===eid||x.id===eid);
+      if(idx>=0) AP[idx]={...AP[idx],...pl};
+    }
+    renderProds();
+
+    // Silent background reload to get full view data (inventory_value, stock_status etc.)
+    setTimeout(async()=>{ await loadProds2(); renderProds(); }, 800);
   } catch(e) {
     toast('Outer error: '+e.message,'err');
   } finally {
