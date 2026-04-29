@@ -972,13 +972,11 @@ async function saveProd() {
 
     let dbError = null;
     try {
-      if(eid){
-        const r=await sb.from('products').update(pl).eq('id',eid);
-        dbError=r.error;
-      } else {
-        // Use fetch directly for INSERT — avoids JS client hang on some Supabase versions
-        const resp = await fetch(SURL+'/rest/v1/products', {
-          method:'POST',
+      // Use direct fetch for both INSERT and UPDATE — avoids JS client hang with large payloads (e.g. base64 images)
+      const resp = await fetch(
+        SURL+'/rest/v1/products'+(eid?'?id=eq.'+eid:''),
+        {
+          method: eid ? 'PATCH' : 'POST',
           headers:{
             'apikey':SKEY,
             'Authorization':'Bearer '+SKEY,
@@ -986,15 +984,14 @@ async function saveProd() {
             'Prefer':'return=minimal'
           },
           body:JSON.stringify(pl)
-        });
-        if(!resp.ok){
-          const txt=await resp.text();
-          dbError={message:txt||('HTTP '+resp.status)};
         }
+      );
+      if(!resp.ok){
+        const txt=await resp.text();
+        dbError={message:txt||('HTTP '+resp.status)};
       }
-
     } catch(dbErr) {
-      toast('Step 3 EXCEPTION: '+dbErr.message,'err');
+      toast('Save error: '+dbErr.message,'err');
       return;
     }
     if(dbError){toast('DB Error: '+dbError.message,'err');return;}
@@ -1002,15 +999,15 @@ async function saveProd() {
     document.getElementById('mprod').style.display='none';
     toast(eid?'Product updated!':'Product added!','ok');
 
-    // Update local cache immediately so grid reflects change right away
+    // For edits: patch local cache immediately so grid updates without flicker
     if(eid){
       const idx=AP.findIndex(x=>x.product_id===eid||x.id===eid);
-      if(idx>=0) AP[idx]={...AP[idx],...pl};
+      if(idx>=0){ AP[idx]={...AP[idx],...pl}; renderProds(); }
     }
-    renderProds();
 
-    // Silent background reload to get full view data (inventory_value, stock_status etc.)
-    setTimeout(async()=>{ await loadProds2(); renderProds(); }, 800);
+    // Always reload from DB to get accurate view data (inventory_value, stock_status, product_id for new products)
+    // Use a slightly longer delay for new products to give Supabase time to propagate
+    setTimeout(async()=>{ await loadProds2(); renderProds(); }, eid ? 600 : 1200);
   } catch(e) {
     toast('Outer error: '+e.message,'err');
   } finally {
