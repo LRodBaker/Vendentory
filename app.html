@@ -822,7 +822,7 @@ function renderProds() {
   const g=document.getElementById('pgrid');
   if(!f.length){g.innerHTML='<div class="tm">No products found</div>';return;}
   g.innerHTML=f.map(p=>`
-    <div class="pc" onclick="openPD('${p.product_id}')">
+    <div class="pc" data-pid="${p.id||p.product_id}">
       <div class="pi">${p.image_url?`<img src="${p.image_url}" alt="">`:' &#128230;'}</div>
       <div style="font-size:13px;font-weight:600;margin-bottom:2px;line-height:1.3">${p.name}</div>
       <div style="font-size:11px;color:var(--gray-400);margin-bottom:7px">${p.product_code||''} ${p.barcode?'&#183; '+p.barcode:''}</div>
@@ -831,6 +831,8 @@ function renderProds() {
         <span style="font-size:12px;color:var(--gray-400)">${p.selling_price>0?fmt(p.selling_price):''}</span>
       </div>
     </div>`).join('');
+  // Attach click handlers via data attribute to avoid issues with special chars in IDs
+  g.querySelectorAll('.pc[data-pid]').forEach(el=>el.addEventListener('click',()=>openPD(el.dataset.pid)));
 }
 
 async function openPD(id) {
@@ -849,7 +851,7 @@ async function openPD(id) {
           ${p.category_name?`<span class="badge b-gray">${p.category_name}</span>`:''}
         </div>
       </div>
-      <button class="btn btn-sm" onclick="closeM('mpd');setTimeout(()=>openEP('${id}'),50)">Edit</button>
+      <button class="btn btn-sm" id="pd-edit-btn">Edit</button>
     </div>
     <div class="g2">
       <div>
@@ -872,6 +874,9 @@ async function openPD(id) {
       <button class="btn btn-sm" onclick="closeM('mpd');nav('adjustments')">Adjust quantity</button>
     </div>`;
   openM('mpd');
+  // Wire Edit button safely after innerHTML — avoids ID/quote issues in inline onclick
+  const editBtn = document.getElementById('pd-edit-btn');
+  if(editBtn) editBtn.addEventListener('click', ()=>{ closeM('mpd'); setTimeout(()=>openEP(id), 50); });
 }
 
 function openAP() {
@@ -891,18 +896,18 @@ function openAP() {
 }
 
 async function openEP(id) {
-  // First try local cache (view uses product_id, table uses id — both are the same UUID)
+  if(!id){toast('No product ID — cannot edit','err');return;}
+  // First try local cache
   let p = AP.find(x => x.product_id === id || x.id === id);
-  if (!p) {
-    // Fallback: fetch from DB trying both column names
-    let res = await sb.from('products').select('*').eq('id', id).single();
-    if (!res.data) res = await sb.from('products').select('*').eq('product_id', id).single();
-    if (!res.data) { toast('Could not load product', 'err'); return; }
-    p = res.data;
-  } else {
-    // Re-fetch full record to get all fields (view may not have all columns)
-    const {data:full} = await sb.from('products').select('*').eq('id', p.product_id || p.id).single();
-    if (full) p = full;
+  // Always re-fetch full record from products table to get all fields
+  try {
+    const {data:full, error} = await sb.from('products').select('*').eq('id', id).single();
+    if(error) throw error;
+    if(full) p = full;
+    else if(!p){ toast('Product not found in database','err'); return; }
+  } catch(e) {
+    if(!p){ toast('Could not load product: '+e.message,'err'); return; }
+    // If fetch failed but we have cache, continue with cache
   }
   document.getElementById('mpt').textContent='Edit product';
   document.getElementById('peid').value=p.id||p.product_id;
