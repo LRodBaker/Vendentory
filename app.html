@@ -748,8 +748,22 @@ async function loadSups() {
 }
 
 async function loadProds2() {
-  const {data}=await sb.from('inventory_on_hand').select('*').order('name');
-  AP=data||[];
+  // Query products table directly so newly added products (with no transactions yet) always appear.
+  // Join in inventory_on_hand data where available for on_hand_qty, stock_status, inventory_value.
+  const [{data:prods},{data:inv}] = await Promise.all([
+    sb.from('products').select('*,categories(name),suppliers(name)').eq('is_active',true).order('name'),
+    sb.from('inventory_on_hand').select('product_id,on_hand_qty,stock_status,inventory_value')
+  ]);
+  const invMap={};
+  (inv||[]).forEach(r=>invMap[r.product_id]=r);
+  AP=(prods||[]).map(p=>({
+    ...p,
+    product_id: p.id,
+    category_name: p.categories?.name||'',
+    on_hand_qty: invMap[p.id]?.on_hand_qty ?? 0,
+    stock_status: invMap[p.id]?.stock_status ?? 'OK',
+    inventory_value: invMap[p.id]?.inventory_value ?? 0,
+  }));
 }
 
 async function loadDash() {
