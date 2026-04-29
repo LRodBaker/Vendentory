@@ -1630,14 +1630,6 @@ async function saveSup(id){
   if(error){toast('Error: '+error.message,'err');return;}
   await loadSups();loadSets();toast('Supplier updated!','ok');
 }
-  const {error}=await sb.from('suppliers').update({name:val}).eq('id',id);
-  if(error){toast('Error: '+error.message,'err');return;}
-  await loadSups();loadSets();toast('Supplier updated!','ok');
-}
-  const {error}=await sb.from('suppliers').update({name:val}).eq('id',id);
-  if(error){toast('Error: '+error.message,'err');return;}
-  await loadSups();loadSets();toast('Supplier updated!','ok');
-}
 
 async function savePro(){const nm=document.getElementById('sn').value.trim();if(!nm)return;await sb.from('user_profiles').update({full_name:nm,updated_at:new Date().toISOString()}).eq('id',CU.id);toast('Profile updated!','ok');await loadProf();}
 
