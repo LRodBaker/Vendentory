@@ -976,15 +976,17 @@ async function openEP(id) {
     document.getElementById('pip').style.display = 'none';
     document.getElementById('pph').style.display = 'block';
   }
-  // Load variety pack components
+  // Load variety pack components — use direct fetch() to avoid JS client hang
   VP_LINES = [];
   document.getElementById('pIsVariety').checked = !!p.is_variety_pack;
   document.getElementById('variety-section').style.display = p.is_variety_pack ? 'block' : 'none';
   if(p.is_variety_pack) {
-    const {data:comps} = await sb.from('product_components')
-      .select('id,component_product_id,qty_per_pack,products!product_components_component_product_id_fkey(id,name,barcode)')
-      .eq('pack_product_id', p.id).order('id');
-    VP_LINES = (comps||[]).map(c=>({
+    const compResp = await fetch(
+      SURL+'/rest/v1/product_components?pack_product_id=eq.'+p.id+'&select=id,component_product_id,qty_per_pack,products!product_components_component_product_id_fkey(id,name,barcode)&order=id',
+      { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
+    );
+    const comps = compResp.ok ? await compResp.json() : [];
+    VP_LINES = comps.map(c=>({
       component_product_id: c.component_product_id,
       name: c.products?.name||'Unknown',
       barcode: c.products?.barcode||'',
