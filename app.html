@@ -1064,34 +1064,42 @@ function renderVPLines() {
   `).join('');
 }
 
+// Store VP search results keyed by line index so vpSelect can retrieve full objects safely
+const _vpMatches = {};
+
 function vpSearch(i, q) {
   const dd = document.getElementById('vpdd-'+i);
   if(!dd) return;
   q = (q||'').toLowerCase().trim();
-  if(!q || q.length < 1) { dd.style.display='none'; return; }
+  if(!q) { dd.style.display='none'; return; }
   const matches = AP.filter(p =>
-    !p.is_variety_pack && // don't allow nesting variety packs
+    !p.is_variety_pack &&
     (p.name.toLowerCase().includes(q) || (p.barcode||'').includes(q) || (p.product_code||'').toLowerCase().includes(q))
   ).slice(0,8);
   if(!matches.length) { dd.style.display='none'; return; }
-  dd.innerHTML = matches.map(p => `
-    <div style="padding:8px 11px;cursor:pointer;font-size:12px;border-bottom:0.5px solid var(--border)"
-      onmousedown="vpSelect(${i},'${p.id}',${JSON.stringify(p.name).replace(/</g,'&lt;')},${JSON.stringify(p.barcode||'')})"
-      style="padding:8px 11px;cursor:pointer;font-size:12px;border-bottom:0.5px solid var(--border)">
-      <div style="font-weight:600">${p.name}</div>
-      <div style="font-size:11px;color:var(--gray-400)">${p.barcode ? 'Barcode: '+p.barcode : ''} ${p.product_code ? '· Code: '+p.product_code : ''}</div>
+  _vpMatches[i] = matches; // store so vpSelect can look up by index
+  dd.innerHTML = matches.map((p,mi) => `
+    <div data-mi="${mi}" style="padding:8px 11px;cursor:pointer;font-size:12px;border-bottom:0.5px solid var(--border)">
+      <div style="font-weight:600">${p.name.replace(/</g,'&lt;')}</div>
+      <div style="font-size:11px;color:var(--gray-400)">${p.barcode ? 'Barcode: '+p.barcode : ''}${p.product_code ? ' · Code: '+p.product_code : ''}</div>
     </div>`).join('');
+  // Attach mousedown via addEventListener — no inline strings, no escaping issues
+  dd.querySelectorAll('[data-mi]').forEach(el => {
+    el.addEventListener('mousedown', () => vpSelect(i, parseInt(el.dataset.mi)));
+  });
   dd.style.display='block';
 }
 
-function vpSelect(i, pid, name, barcode) {
-  VP_LINES[i].component_product_id = pid;
-  VP_LINES[i].name = name;
-  VP_LINES[i].barcode = barcode;
-  const dd = document.getElementById('vpdd-'+i);
+function vpSelect(lineIdx, matchIdx) {
+  const p = (_vpMatches[lineIdx]||[])[matchIdx];
+  if(!p) return;
+  VP_LINES[lineIdx].component_product_id = p.id;
+  VP_LINES[lineIdx].name = p.name;
+  VP_LINES[lineIdx].barcode = p.barcode||'';
+  const dd = document.getElementById('vpdd-'+lineIdx);
   if(dd) dd.style.display='none';
-  const inp = document.getElementById('vpinput-'+i);
-  if(inp) inp.value = name;
+  const inp = document.getElementById('vpinput-'+lineIdx);
+  if(inp) inp.value = p.name;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1292,10 +1300,10 @@ async function lookupBC() {
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <button class="btn btn-p" onclick="nav('purchases')">Receive inventory</button>
-      <button class="btn btn-p" onclick="nav('purchases')">Receive inventory</button>
-      <button class="btn" data-pid="${prod.id}" data-nm="${prod.name.replace(/&quot;/g,'')}" data-qty="${prod.on_hand_qty}" onclick="prefAdj(this.dataset.pid,this.dataset.nm,parseInt(this.dataset.qty))">Adjust quantity</button>
+      <button class="btn" data-pid="${prod.id}" data-nm="${prod.name.replace(/"/g,'')}" data-qty="${prod.on_hand_qty}" onclick="prefAdj(this.dataset.pid,this.dataset.nm,parseInt(this.dataset.qty))">Adjust quantity</button>
       <button class="btn" data-pid="${prod.id}" onclick="openPD(this.dataset.pid)">View full record</button>
       <button class="btn" data-pid="${prod.id}" onclick="openEP(this.dataset.pid)">Edit product</button>
+    </div>`;
     rScans.unshift({barcode:bc,name:prod.name,status:prod.stock_status});
     if(rScans.length>10)rScans.pop();
     renderRsc();
