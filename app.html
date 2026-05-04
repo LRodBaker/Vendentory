@@ -1172,17 +1172,25 @@ async function saveProd() {
       savedId = newP?.id || null;
     }
 
-    // Save variety pack components if this is a variety pack
-    if(savedId && isVariety && VP_LINES.length > 0) {
-      // Delete old components and re-insert fresh
-      await sb.from('product_components').delete().eq('pack_product_id', savedId);
-      const compRows = VP_LINES
-        .filter(l => l.component_product_id && l.qty_per_pack > 0)
-        .map(l => ({ pack_product_id: savedId, component_product_id: l.component_product_id, qty_per_pack: l.qty_per_pack }));
-      if(compRows.length) await sb.from('product_components').insert(compRows);
-    } else if(savedId && !isVariety) {
-      // If variety pack was unchecked, remove any existing components
-      await sb.from('product_components').delete().eq('pack_product_id', savedId);
+    // Save variety pack components — use direct fetch() to avoid JS client hang
+    if(savedId) {
+      // Always delete existing components first (works for both variety and non-variety)
+      await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+savedId, {
+        method:'DELETE',
+        headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY}
+      });
+      // Re-insert components if this is a variety pack with valid lines
+      if(isVariety) {
+        const compRows = VP_LINES.filter(l => l.component_product_id && l.qty_per_pack > 0)
+          .map(l => ({ pack_product_id: savedId, component_product_id: l.component_product_id, qty_per_pack: l.qty_per_pack }));
+        if(compRows.length) {
+          await fetch(SURL+'/rest/v1/product_components', {
+            method:'POST',
+            headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},
+            body: JSON.stringify(compRows)
+          });
+        }
+      }
     }
 
     // For edits: patch local cache immediately so grid updates without flicker
