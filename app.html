@@ -574,7 +574,26 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
     </div>
     <input type="hidden" id="peid">
     <input type="hidden" id="piurl">
-    <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+
+    <!-- VARIETY PACK SECTION -->
+    <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;font-size:13px;font-weight:600;color:var(--gray-700)">
+        <input type="checkbox" id="pIsVariety" onchange="toggleVarietySection()" style="width:16px;height:16px;accent-color:var(--teal);cursor:pointer">
+        This is a variety pack — explode into individual products when received
+      </label>
+      <div id="variety-section" style="display:none;margin-top:12px">
+        <div style="font-size:12px;color:var(--gray-400);margin-bottom:8px">Define what individual products are inside each pack. When you receive this pack in a Purchase, inventory will be added to each component instead of the pack.</div>
+        <div style="background:var(--gray-50);border-radius:10px;padding:12px">
+          <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;margin-bottom:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);padding:0 4px">
+            <div>Component product</div><div>Qty per pack</div><div></div>
+          </div>
+          <div id="vp-lines"></div>
+          <button class="btn btn-sm" style="margin-top:8px" onclick="addVPLine()">+ Add component</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       <button class="btn btn-p" onclick="saveProd()">Save product</button>
       <button class="btn" onclick="closeM('mprod')">Cancel</button>
     </div>
@@ -615,6 +634,7 @@ const SKEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZ
 
 let sb = null;
 let CU = null, CP = null, AP = [], AC = [], AS2 = [], PL = [], adjP = null, impRows = [], rScans = [], curRT = 'weekly';
+let VP_LINES = []; // variety pack component lines for the product edit modal
 
 function waitForSupabase(cb, attempts) {
   attempts = attempts || 0;
@@ -821,8 +841,9 @@ function renderProds() {
   const f=AP.filter(p=>(!q||p.name.toLowerCase().includes(q)||(p.barcode||'').includes(q)||(p.product_code||'').toLowerCase().includes(q))&&(!cf||p.category_id===cf)&&(!sf||p.stock_status===sf));
   const g=document.getElementById('pgrid');
   if(!f.length){g.innerHTML='<div class="tm">No products found</div>';return;}
+  // Use data-pid attribute — never put UUIDs inside onclick strings
   g.innerHTML=f.map(p=>`
-    <div class="pc" data-pid="${p.id||p.product_id}">
+    <div class="pc" data-pid="${p.id}">
       <div class="pi">${p.image_url?`<img src="${p.image_url}" alt="">`:' &#128230;'}</div>
       <div style="font-size:13px;font-weight:600;margin-bottom:2px;line-height:1.3">${p.name}</div>
       <div style="font-size:11px;color:var(--gray-400);margin-bottom:7px">${p.product_code||''} ${p.barcode?'&#183; '+p.barcode:''}</div>
@@ -831,14 +852,19 @@ function renderProds() {
         <span style="font-size:12px;color:var(--gray-400)">${p.selling_price>0?fmt(p.selling_price):''}</span>
       </div>
     </div>`).join('');
-  // Attach click handlers via data attribute to avoid issues with special chars in IDs
   g.querySelectorAll('.pc[data-pid]').forEach(el=>el.addEventListener('click',()=>openPD(el.dataset.pid)));
 }
 
+// Store the currently viewed product ID so the Edit button always has the right target
+let _currentPDid = null;
+
 async function openPD(id) {
-  const p=AP.find(x=>x.product_id===id);
-  if(!p)return;
-  const mg=p.selling_price>0&&p.average_cost>0?(((p.selling_price-p.average_cost)/p.selling_price)*100).toFixed(1):'—';
+  // Look up by p.id (which is what renderProds stores in data-pid)
+  const p = AP.find(x => x.id === id) || AP.find(x => x.product_id === id);
+  if(!p){ toast('Product not found','err'); return; }
+  _currentPDid = p.id; // store for Edit button
+  const mg = p.selling_price>0&&p.average_cost>0
+    ? (((p.selling_price-p.average_cost)/p.selling_price)*100).toFixed(1) : '—';
   document.getElementById('pdc').innerHTML=`
     <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap">
       <div style="width:90px;height:90px;border-radius:10px;background:var(--gray-50);display:flex;align-items:center;justify-content:center;font-size:40px;flex-shrink:0;overflow:hidden">
@@ -851,7 +877,7 @@ async function openPD(id) {
           ${p.category_name?`<span class="badge b-gray">${p.category_name}</span>`:''}
         </div>
       </div>
-      <button class="btn btn-sm" id="pd-edit-btn">Edit</button>
+      <button class="btn btn-sm" onclick="pdEditClicked()">Edit</button>
     </div>
     <div class="g2">
       <div>
@@ -874,9 +900,14 @@ async function openPD(id) {
       <button class="btn btn-sm" onclick="closeM('mpd');nav('adjustments')">Adjust quantity</button>
     </div>`;
   openM('mpd');
-  // Wire Edit button safely after innerHTML — avoids ID/quote issues in inline onclick
-  const editBtn = document.getElementById('pd-edit-btn');
-  if(editBtn) editBtn.addEventListener('click', ()=>{ closeM('mpd'); setTimeout(()=>openEP(id), 50); });
+}
+
+// Called by the Edit button inside product detail — uses _currentPDid (never stale)
+function pdEditClicked() {
+  const id = _currentPDid;
+  if(!id){ toast('No product selected','err'); return; }
+  closeM('mpd');
+  openEP(id);
 }
 
 function openAP() {
@@ -891,45 +922,79 @@ function openAP() {
   document.getElementById('pph').style.display='block';
   _newImageDataUrl = null;
   document.getElementById('pii').value = '';
+  // Reset variety pack
+  document.getElementById('pIsVariety').checked = false;
+  VP_LINES = [];
+  document.getElementById('variety-section').style.display='none';
+  document.getElementById('vp-lines').innerHTML='';
   loadCats(); loadSups();
   openM('mprod');
 }
 
 async function openEP(id) {
-  if(!id){toast('No product ID — cannot edit','err');return;}
-  // First try local cache
-  let p = AP.find(x => x.product_id === id || x.id === id);
-  // Always re-fetch full record from products table to get all fields
+  if(!id){ toast('No product ID — cannot edit','err'); return; }
+  showL('Loading product...');
+  // Always fetch fresh from DB — avoids any stale cache issues
+  let p = null;
   try {
-    const {data:full, error} = await sb.from('products').select('*').eq('id', id).single();
+    const {data, error} = await sb.from('products').select('*').eq('id', id).single();
     if(error) throw error;
-    if(full) p = full;
-    else if(!p){ toast('Product not found in database','err'); return; }
+    p = data;
   } catch(e) {
-    if(!p){ toast('Could not load product: '+e.message,'err'); return; }
-    // If fetch failed but we have cache, continue with cache
+    // Fallback to cache if DB fetch fails
+    p = AP.find(x => x.id === id || x.product_id === id) || null;
+    if(!p){ hideL(); toast('Could not load product: '+e.message,'err'); return; }
   }
-  document.getElementById('mpt').textContent='Edit product';
-  document.getElementById('peid').value=p.id||p.product_id;
-  document.getElementById('pb').value=p.barcode||'';
-  document.getElementById('pn').value=p.name||'';
-  document.getElementById('pco').value=p.product_code||'';
-  document.getElementById('pbr').value=p.brand||'';
-  document.getElementById('psz').value=p.size_value||'';
-  document.getElementById('psu2').value=p.size_unit||'';
-  document.getElementById('pupc').value=p.units_per_case||1;
-  document.getElementById('prp').value=p.reorder_point||0;
-  document.getElementById('pou').value=p.order_up_to_level||0;
-  document.getElementById('plc').value=p.last_cost||0;
-  document.getElementById('psp').value=p.selling_price||0;
-  document.getElementById('pac').value=p.is_active?'true':'false';
-  document.getElementById('piurl').value=p.image_url||'';
+  hideL();
+  await loadCats();
+  await loadSups();
+  document.getElementById('mpt').textContent = 'Edit product';
+  document.getElementById('peid').value = p.id;
+  document.getElementById('pb').value = p.barcode||'';
+  document.getElementById('pn').value = p.name||'';
+  document.getElementById('pco').value = p.product_code||'';
+  document.getElementById('pbr').value = p.brand||'';
+  document.getElementById('psz').value = p.size_value||'';
+  document.getElementById('psu2').value = p.size_unit||'';
+  document.getElementById('pupc').value = p.units_per_case||1;
+  document.getElementById('prp').value = p.reorder_point||0;
+  document.getElementById('pou').value = p.order_up_to_level||0;
+  document.getElementById('plc').value = p.last_cost||0;
+  document.getElementById('psp').value = p.selling_price||0;
+  document.getElementById('pac').value = p.is_active ? 'true' : 'false';
+  document.getElementById('piurl').value = p.image_url||'';
   _newImageDataUrl = null;
   document.getElementById('pii').value = '';
-  await loadCats(); await loadSups();
-  setTimeout(()=>{if(p.category_id)document.getElementById('pca').value=p.category_id;if(p.last_supplier_id)document.getElementById('psu').value=p.last_supplier_id;},80);
-  if(p.image_url){document.getElementById('pip').src=p.image_url;document.getElementById('pip').style.display='block';document.getElementById('pph').style.display='none';}
-  else{document.getElementById('pip').style.display='none';document.getElementById('pph').style.display='block';}
+  // Set dropdowns after options are loaded
+  if(p.category_id) document.getElementById('pca').value = p.category_id;
+  if(p.last_supplier_id) document.getElementById('psu').value = p.last_supplier_id;
+  if(p.image_url){
+    document.getElementById('pip').src = p.image_url;
+    document.getElementById('pip').style.display = 'block';
+    document.getElementById('pph').style.display = 'none';
+  } else {
+    document.getElementById('pip').style.display = 'none';
+    document.getElementById('pph').style.display = 'block';
+  }
+  // Load variety pack components
+  VP_LINES = [];
+  document.getElementById('pIsVariety').checked = !!p.is_variety_pack;
+  document.getElementById('variety-section').style.display = p.is_variety_pack ? 'block' : 'none';
+  if(p.is_variety_pack) {
+    const {data:comps} = await sb.from('product_components')
+      .select('id,component_product_id,qty_per_pack,products!product_components_component_product_id_fkey(id,name,barcode)')
+      .eq('pack_product_id', p.id).order('id');
+    VP_LINES = (comps||[]).map(c=>({
+      component_product_id: c.component_product_id,
+      name: c.products?.name||'Unknown',
+      barcode: c.products?.barcode||'',
+      qty_per_pack: c.qty_per_pack,
+      db_id: c.id
+    }));
+    renderVPLines();
+  } else {
+    document.getElementById('vp-lines').innerHTML='';
+  }
   openM('mprod');
 }
 
@@ -960,6 +1025,77 @@ function prevPI(input) {
   r.readAsDataURL(input.files[0]);
 }
 
+// ── VARIETY PACK UI ──────────────────────────────────────────────────────────
+
+function toggleVarietySection() {
+  const checked = document.getElementById('pIsVariety').checked;
+  document.getElementById('variety-section').style.display = checked ? 'block' : 'none';
+  if(checked && VP_LINES.length === 0) addVPLine();
+}
+
+function addVPLine() {
+  VP_LINES.push({ component_product_id:'', name:'', barcode:'', qty_per_pack:1 });
+  renderVPLines();
+}
+
+function removeVPLine(i) {
+  VP_LINES.splice(i,1);
+  renderVPLines();
+}
+
+function renderVPLines() {
+  const c = document.getElementById('vp-lines');
+  if(!VP_LINES.length) { c.innerHTML='<div class="tm" style="font-size:12px;padding:6px 0">No components yet. Click "+ Add component".</div>'; return; }
+  c.innerHTML = VP_LINES.map((l,i) => `
+    <div style="display:grid;grid-template-columns:1fr 90px 32px;gap:6px;align-items:center;margin-bottom:6px">
+      <div style="position:relative">
+        <input class="fi" style="font-size:12px;padding:6px 9px" placeholder="Search product name or barcode..."
+          value="${l.name ? l.name.replace(/"/g,'&quot;') : ''}"
+          oninput="vpSearch(${i},this.value)"
+          onfocus="vpSearch(${i},this.value)"
+          onblur="setTimeout(()=>{ const d=document.getElementById('vpdd-${i}'); if(d) d.style.display='none'; },180)"
+          id="vpinput-${i}">
+        <div id="vpdd-${i}" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:0.5px solid var(--border);border-radius:8px;max-height:160px;overflow-y:auto;z-index:600;box-shadow:0 4px 16px rgba(0,0,0,0.12)"></div>
+      </div>
+      <input class="fi" style="font-size:12px;padding:6px 9px;text-align:center" type="number" min="1" value="${l.qty_per_pack}"
+        onchange="VP_LINES[${i}].qty_per_pack=parseInt(this.value)||1" placeholder="Qty">
+      <button style="background:var(--red-light);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;color:var(--red-mid);font-size:14px;display:flex;align-items:center;justify-content:center" onclick="removeVPLine(${i})">&#10005;</button>
+    </div>
+  `).join('');
+}
+
+function vpSearch(i, q) {
+  const dd = document.getElementById('vpdd-'+i);
+  if(!dd) return;
+  q = (q||'').toLowerCase().trim();
+  if(!q || q.length < 1) { dd.style.display='none'; return; }
+  const matches = AP.filter(p =>
+    !p.is_variety_pack && // don't allow nesting variety packs
+    (p.name.toLowerCase().includes(q) || (p.barcode||'').includes(q) || (p.product_code||'').toLowerCase().includes(q))
+  ).slice(0,8);
+  if(!matches.length) { dd.style.display='none'; return; }
+  dd.innerHTML = matches.map(p => `
+    <div style="padding:8px 11px;cursor:pointer;font-size:12px;border-bottom:0.5px solid var(--border)"
+      onmousedown="vpSelect(${i},'${p.id}',${JSON.stringify(p.name).replace(/</g,'&lt;')},${JSON.stringify(p.barcode||'')})"
+      style="padding:8px 11px;cursor:pointer;font-size:12px;border-bottom:0.5px solid var(--border)">
+      <div style="font-weight:600">${p.name}</div>
+      <div style="font-size:11px;color:var(--gray-400)">${p.barcode ? 'Barcode: '+p.barcode : ''} ${p.product_code ? '· Code: '+p.product_code : ''}</div>
+    </div>`).join('');
+  dd.style.display='block';
+}
+
+function vpSelect(i, pid, name, barcode) {
+  VP_LINES[i].component_product_id = pid;
+  VP_LINES[i].name = name;
+  VP_LINES[i].barcode = barcode;
+  const dd = document.getElementById('vpdd-'+i);
+  if(dd) dd.style.display='none';
+  const inp = document.getElementById('vpinput-'+i);
+  if(inp) inp.value = name;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function saveProd() {
   const nm=document.getElementById('pn').value.trim();
   if(!nm){toast('Product name is required','err');return;}
@@ -969,6 +1105,7 @@ async function saveProd() {
     const eid=document.getElementById('peid').value;
     const lastCost=parseFloat(document.getElementById('plc').value)||0;
 
+    const isVariety = document.getElementById('pIsVariety').checked;
     const pl={
       name:nm,
       barcode:document.getElementById('pb').value||null,
@@ -985,6 +1122,7 @@ async function saveProd() {
       average_cost:lastCost,
       selling_price:parseFloat(document.getElementById('psp').value)||0,
       is_active:document.getElementById('pac').value==='true',
+      is_variety_pack:isVariety,
       image_url: _newImageDataUrl !== null ? _newImageDataUrl : (document.getElementById('piurl').value||null),
       updated_at:new Date().toISOString()
     };
@@ -1018,14 +1156,34 @@ async function saveProd() {
     document.getElementById('mprod').style.display='none';
     toast(eid?'Product updated!':'Product added!','ok');
 
+    // Get the saved product ID (for new products, fetch it back)
+    let savedId = eid || null;
+    if(!savedId) {
+      // For new products, fetch the ID we just created
+      const {data:newP} = await sb.from('products').select('id').eq('name',nm).order('created_at',{ascending:false}).limit(1).single();
+      savedId = newP?.id || null;
+    }
+
+    // Save variety pack components if this is a variety pack
+    if(savedId && isVariety && VP_LINES.length > 0) {
+      // Delete old components and re-insert fresh
+      await sb.from('product_components').delete().eq('pack_product_id', savedId);
+      const compRows = VP_LINES
+        .filter(l => l.component_product_id && l.qty_per_pack > 0)
+        .map(l => ({ pack_product_id: savedId, component_product_id: l.component_product_id, qty_per_pack: l.qty_per_pack }));
+      if(compRows.length) await sb.from('product_components').insert(compRows);
+    } else if(savedId && !isVariety) {
+      // If variety pack was unchecked, remove any existing components
+      await sb.from('product_components').delete().eq('pack_product_id', savedId);
+    }
+
     // For edits: patch local cache immediately so grid updates without flicker
     if(eid){
       const idx=AP.findIndex(x=>x.product_id===eid||x.id===eid);
       if(idx>=0){ AP[idx]={...AP[idx],...pl}; renderProds(); }
     }
 
-    // Always reload from DB to get accurate view data (inventory_value, stock_status, product_id for new products)
-    // Use a slightly longer delay for new products to give Supabase time to propagate
+    // Always reload from DB to get accurate view data
     setTimeout(async()=>{ await loadProds2(); renderProds(); }, eid ? 600 : 1200);
   } catch(e) {
     toast('Outer error: '+e.message,'err');
@@ -1134,10 +1292,10 @@ async function lookupBC() {
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <button class="btn btn-p" onclick="nav('purchases')">Receive inventory</button>
-      <button class="btn" onclick="prefAdj('${prod.product_id}','${prod.name.replace(/'/g,"\\'")}',${prod.on_hand_qty})">Adjust quantity</button>
-      <button class="btn" onclick="openPD('${prod.product_id}')">View full record</button>
-      <button class="btn" onclick="openEP('${prod.product_id}')">Edit product</button>
-    </div>`;
+      <button class="btn btn-p" onclick="nav('purchases')">Receive inventory</button>
+      <button class="btn" data-pid="${prod.id}" data-nm="${prod.name.replace(/&quot;/g,'')}" data-qty="${prod.on_hand_qty}" onclick="prefAdj(this.dataset.pid,this.dataset.nm,parseInt(this.dataset.qty))">Adjust quantity</button>
+      <button class="btn" data-pid="${prod.id}" onclick="openPD(this.dataset.pid)">View full record</button>
+      <button class="btn" data-pid="${prod.id}" onclick="openEP(this.dataset.pid)">Edit product</button>
     rScans.unshift({barcode:bc,name:prod.name,status:prod.stock_status});
     if(rScans.length>10)rScans.pop();
     renderRsc();
@@ -1155,6 +1313,7 @@ function renderRsc() {
 }
 
 function openAPfromScan(bc){openAP();setTimeout(()=>{document.getElementById('pb').value=bc;},100);}
+function prefAdjFromScan(btn){prefAdj(btn.dataset.adjId, btn.dataset.adjName, parseInt(btn.dataset.adjQty)||0);}
 function prefAdj(id,nm,st){nav('adjustments');adjP={product_id:id,name:nm,on_hand_qty:st};document.getElementById('aps').value=nm;document.getElementById('api').style.display='block';document.getElementById('apn').textContent=nm;document.getElementById('apst').textContent=st+' units';updAP();}
 
 function addPL(){PL.push({product_id:'',name:'',cases:1,cost_per_case:0,units:0,unit_cost:0,total:0});renderPL();}
@@ -1289,12 +1448,58 @@ async function savePur() {
   }).select().single();
   if(pe){hideL();toast('Error: '+pe.message,'err');return;}
   await sb.from('purchase_lines').insert(vl.map(l=>({purchase_id:pur.id,product_id:l.product_id,cases:l.cases,cost_per_case:l.cost_per_case,units_received:l.units,unit_cost:l.unit_cost,line_total:l.total})));
-  await sb.from('inventory_transactions').insert(vl.map(l=>({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units,warehouse_quantity_change:l.units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:pur.id,notes:'Invoice: '+(document.getElementById('pui').value||'—'),created_by:CU?.id})));
-  for(const l of vl){
-    const prod=AP.find(p=>p.product_id===l.product_id);if(!prod)continue;
-    const cq=parseFloat(prod.on_hand_qty)||0,cc=parseFloat(prod.average_cost)||0;
-    const nq=cq+l.units,na=nq>0?((cq*cc)+(l.units*l.unit_cost))/nq:l.unit_cost;
-    await sb.from('products').update({average_cost:na,last_cost:l.unit_cost,updated_at:new Date().toISOString()}).eq('id',l.product_id);
+  const invNote = 'Invoice: '+(document.getElementById('pui').value||'—');
+  // For each line, check if it's a variety pack — if so explode into components
+  const invTxns = [];
+  const wacUpdates = []; // {product_id, units, unit_cost}
+
+  for(const l of vl) {
+    const prod = AP.find(p => p.id === l.product_id || p.product_id === l.product_id);
+    if(prod?.is_variety_pack) {
+      // Fetch components for this pack
+      const {data:comps} = await sb.from('product_components')
+        .select('component_product_id, qty_per_pack')
+        .eq('pack_product_id', l.product_id);
+      if(comps && comps.length) {
+        for(const c of comps) {
+          const totalUnits = l.units * c.qty_per_pack; // e.g. 10 packs × 2 per pack = 20 units
+          // Allocate cost proportionally (unit cost of pack / total items in pack)
+          const totalItemsPerPack = comps.reduce((s,x)=>s+x.qty_per_pack,0);
+          const compUnitCost = totalItemsPerPack > 0 ? (l.unit_cost / totalItemsPerPack) : 0;
+          invTxns.push({
+            product_id: c.component_product_id,
+            transaction_type: 'purchase_receipt',
+            quantity_change: totalUnits,
+            warehouse_quantity_change: totalUnits,
+            unit_cost: compUnitCost,
+            reference_type: 'purchase',
+            reference_id: pur.id,
+            notes: invNote + ' (from variety pack: ' + (prod.name||'') + ')',
+            created_by: CU?.id
+          });
+          wacUpdates.push({ product_id: c.component_product_id, units: totalUnits, unit_cost: compUnitCost });
+        }
+      } else {
+        // No components defined — fall back to tracking the pack itself
+        invTxns.push({ product_id:l.product_id, transaction_type:'purchase_receipt', quantity_change:l.units, warehouse_quantity_change:l.units, unit_cost:l.unit_cost, reference_type:'purchase', reference_id:pur.id, notes:invNote, created_by:CU?.id });
+        wacUpdates.push({ product_id: l.product_id, units: l.units, unit_cost: l.unit_cost });
+      }
+    } else {
+      // Normal product — track directly
+      invTxns.push({ product_id:l.product_id, transaction_type:'purchase_receipt', quantity_change:l.units, warehouse_quantity_change:l.units, unit_cost:l.unit_cost, reference_type:'purchase', reference_id:pur.id, notes:invNote, created_by:CU?.id });
+      wacUpdates.push({ product_id: l.product_id, units: l.units, unit_cost: l.unit_cost });
+    }
+  }
+
+  if(invTxns.length) await sb.from('inventory_transactions').insert(invTxns);
+
+  // Update WAC (weighted average cost) for each affected product
+  for(const u of wacUpdates) {
+    const prod = AP.find(p => p.id === u.product_id || p.product_id === u.product_id);
+    const cq = parseFloat(prod?.on_hand_qty)||0, cc = parseFloat(prod?.average_cost)||0;
+    const nq = cq + u.units;
+    const na = nq > 0 ? ((cq*cc)+(u.units*u.unit_cost))/nq : u.unit_cost;
+    await sb.from('products').update({average_cost:na, last_cost:u.unit_cost, updated_at:new Date().toISOString()}).eq('id', u.product_id);
   }
   hideL();
   toast('Purchase received! Inventory updated.','ok');
