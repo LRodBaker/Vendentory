@@ -636,6 +636,45 @@ let sb = null;
 let CU = null, CP = null, AP = [], AC = [], AS2 = [], PL = [], adjP = null, impRows = [], rScans = [], curRT = 'weekly';
 let VP_LINES = []; // variety pack component lines for the product edit modal
 
+// ── Universal Supabase REST helper — always use this instead of sb.from() ──
+// The JS client hangs on INSERT/UPDATE with large payloads (e.g. base64 images).
+// Direct fetch() works reliably for every operation.
+async function dbFetch(table, {method='GET', select='*', filters={}, order=null, limit=null,
+                                body=null, prefer='return=representation', single=false}={}) {
+  let url = SURL + '/rest/v1/' + table;
+  const params = [];
+  if(method === 'GET' || method === 'DELETE') {
+    if(select && method === 'GET') params.push('select='+encodeURIComponent(select));
+    // Keys ending in a digit (e.g. period_start_date2) are duplicate-column filters — strip the digit
+    Object.entries(filters).forEach(([k,v]) => params.push(k.replace(/\d+$/,'')+'='+encodeURIComponent(v)));
+    if(order) params.push('order='+encodeURIComponent(order));
+    if(limit) params.push('limit='+limit);
+    if(single) params.push('limit=1');
+  } else {
+    Object.entries(filters).forEach(([k,v]) => params.push(k.replace(/\d+$/,'')+'='+encodeURIComponent(v)));
+  }
+  if(params.length) url += '?' + params.join('&');
+  const headers = {
+    'apikey': SKEY,
+    'Authorization': 'Bearer ' + SKEY,
+    'Content-Type': 'application/json',
+    'Prefer': prefer
+  };
+  const opts = { method, headers };
+  if(body) opts.body = JSON.stringify(body);
+  const resp = await fetch(url, opts);
+  if(!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(txt || 'HTTP ' + resp.status);
+  }
+  if(method !== 'GET' && prefer === 'return=minimal') return { data: null, error: null };
+  const text = await resp.text();
+  if(!text) return { data: null, error: null };
+  const data = JSON.parse(text);
+  return { data: single ? (Array.isArray(data) ? data[0]||null : data) : data, error: null };
+}
+// ───────────────────────────────────────────────────────────────────────────
+
 function waitForSupabase(cb, attempts) {
   attempts = attempts || 0;
   if (window.supabase && window.supabase.createClient) {
@@ -691,7 +730,7 @@ async function doSignup() {
   const {data,error} = await sb.auth.signUp({email:e,password:p});
   hideL();
   if(error){showSE(error.message);return;}
-  if(data.user) await sb.from('user_profiles').upsert({id:data.user.id,full_name:n,role:'admin'});
+  if(data.user) await fetch(SURL+'/rest/v1/user_profiles',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify({id:data.user.id,full_name:n,role:'admin'})});
   closeM('msu');
   toast('Account created! Check email to confirm.','ok');
 }
@@ -703,7 +742,7 @@ function showFP(){toast('Go to Supabase > Authentication > Email Templates to en
 
 async function loadProf() {
   if(!CU) return;
-  const {data} = await sb.from('user_profiles').select('*').eq('id',CU.id).single();
+  const {data} = await dbFetch('user_profiles',{filters:{'id':'eq.'+CU.id},single:true});
   CP = data;
   const nm=data?.full_name||CU.email, rl=data?.role||'admin';
   document.getElementById('uname').textContent=nm;
@@ -751,7 +790,7 @@ async function loadAll() {
 }
 
 async function loadCats() {
-  const {data}=await sb.from('categories').select('*').order('name');
+  const {data}=await dbFetch('categories',{order:'name'});
   AC=data||[];
   const opts=AC.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
   const cf=document.getElementById('pcf');
@@ -761,7 +800,7 @@ async function loadCats() {
 }
 
 async function loadSups() {
-  const {data}=await sb.from('suppliers').select('*').order('name');
+  const {data}=await dbFetch('suppliers',{order:'name'});
   AS2=data||[];
   const opts=AS2.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
   ['psu','pus'].forEach(id=>{const el=document.getElementById(id);if(el) el.innerHTML='<option value="">Select...</option>'+opts;});
@@ -771,8 +810,8 @@ async function loadProds2() {
   // Query products table directly so newly added products (with no transactions yet) always appear.
   // Join in inventory_on_hand data where available for on_hand_qty, stock_status, inventory_value.
   const [{data:prods},{data:inv}] = await Promise.all([
-    sb.from('products').select('*,categories(name),suppliers(name)').eq('is_active',true).order('name'),
-    sb.from('inventory_on_hand').select('product_id,on_hand_qty,stock_status,inventory_value')
+    dbFetch('products',{select:'*,categories(name),suppliers(name)',filters:{'is_active':'eq.true'},order:'name'}),
+    dbFetch('inventory_on_hand',{select:'product_id,on_hand_qty,stock_status,inventory_value'})
   ]);
   const invMap={};
   (inv||[]).forEach(r=>invMap[r.product_id]=r);
@@ -801,8 +840,8 @@ async function loadDash() {
   const mStart=new Date(now.getFullYear(),now.getMonth(),1).toISOString().split('T')[0];
   const todayStr=now.toISOString().split('T')[0];
   const [{data:ws},{data:ms}]=await Promise.all([
-    sb.from('sales_lines').select('sales_amount').gte('period_start_date',monStr).lte('period_start_date',todayStr),
-    sb.from('sales_lines').select('sales_amount').gte('period_start_date',mStart).lte('period_start_date',todayStr)
+    dbFetch('sales_lines',{select:'sales_amount',filters:{'period_start_date':'gte.'+monStr+'&period_start_date=lte.'+todayStr}}),
+    dbFetch('sales_lines',{select:'sales_amount',filters:{'period_start_date':'gte.'+mStart+'&period_start_date=lte.'+todayStr}})
   ]);
   document.getElementById('sw').textContent=fmt((ws||[]).reduce((s,r)=>s+parseFloat(r.sales_amount||0),0));
   document.getElementById('sm').textContent=fmt((ms||[]).reduce((s,r)=>s+parseFloat(r.sales_amount||0),0));
@@ -813,7 +852,7 @@ async function loadDash() {
     <div class="lbg"><div class="lbf" style="width:${Math.min(100,Math.max(5,(p.on_hand_qty/Math.max(1,p.reorder_point))*100))}%;background:${p.on_hand_qty<=0?'var(--red-mid)':'var(--amber)'}"></div></div></div>
     <div style="font-size:12px;font-weight:700;color:${p.on_hand_qty<=0?'var(--red-mid)':'var(--amber)'}">${p.on_hand_qty}</div></div>`).join('')
     :'<div class="tm">All products well stocked ✓</div>';
-  const {data:td}=await sb.from('sales_lines').select('product_id,raw_product_name,sales_amount,units_sold').gte('created_at',wa).not('product_id','is',null);
+  const {data:td}=await dbFetch('sales_lines',{select:'product_id,raw_product_name,sales_amount,units_sold',filters:{'created_at':'gte.'+wa,'product_id':'not.is.null'}});
   const byP={};
   (td||[]).forEach(r=>{if(!byP[r.product_id])byP[r.product_id]={name:r.raw_product_name,s:0,u:0};byP[r.product_id].s+=parseFloat(r.sales_amount||0);byP[r.product_id].u+=parseInt(r.units_sold||0);});
   const srt=Object.values(byP).sort((a,b)=>b.s-a.s).slice(0,5);
@@ -822,7 +861,7 @@ async function loadDash() {
     <div style="flex:1;font-size:13px;font-weight:500">${p.name}</div>
     <div style="text-align:right"><div style="font-size:13px;font-weight:700">${fmt(p.s)}</div><div style="font-size:11px;color:var(--gray-400)">${p.u} units</div></div></div>`).join('')
     :'<div class="tm">No sales imported yet</div>';
-  const {data:rec}=await sb.from('inventory_transactions').select('*,products(name)').order('created_at',{ascending:false}).limit(5);
+  const {data:rec}=await dbFetch('inventory_transactions',{select:'*,products(name)',order:'created_at.desc',limit:5});
   document.getElementById('dra').innerHTML=(rec||[]).length?(rec||[]).map(t=>`
     <div style="display:flex;gap:9px;padding:8px 0;border-bottom:0.5px solid var(--border);align-items:flex-start">
     <div style="width:26px;height:26px;border-radius:7px;background:var(--gray-50);display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0">${tIcon(t.transaction_type)}</div>
@@ -937,7 +976,7 @@ async function openEP(id) {
   // Always fetch fresh from DB — avoids any stale cache issues
   let p = null;
   try {
-    const {data, error} = await sb.from('products').select('*').eq('id', id).single();
+    const {data, error} = await dbFetch('products',{filters:{'id':'eq.'+id},single:true});
     if(error) throw error;
     p = data;
   } catch(e) {
@@ -1170,7 +1209,7 @@ async function saveProd() {
     let savedId = eid || null;
     if(!savedId) {
       // For new products, fetch the ID we just created
-      const {data:newP} = await sb.from('products').select('id').eq('name',nm).order('created_at',{ascending:false}).limit(1).single();
+      const {data:newP} = await dbFetch('products',{select:'id',filters:{'name':'eq.'+encodeURIComponent(nm)},order:'created_at.desc',single:true});
       savedId = newP?.id || null;
     }
 
@@ -1382,13 +1421,13 @@ async function loadPurHistory(){
   if(!el)return;
   el.innerHTML='<div class="tm">Loading...</div>';
   const monthVal=document.getElementById('ph-month')?.value;
-  let query=sb.from('purchases').select('id,purchase_date,invoice_number,status,subtotal_amount,shipping_cost,tax_amount,extra_costs,total_amount,notes,suppliers(name)').order('purchase_date',{ascending:false}).limit(50);
+  let purFilters = {};
   if(monthVal){
     const start=monthVal+'-01';
     const end=new Date(monthVal.split('-')[0],monthVal.split('-')[1],0).toISOString().split('T')[0];
-    query=query.gte('purchase_date',start).lte('purchase_date',end);
+    purFilters['purchase_date']='gte.'+start+'&purchase_date=lte.'+end;
   }
-  const {data:purs,error}=await query;
+  const {data:purs,error}=await dbFetch('purchases',{select:'id,purchase_date,invoice_number,status,subtotal_amount,shipping_cost,tax_amount,extra_costs,total_amount,notes,suppliers(name)',filters:purFilters,order:'purchase_date.desc',limit:50});
   if(error){el.innerHTML='<div class="tm">Error loading history</div>';return;}
   if(!purs||!purs.length){el.innerHTML='<div class="tm">No purchases found</div>';return;}
   el.innerHTML=purs.map(p=>`
@@ -1419,7 +1458,7 @@ async function togglePurLines(id,btn){
   if(el.dataset.loaded==='1')return; // already loaded
   el.dataset.loaded='1';
   el.innerHTML='<div class="tm" style="font-size:12px">Loading...</div>';
-  const {data:lines,error}=await sb.from('purchase_lines').select('*,products(name)').eq('purchase_id',id).order('id');
+  const {data:lines,error}=await dbFetch('purchase_lines',{select:'*,products(name)',filters:{'purchase_id':'eq.'+id},order:'id'});
   if(error){el.innerHTML='<div class="tm" style="font-size:12px;color:var(--red)">Error: '+error.message+'</div>';el.dataset.loaded='';return;}
   if(!lines||!lines.length){el.innerHTML='<div class="tm" style="font-size:12px">No line items found</div>';return;}
   el.innerHTML=`<table class="tbl" style="font-size:12px">
@@ -1454,70 +1493,62 @@ async function savePur() {
   const sh=parseFloat(document.getElementById('push').value)||0;
   const tx=parseFloat(document.getElementById('putx').value)||0;
   const ex=parseFloat(document.getElementById('puex').value)||0;
-  const {data:pur,error:pe}=await sb.from('purchases').insert({
-    supplier_id:document.getElementById('pus').value||null,
-    invoice_number:document.getElementById('pui').value||null,
-    purchase_date:document.getElementById('pud').value,
-    shipping_cost:sh,tax_amount:tx,extra_costs:ex,
-    status:document.getElementById('pustat').value,
-    notes:document.getElementById('pun').value||null,
-    subtotal_amount:sub,total_amount:sub+sh+tx+ex,
-    created_by:CU?.id
-  }).select().single();
-  if(pe){hideL();toast('Error: '+pe.message,'err');return;}
-  await sb.from('purchase_lines').insert(vl.map(l=>({purchase_id:pur.id,product_id:l.product_id,cases:l.cases,cost_per_case:l.cost_per_case,units_received:l.units,unit_cost:l.unit_cost,line_total:l.total})));
+  // Insert purchase header — use fetch() to avoid JS client hang
+  const purResp = await fetch(SURL+'/rest/v1/purchases', {
+    method:'POST',
+    headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=representation'},
+    body:JSON.stringify({supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,status:document.getElementById('pustat').value,notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex,created_by:CU?.id})
+  });
+  if(!purResp.ok){hideL();toast('Error saving purchase','err');return;}
+  const purArr = await purResp.json();
+  const pur = Array.isArray(purArr) ? purArr[0] : purArr;
+  if(!pur?.id){hideL();toast('Error: could not get purchase ID','err');return;}
+
+  // Insert purchase lines
+  await fetch(SURL+'/rest/v1/purchase_lines', {
+    method:'POST',
+    headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},
+    body:JSON.stringify(vl.map(l=>({purchase_id:pur.id,product_id:l.product_id,cases:l.cases,cost_per_case:l.cost_per_case,units_received:l.units,unit_cost:l.unit_cost,line_total:l.total})))
+  });
+
   const invNote = 'Invoice: '+(document.getElementById('pui').value||'—');
-  // For each line, check if it's a variety pack — if so explode into components
   const invTxns = [];
-  const wacUpdates = []; // {product_id, units, unit_cost}
+  const wacUpdates = [];
 
   for(const l of vl) {
     const prod = AP.find(p => p.id === l.product_id || p.product_id === l.product_id);
     if(prod?.is_variety_pack) {
-      // Fetch components for this pack
-      const {data:comps} = await sb.from('product_components')
-        .select('component_product_id, qty_per_pack')
-        .eq('pack_product_id', l.product_id);
-      if(comps && comps.length) {
+      // Fetch components via direct fetch
+      const compResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY}});
+      const comps = compResp.ok ? await compResp.json() : [];
+      if(comps.length) {
+        const totalItemsPerPack = comps.reduce((s,x)=>s+x.qty_per_pack,0);
         for(const c of comps) {
-          const totalUnits = l.units * c.qty_per_pack; // e.g. 10 packs × 2 per pack = 20 units
-          // Allocate cost proportionally (unit cost of pack / total items in pack)
-          const totalItemsPerPack = comps.reduce((s,x)=>s+x.qty_per_pack,0);
+          const totalUnits = l.units * c.qty_per_pack;
           const compUnitCost = totalItemsPerPack > 0 ? (l.unit_cost / totalItemsPerPack) : 0;
-          invTxns.push({
-            product_id: c.component_product_id,
-            transaction_type: 'purchase_receipt',
-            quantity_change: totalUnits,
-            warehouse_quantity_change: totalUnits,
-            unit_cost: compUnitCost,
-            reference_type: 'purchase',
-            reference_id: pur.id,
-            notes: invNote + ' (from variety pack: ' + (prod.name||'') + ')',
-            created_by: CU?.id
-          });
-          wacUpdates.push({ product_id: c.component_product_id, units: totalUnits, unit_cost: compUnitCost });
+          invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',quantity_change:totalUnits,warehouse_quantity_change:totalUnits,unit_cost:compUnitCost,reference_type:'purchase',reference_id:pur.id,notes:invNote+' (from variety pack: '+(prod.name||'')+')',created_by:CU?.id});
+          wacUpdates.push({product_id:c.component_product_id,units:totalUnits,unit_cost:compUnitCost});
         }
       } else {
-        // No components defined — fall back to tracking the pack itself
-        invTxns.push({ product_id:l.product_id, transaction_type:'purchase_receipt', quantity_change:l.units, warehouse_quantity_change:l.units, unit_cost:l.unit_cost, reference_type:'purchase', reference_id:pur.id, notes:invNote, created_by:CU?.id });
-        wacUpdates.push({ product_id: l.product_id, units: l.units, unit_cost: l.unit_cost });
+        invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units,warehouse_quantity_change:l.units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:pur.id,notes:invNote,created_by:CU?.id});
+        wacUpdates.push({product_id:l.product_id,units:l.units,unit_cost:l.unit_cost});
       }
     } else {
-      // Normal product — track directly
-      invTxns.push({ product_id:l.product_id, transaction_type:'purchase_receipt', quantity_change:l.units, warehouse_quantity_change:l.units, unit_cost:l.unit_cost, reference_type:'purchase', reference_id:pur.id, notes:invNote, created_by:CU?.id });
-      wacUpdates.push({ product_id: l.product_id, units: l.units, unit_cost: l.unit_cost });
+      invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units,warehouse_quantity_change:l.units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:pur.id,notes:invNote,created_by:CU?.id});
+      wacUpdates.push({product_id:l.product_id,units:l.units,unit_cost:l.unit_cost});
     }
   }
 
-  if(invTxns.length) await sb.from('inventory_transactions').insert(invTxns);
+  // Insert all inventory transactions in one batch
+  if(invTxns.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
 
-  // Update WAC (weighted average cost) for each affected product
+  // Update WAC for each affected product
   for(const u of wacUpdates) {
     const prod = AP.find(p => p.id === u.product_id || p.product_id === u.product_id);
     const cq = parseFloat(prod?.on_hand_qty)||0, cc = parseFloat(prod?.average_cost)||0;
     const nq = cq + u.units;
     const na = nq > 0 ? ((cq*cc)+(u.units*u.unit_cost))/nq : u.unit_cost;
-    await sb.from('products').update({average_cost:na, last_cost:u.unit_cost, updated_at:new Date().toISOString()}).eq('id', u.product_id);
+    await fetch(SURL+'/rest/v1/products?id=eq.'+u.product_id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({average_cost:na,last_cost:u.unit_cost,updated_at:new Date().toISOString()})});
   }
   hideL();
   toast('Purchase received! Inventory updated.','ok');
@@ -1551,17 +1582,13 @@ async function saveAdj(){
   const qty=parseInt(document.getElementById('aq').value)||0;
   if(!qty){toast('Enter a quantity change','err');return;}
   showL('Saving...');
-  const {error}=await sb.from('inventory_transactions').insert({
-    product_id:adjP.product_id,
-    transaction_date:new Date(document.getElementById('ad').value).toISOString(),
-    transaction_type:document.getElementById('at').value,
-    quantity_change:qty,warehouse_quantity_change:qty,
-    reason_code:document.getElementById('ar').value,
-    notes:document.getElementById('an').value||null,
-    created_by:CU?.id
+  const adjResp=await fetch(SURL+'/rest/v1/inventory_transactions',{
+    method:'POST',
+    headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},
+    body:JSON.stringify({product_id:adjP.product_id,transaction_date:new Date(document.getElementById('ad').value).toISOString(),transaction_type:document.getElementById('at').value,quantity_change:qty,warehouse_quantity_change:qty,reason_code:document.getElementById('ar').value,notes:document.getElementById('an').value||null,created_by:CU?.id})
   });
   hideL();
-  if(error){toast('Error: '+error.message,'err');return;}
+  if(!adjResp.ok){toast('Error saving adjustment','err');return;}
   toast('Adjustment saved!','ok');
   adjP=null;
   ['aps','aq','an'].forEach(id=>document.getElementById(id).value='');
@@ -1571,7 +1598,7 @@ async function saveAdj(){
 }
 
 async function loadRAJ(){
-  const {data}=await sb.from('inventory_transactions').select('*,products(name)').in('transaction_type',['quantity_adjustment','write_off']).order('created_at',{ascending:false}).limit(8);
+  const {data}=await dbFetch('inventory_transactions',{select:'*,products(name)',filters:{'transaction_type':'in.(quantity_adjustment,write_off)'},order:'created_at.desc',limit:8});
   document.getElementById('raj').innerHTML=(data||[]).length?(data||[]).map(t=>`
     <div style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:0.5px solid var(--border);font-size:13px">
     <div>${t.transaction_type==='write_off'?'&#10060;':'&#9889;'}</div>
@@ -1609,13 +1636,16 @@ async function confImport(){
   if(!impRows.length)return;
   showL('Importing sales data...');
   const sd=document.getElementById('isd').value,ed=document.getElementById('ied').value;
-  const {data:ir,error:ie}=await sb.from('sales_imports').insert({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id}).select().single();
-  if(ie){hideL();toast('Error: '+ie.message,'err');return;}
+  const irResp = await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
+  if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
+  const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
+  if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
   const pf=fndKey(impRows[0],['Product','product','Item','Name','name']);
   const uf=fndKey(impRows[0],['Units','units','Qty','qty','Quantity']);
   const sf2=fndKey(impRows[0],['Sales','sales','Revenue','Amount']);
   const af=fndKey(impRows[0],['Avg Price','avg price','AvgPrice']);
   const lines=[];
+  const invTxnsBatch=[];
   for(const row of impRows){
     const rn=(row[pf]||'').trim();
     if(!rn||rn.toLowerCase().includes('total'))continue;
@@ -1623,10 +1653,12 @@ async function confImport(){
     const s=parseFloat((row[sf2]||'0').replace(/[^0-9.-]/g,''))||0;
     const ap2=parseFloat((row[af]||'0').replace(/[^0-9.-]/g,''))||0;
     const matched=AP.find(p=>p.name.toLowerCase()===rn.toLowerCase()||p.name.toLowerCase().includes(rn.toLowerCase())||rn.toLowerCase().includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
-    lines.push({sales_import_id:ir.id,product_id:matched?.product_id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,period_start_date:sd||null,period_end_date:ed||null});
-    if(matched&&u>0)await sb.from('inventory_transactions').insert({product_id:matched.product_id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
+    lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,period_start_date:sd||null,period_end_date:ed||null});
+    if(matched&&u>0)invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
   }
-  if(lines.length)await sb.from('sales_lines').insert(lines);
+  // Batch insert all at once instead of one-by-one
+  if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify(lines)});
+  if(invTxnsBatch.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify(invTxnsBatch)});
   hideL();
   toast('Import complete! '+lines.length+' products imported.','ok');
   cancImport(); await loadProds2(); loadIH();
@@ -1635,7 +1667,7 @@ async function confImport(){
 function cancImport(){impRows=[];document.getElementById('ipa').style.display='none';document.getElementById('ifl').value='';}
 
 async function loadIH(){
-  const {data}=await sb.from('sales_imports').select('*').order('imported_at',{ascending:false}).limit(10);
+  const {data}=await dbFetch('sales_imports',{order:'imported_at.desc',limit:10});
   document.getElementById('ih').innerHTML=(data||[]).length?`<table class="tbl"><thead><tr><th>Date</th><th>Source</th><th>Period</th><th>Status</th></tr></thead><tbody>${(data||[]).map(r=>`<tr><td>${fmtD(r.imported_at)}</td><td>${r.source_system}</td><td>${r.report_start_date||'—'} to ${r.report_end_date||'—'}</td><td><span class="badge b-ok">${r.status}</span></td></tr>`).join('')}</tbody></table>`:'<div class="tm">No imports yet</div>';
 }
 
@@ -1679,7 +1711,7 @@ function switchRT(tab,btn){
 }
 
 async function loadWeekOpts(){
-  const {data}=await sb.from('sales_imports').select('report_start_date,report_end_date').order('report_start_date',{ascending:false});
+  const {data}=await dbFetch('sales_imports',{select:'report_start_date,report_end_date',order:'report_start_date.desc'});
   const sel=document.getElementById('rpt-wsel'); if(!sel)return;
   if(!data||!data.length){sel.innerHTML='<option>No imports found</option>';document.getElementById('rc').innerHTML='<div class="muted">No sales data imported yet.</div>';return;}
   const weeks=data.filter(r=>r.report_start_date&&r.report_end_date);
@@ -1691,13 +1723,13 @@ async function runWeekRpt(){
   const sel=document.getElementById('rpt-wsel'); if(!sel||!sel.value)return;
   const [start,end]=sel.value.split('|');
   document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
-  const {data:sl,error}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').eq('period_start_date',start);
+  const {data:sl,error}=await dbFetch('sales_lines',{select:'units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)',filters:{'period_start_date':'eq.'+start}});
   if(error){document.getElementById('rc').innerHTML='<div style="color:var(--red)">Error: '+error.message+'</div>';return;}
   renderSalesRpt(sl||[],'Week: '+start+' to '+end);
 }
 
 async function loadMonthOpts(){
-  const {data}=await sb.from('sales_imports').select('report_start_date,report_end_date').order('report_start_date',{ascending:false});
+  const {data}=await dbFetch('sales_imports',{select:'report_start_date,report_end_date',order:'report_start_date.desc'});
   const sel=document.getElementById('rpt-msel'); if(!sel)return;
   if(!data||!data.length){sel.innerHTML='<option>No imports found</option>';return;}
   const months={};
@@ -1722,7 +1754,7 @@ async function runMonthRpt(){
   document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
   let allRows=[];
   for(const start of starts){
-    const {data:sl}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').eq('period_start_date',start);
+    const {data:sl}=await dbFetch('sales_lines',{select:'units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)',filters:{'period_start_date':'eq.'+start}});
     if(sl)allRows=allRows.concat(sl);
   }
   const d=new Date(starts[0]+'T12:00:00');
@@ -1734,7 +1766,7 @@ async function runCustomRpt(){
   const start=document.getElementById('rpt-cs')?.value,end=document.getElementById('rpt-ce')?.value;
   if(!start||!end){toast('Please select dates','err');return;}
   document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
-  const {data:sl,error}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').gte('period_start_date',start).lte('period_start_date',end);
+  const {data:sl,error}=await dbFetch('sales_lines',{select:'units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)',filters:{'period_start_date':'gte.'+start,'period_start_date2':'lte.'+end}});
   if(error){document.getElementById('rc').innerHTML='<div style="color:var(--red)">Error: '+error.message+'</div>';return;}
   renderSalesRpt(sl||[],'Custom: '+start+' to '+end);
 }
@@ -1743,7 +1775,7 @@ async function runCogsRpt(){
   const start=document.getElementById('rpt-gs')?.value,end=document.getElementById('rpt-ge')?.value;
   if(!start||!end){toast('Please select dates','err');return;}
   document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
-  const {data:sl,error}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').gte('period_start_date',start).lte('period_start_date',end).not('product_id','is',null);
+  const {data:sl,error}=await dbFetch('sales_lines',{select:'units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)',filters:{'period_start_date':'gte.'+start,'period_start_date2':'lte.'+end,'product_id':'not.is.null'}});
   if(error){document.getElementById('rc').innerHTML='<div style="color:var(--red)">Error: '+error.message+'</div>';return;}
   const bp=aggS(sl||[]);
   const sr=Object.values(bp).filter(r=>r.u>0).sort((a,b)=>b.c-a.c);
@@ -1783,14 +1815,14 @@ function loadInvRpt(){
 
 async function loadTopRpt(){
   document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
-  const {data:sl}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').not('product_id','is',null);
+  const {data:sl}=await dbFetch('sales_lines',{select:'units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)',filters:{'product_id':'not.is.null'}});
   const sr=Object.values(aggS(sl||[])).sort((a,b)=>b.s-a.s).slice(0,25);
   document.getElementById('rc').innerHTML='<div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Top sellers — all time</div>'+sTbl(sr)+'</div>';
 }
 
 async function loadBotRpt(){
   document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
-  const {data:sl}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').not('product_id','is',null);
+  const {data:sl}=await dbFetch('sales_lines',{select:'units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)',filters:{'product_id':'not.is.null'}});
   const sr=Object.values(aggS(sl||[])).filter(r=>r.u>0).sort((a,b)=>a.s-b.s).slice(0,25);
   document.getElementById('rc').innerHTML='<div style="background:var(--red2);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--red)">These products have the lowest sales — consider replacing or repricing.</div><div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Bottom sellers — all time</div>'+sTbl(sr)+'</div>';
 }
@@ -1799,7 +1831,7 @@ async function runPLRpt(){
   const start=document.getElementById('rpt-ps')?.value,end=document.getElementById('rpt-pe')?.value;
   if(!start||!end){toast('Please select dates','err');return;}
   document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
-  const {data:sl}=await sb.from('sales_lines').select('units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)').not('product_id','is',null).gte('period_start_date',start).lte('period_start_date',end);
+  const {data:sl}=await dbFetch('sales_lines',{select:'units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)',filters:{'product_id':'not.is.null','period_start_date':'gte.'+start,'period_start_date2':'lte.'+end}});
   const bp=aggS(sl||[]);
   const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
   const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
@@ -1858,8 +1890,8 @@ function editCat(id){
 async function saveCat(id){
   const val=document.getElementById('cedit-'+id).value.trim();
   if(!val){toast('Name cannot be empty','err');return;}
-  const {error}=await sb.from('categories').update({name:val}).eq('id',id);
-  if(error){toast('Error: '+error.message,'err');return;}
+  const catResp=await fetch(SURL+'/rest/v1/categories?id=eq.'+id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:val})});
+  if(!catResp.ok){toast('Error updating category','err');return;}
   await loadCats();loadSets();toast('Category updated!','ok');
 }
 
@@ -1873,12 +1905,12 @@ function editSup(id){
 async function saveSup(id){
   const val=document.getElementById('sedit-'+id).value.trim();
   if(!val){toast('Name cannot be empty','err');return;}
-  const {error}=await sb.from('suppliers').update({name:val}).eq('id',id);
-  if(error){toast('Error: '+error.message,'err');return;}
+  const supResp=await fetch(SURL+'/rest/v1/suppliers?id=eq.'+id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:val})});
+  if(!supResp.ok){toast('Error updating supplier','err');return;}
   await loadSups();loadSets();toast('Supplier updated!','ok');
 }
 
-async function savePro(){const nm=document.getElementById('sn').value.trim();if(!nm)return;await sb.from('user_profiles').update({full_name:nm,updated_at:new Date().toISOString()}).eq('id',CU.id);toast('Profile updated!','ok');await loadProf();}
+async function savePro(){const nm=document.getElementById('sn').value.trim();if(!nm)return;await fetch(SURL+'/rest/v1/user_profiles?id=eq.'+CU.id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({full_name:nm,updated_at:new Date().toISOString()})});toast('Profile updated!','ok');await loadProf();}
 
 async function chgPW(){
   const pw=document.getElementById('spw').value,cp=document.getElementById('scpw').value;
@@ -1890,8 +1922,8 @@ async function chgPW(){
   document.getElementById('spw').value='';document.getElementById('scpw').value='';
 }
 
-async function addCat(){const n=document.getElementById('nc').value.trim();if(!n)return;await sb.from('categories').insert({name:n});document.getElementById('nc').value='';await loadCats();loadSets();toast('Category added!','ok');}
-async function addSup(){const n=document.getElementById('ns').value.trim();if(!n)return;await sb.from('suppliers').insert({name:n});document.getElementById('ns').value='';await loadSups();loadSets();toast('Supplier added!','ok');}
+async function addCat(){const n=document.getElementById('nc').value.trim();if(!n)return;await fetch(SURL+'/rest/v1/categories',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:n})});document.getElementById('nc').value='';await loadCats();loadSets();toast('Category added!','ok');}
+async function addSup(){const n=document.getElementById('ns').value.trim();if(!n)return;await fetch(SURL+'/rest/v1/suppliers',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:n})});document.getElementById('ns').value='';await loadSups();loadSets();toast('Supplier added!','ok');}
 
 function downloadCSV(tableId, filename) {
   const table = document.getElementById(tableId);
