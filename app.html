@@ -1133,10 +1133,11 @@ function renderVPLines() {
   c.innerHTML = VP_LINES.map((l,i) => `
     <div style="display:grid;grid-template-columns:1fr 90px 32px;gap:6px;align-items:center;margin-bottom:6px">
       <div style="position:relative">
-        <input class="fi" style="font-size:12px;padding:6px 9px" placeholder="Search product name or barcode..."
+        <input class="fi" style="font-size:12px;padding:6px 9px" placeholder="Search or scan barcode..."
           value="${l.name ? l.name.replace(/"/g,'&quot;') : ''}"
           oninput="vpSearch(${i},this.value)"
           onfocus="vpSearch(${i},this.value)"
+          onkeydown="vpKeydown(event,${i})"
           onblur="setTimeout(()=>{ const d=document.getElementById('vpdd-${i}'); if(d) d.style.display='none'; },180)"
           id="vpinput-${i}">
         <div id="vpdd-${i}" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:0.5px solid var(--border);border-radius:8px;max-height:160px;overflow-y:auto;z-index:600;box-shadow:0 4px 16px rgba(0,0,0,0.12)"></div>
@@ -1177,13 +1178,50 @@ function vpSearch(i, q) {
 function vpSelect(lineIdx, matchIdx) {
   const p = (_vpMatches[lineIdx]||[])[matchIdx];
   if(!p) return;
-  VP_LINES[lineIdx].component_product_id = p.id;
-  VP_LINES[lineIdx].name = p.name;
-  VP_LINES[lineIdx].barcode = p.barcode||'';
-  const dd = document.getElementById('vpdd-'+lineIdx);
+  vpSelectProduct(lineIdx, p);
+}
+
+// Handle Enter key from barcode scanner or keyboard in VP component search
+function vpKeydown(e, i) {
+  if(e.key !== 'Enter') return;
+  e.preventDefault();
+  const q = (document.getElementById('vpinput-'+i)?.value||'').trim();
+  if(!q) return;
+
+  const matches = _vpMatches[i] || [];
+
+  // 1. Exact barcode match — auto-select immediately (scanner use case)
+  const exactBarcode = AP.find(p => !p.is_variety_pack && (p.barcode||'') === q);
+  if(exactBarcode) {
+    vpSelectProduct(i, exactBarcode);
+    return;
+  }
+
+  // 2. Single match in dropdown — auto-select it
+  if(matches.length === 1) {
+    vpSelect(i, 0);
+    return;
+  }
+
+  // 3. Multiple matches — highlight first one so user can see options
+  const dd = document.getElementById('vpdd-'+i);
+  if(dd && matches.length > 0) {
+    dd.style.display = 'block';
+    dd.firstElementChild?.scrollIntoView({block:'nearest'});
+  }
+}
+
+// Select a product object directly (used by barcode scanner path)
+function vpSelectProduct(i, p) {
+  VP_LINES[i].component_product_id = p.id;
+  VP_LINES[i].name = p.name;
+  VP_LINES[i].barcode = p.barcode||'';
+  const dd = document.getElementById('vpdd-'+i);
   if(dd) dd.style.display='none';
-  const inp = document.getElementById('vpinput-'+lineIdx);
+  const inp = document.getElementById('vpinput-'+i);
   if(inp) inp.value = p.name;
+  // Flash green to confirm scan
+  if(inp) { inp.style.background='#d1fae5'; setTimeout(()=>inp.style.background='',800); }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
