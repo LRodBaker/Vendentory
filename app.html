@@ -939,22 +939,22 @@ async function openPD(id) {
       <button class="btn btn-p btn-sm" onclick="closeM('mpd');nav('purchases')">Receive inventory</button>
       <button class="btn btn-sm" onclick="closeM('mpd');nav('adjustments')">Adjust quantity</button>
     </div>`;
-  // Fetch variety pack components BEFORE opening modal so DOM is ready
+  // Fetch variety pack components — simple query, no FK joins, resolve names from AP
   let vpHTML = '';
   if(p.is_variety_pack) {
     const compResp = await fetch(
-      SURL+'/rest/v1/product_components?pack_product_id=eq.'+p.id+'&select=qty_per_pack,component_product_id,products!product_components_component_product_id_fkey(id,name)&order=id',
+      SURL+'/rest/v1/product_components?pack_product_id=eq.'+p.id+'&select=component_product_id,qty_per_pack&order=id',
       {headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY}}
     );
     const comps = compResp.ok ? await compResp.json() : [];
     if(comps.length) {
       const rows = comps.map(c => {
-        // Get on_hand_qty from AP cache (which has it from inventory_on_hand view)
         const cp = AP.find(x => x.id === c.component_product_id) || {};
+        const nm = cp.name || c.component_product_id;
         const onHand = cp.on_hand_qty ?? '—';
-        const statusColor = onHand !== '—' && onHand <= 0 ? 'var(--red-mid)' : 'var(--teal)';
-        return `<div class="ir" style="padding:6px 0;border-bottom:0.5px solid var(--border)">
-          <div style="font-weight:500">${c.products?.name||'Unknown product'}</div>
+        const statusColor = (onHand !== '—' && onHand <= 0) ? 'var(--red-mid)' : 'var(--teal)';
+        return `<div class="ir" style="padding:7px 0;border-bottom:0.5px solid var(--border)">
+          <div style="font-weight:500">${nm}</div>
           <div style="display:flex;align-items:center;gap:10px">
             <span style="font-size:12px;color:var(--gray-400)">${c.qty_per_pack} per pack</span>
             <span style="font-size:12px;font-weight:700;color:${statusColor}">${onHand} in stock</span>
@@ -963,7 +963,7 @@ async function openPD(id) {
       }).join('');
       vpHTML = `
         <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
-          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);margin-bottom:8px">&#127381; Variety pack contents</div>
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);margin-bottom:8px">&#127381; Variety pack contents (${comps.length} items)</div>
           <div style="background:var(--gray-50);border-radius:10px;padding:10px 12px">
             ${rows}
             <div style="margin-top:8px;padding-top:6px;font-size:11px;color:var(--gray-400)">
@@ -979,7 +979,6 @@ async function openPD(id) {
         </div>`;
     }
   }
-  // Inject VP content now that it's ready
   document.getElementById('pd-vp-section').innerHTML = vpHTML;
   openM('mpd');
 }
@@ -1064,17 +1063,21 @@ async function openEP(id) {
   document.getElementById('variety-section').style.display = p.is_variety_pack ? 'block' : 'none';
   if(p.is_variety_pack) {
     const compResp = await fetch(
-      SURL+'/rest/v1/product_components?pack_product_id=eq.'+p.id+'&select=id,component_product_id,qty_per_pack,products!product_components_component_product_id_fkey(id,name,barcode)&order=id',
+      SURL+'/rest/v1/product_components?pack_product_id=eq.'+p.id+'&select=id,component_product_id,qty_per_pack&order=id',
       { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
     );
     const comps = compResp.ok ? await compResp.json() : [];
-    VP_LINES = comps.map(c=>({
-      component_product_id: c.component_product_id,
-      name: c.products?.name||'Unknown',
-      barcode: c.products?.barcode||'',
-      qty_per_pack: c.qty_per_pack,
-      db_id: c.id
-    }));
+    // Resolve product names from AP cache — no FK join needed
+    VP_LINES = comps.map(c => {
+      const cp = AP.find(x => x.id === c.component_product_id) || {};
+      return {
+        component_product_id: c.component_product_id,
+        name: cp.name || '',
+        barcode: cp.barcode || '',
+        qty_per_pack: c.qty_per_pack,
+        db_id: c.id
+      };
+    });
     renderVPLines();
   } else {
     document.getElementById('vp-lines').innerHTML='';
@@ -1133,13 +1136,14 @@ function renderVPLines() {
   c.innerHTML = VP_LINES.map((l,i) => `
     <div style="display:grid;grid-template-columns:1fr 90px 32px;gap:6px;align-items:center;margin-bottom:6px">
       <div style="position:relative">
-        <input class="fi" style="font-size:12px;padding:6px 9px" placeholder="Search or scan barcode..."
+        <input class="fi" style="font-size:12px;padding:6px 9px;border-color:${l.component_product_id ? 'var(--border)' : 'var(--red-mid)'};" placeholder="Search or scan barcode..."
           value="${l.name ? l.name.replace(/"/g,'&quot;') : ''}"
           oninput="vpSearch(${i},this.value)"
           onfocus="vpSearch(${i},this.value)"
           onkeydown="vpKeydown(event,${i})"
           onblur="setTimeout(()=>{ const d=document.getElementById('vpdd-${i}'); if(d) d.style.display='none'; },180)"
           id="vpinput-${i}">
+        ${!l.component_product_id && l.name ? `<div style="font-size:10px;color:var(--red-mid);margin-top:2px;padding-left:2px">&#9888; Select a product from the list</div>` : ''}
         <div id="vpdd-${i}" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:0.5px solid var(--border);border-radius:8px;max-height:160px;overflow-y:auto;z-index:600;box-shadow:0 4px 16px rgba(0,0,0,0.12)"></div>
       </div>
       <input class="fi" style="font-size:12px;padding:6px 9px;text-align:center" type="number" min="1" value="${l.qty_per_pack}"
@@ -1155,22 +1159,33 @@ const _vpMatches = {};
 function vpSearch(i, q) {
   const dd = document.getElementById('vpdd-'+i);
   if(!dd) return;
-  q = (q||'').toLowerCase().trim();
-  if(!q) { dd.style.display='none'; return; }
+  const raw = (q||'').trim();
+  const ql = raw.toLowerCase();
+  if(!ql) { dd.style.display='none'; return; }
+
+  // Exact barcode match — auto-select immediately (handles scanner mid-input)
+  const exactBC = AP.find(p => !p.is_variety_pack && p.barcode && p.barcode === raw);
+  if(exactBC) { vpSelectProduct(i, exactBC); return; }
+
   const matches = AP.filter(p =>
     !p.is_variety_pack &&
-    (p.name.toLowerCase().includes(q) || (p.barcode||'').includes(q) || (p.product_code||'').toLowerCase().includes(q))
-  ).slice(0,8);
-  if(!matches.length) { dd.style.display='none'; return; }
-  _vpMatches[i] = matches; // store so vpSelect can look up by index
+    (p.name.toLowerCase().includes(ql) || (p.barcode||'').includes(ql) || (p.product_code||'').toLowerCase().includes(ql))
+  ).slice(0,10);
+
+  if(!matches.length) {
+    dd.innerHTML='<div style="padding:8px 11px;font-size:12px;color:var(--gray-400)">No products found</div>';
+    dd.style.display='block';
+    return;
+  }
+
+  _vpMatches[i] = matches;
   dd.innerHTML = matches.map((p,mi) => `
-    <div data-mi="${mi}" style="padding:8px 11px;cursor:pointer;font-size:12px;border-bottom:0.5px solid var(--border)">
+    <div data-mi="${mi}" style="padding:8px 11px;cursor:pointer;font-size:12px;border-bottom:0.5px solid var(--border);background:white">
       <div style="font-weight:600">${p.name.replace(/</g,'&lt;')}</div>
-      <div style="font-size:11px;color:var(--gray-400)">${p.barcode ? 'Barcode: '+p.barcode : ''}${p.product_code ? ' · Code: '+p.product_code : ''}</div>
+      <div style="font-size:11px;color:var(--gray-400)">${p.barcode ? '&#35; '+p.barcode : 'No barcode'}${p.product_code ? ' · '+p.product_code : ''}</div>
     </div>`).join('');
-  // Attach mousedown via addEventListener — no inline strings, no escaping issues
   dd.querySelectorAll('[data-mi]').forEach(el => {
-    el.addEventListener('mousedown', () => vpSelect(i, parseInt(el.dataset.mi)));
+    el.addEventListener('mousedown', e => { e.preventDefault(); vpSelect(i, parseInt(el.dataset.mi)); });
   });
   dd.style.display='block';
 }
@@ -1211,7 +1226,7 @@ function vpKeydown(e, i) {
   }
 }
 
-// Select a product object directly (used by barcode scanner path)
+// Select a product object directly (used by both dropdown clicks and barcode scanner)
 function vpSelectProduct(i, p) {
   VP_LINES[i].component_product_id = p.id;
   VP_LINES[i].name = p.name;
@@ -1219,9 +1234,17 @@ function vpSelectProduct(i, p) {
   const dd = document.getElementById('vpdd-'+i);
   if(dd) dd.style.display='none';
   const inp = document.getElementById('vpinput-'+i);
-  if(inp) inp.value = p.name;
-  // Flash green to confirm scan
-  if(inp) { inp.style.background='#d1fae5'; setTimeout(()=>inp.style.background='',800); }
+  if(inp) {
+    inp.value = p.name;
+    inp.style.borderColor = 'var(--teal)';
+    inp.style.background = '#d1fae5';
+    setTimeout(()=>{ inp.style.background=''; inp.style.borderColor=''; }, 1000);
+  }
+  // Re-render to clear any warning indicators
+  renderVPLines();
+  // Restore focus-cleared value after re-render
+  const inp2 = document.getElementById('vpinput-'+i);
+  if(inp2) inp2.value = p.name;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1258,6 +1281,7 @@ async function saveProd() {
     };
 
     let dbError = null;
+    let savedId = eid || null; // will be set from DB response for new products
     try {
       // Use direct fetch for both INSERT and UPDATE — avoids JS client hang with large payloads (e.g. base64 images)
       const resp = await fetch(
@@ -1268,7 +1292,7 @@ async function saveProd() {
             'apikey':SKEY,
             'Authorization':'Bearer '+SKEY,
             'Content-Type':'application/json',
-            'Prefer':'return=minimal'
+            'Prefer':'return=representation'
           },
           body:JSON.stringify(pl)
         }
@@ -1276,6 +1300,11 @@ async function saveProd() {
       if(!resp.ok){
         const txt=await resp.text();
         dbError={message:txt||('HTTP '+resp.status)};
+      } else {
+        // Capture the returned row so we have the ID for new products
+        const rows = await resp.json();
+        const row = Array.isArray(rows) ? rows[0] : rows;
+        if(row?.id && !eid) savedId = row.id;
       }
     } catch(dbErr) {
       toast('Save error: '+dbErr.message,'err');
@@ -1286,31 +1315,39 @@ async function saveProd() {
     document.getElementById('mprod').style.display='none';
     toast(eid?'Product updated!':'Product added!','ok');
 
-    // Get the saved product ID (for new products, fetch it back)
-    let savedId = eid || null;
-    if(!savedId) {
-      // For new products, fetch the ID we just created
-      const {data:newP} = await dbFetch('products',{select:'id',filters:{'name':'eq.'+encodeURIComponent(nm)},order:'created_at.desc',single:true});
-      savedId = newP?.id || null;
-    }
-
-    // Save variety pack components — use direct fetch() to avoid JS client hang
+    // Save variety pack components
     if(savedId) {
-      // Always delete existing components first (works for both variety and non-variety)
-      await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+savedId, {
+      // Step 1: Delete all existing components for this product
+      const delResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+savedId, {
         method:'DELETE',
-        headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY}
+        headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json'}
       });
-      // Re-insert components if this is a variety pack with valid lines
+
+      // Step 2: Insert new components if variety pack
       if(isVariety) {
-        const compRows = VP_LINES.filter(l => l.component_product_id && l.qty_per_pack > 0)
-          .map(l => ({ pack_product_id: savedId, component_product_id: l.component_product_id, qty_per_pack: l.qty_per_pack }));
-        if(compRows.length) {
-          await fetch(SURL+'/rest/v1/product_components', {
+        const validLines = VP_LINES.filter(l => l.component_product_id && l.component_product_id.length > 10);
+        const skipped = VP_LINES.length - validLines.length;
+
+        if(validLines.length === 0 && VP_LINES.length > 0) {
+          toast('No components saved — search for each product and tap it in the dropdown to link it.','err');
+        } else if(validLines.length > 0) {
+          const compRows = validLines.map(l => ({
+            pack_product_id: savedId,
+            component_product_id: l.component_product_id,
+            qty_per_pack: Math.max(1, parseInt(l.qty_per_pack)||1)
+          }));
+          const insResp = await fetch(SURL+'/rest/v1/product_components', {
             method:'POST',
-            headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},
+            headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=representation'},
             body: JSON.stringify(compRows)
           });
+          if(!insResp.ok) {
+            const txt = await insResp.text();
+            toast('Component save error: '+txt,'err');
+          } else {
+            const saved = await insResp.json();
+            toast('Saved '+saved.length+' component'+(saved.length===1?'':'s')+(skipped?' ('+skipped+' unlinked lines skipped)':''),'ok');
+          }
         }
       }
     }
