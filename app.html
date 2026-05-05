@@ -712,7 +712,15 @@ function setDates() {
 }
 
 function showLogin() { document.getElementById('ls').style.display='block'; document.getElementById('app').style.display='none'; }
-function showApp() { document.getElementById('ls').style.display='none'; document.getElementById('app').style.display='block'; loadAll(); nav('dashboard'); }
+let _appInitialized = false;
+function showApp() {
+  document.getElementById('ls').style.display='none';
+  document.getElementById('app').style.display='block';
+  if(_appInitialized) return; // tab refocus — auth fired again, don't re-nav
+  _appInitialized = true;
+  loadAll();
+  // On fresh boot always go to dashboard; sessionStorage page is only used for tab restore
+}
 
 async function doLogin() {
   const e=document.getElementById('le').value.trim(), p=document.getElementById('lp').value;
@@ -766,6 +774,8 @@ function nav(pg) {
   if(ni) ni.classList.add('active');
   document.getElementById('pt').textContent=PTITLES[pg]||pg;
   closeSB();
+  // Remember current page so we can restore it when tabbing back
+  sessionStorage.setItem('vd_page', pg);
   if(pg==='dashboard') loadDash();
   if(pg==='products') renderProds();
   if(pg==='adjustments'){loadRAJ();setDates();}
@@ -783,10 +793,33 @@ document.querySelectorAll('.nav-item').forEach(it=>it.addEventListener('click',(
 function toggleSB(){document.getElementById('sb').classList.toggle('open');document.getElementById('ov').classList.toggle('show');}
 function closeSB(){document.getElementById('sb').classList.remove('open');document.getElementById('ov').classList.remove('show');}
 
+// When tab becomes visible again, restore the page the user was on — no reload
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'visible' && _appInitialized) {
+    const saved = sessionStorage.getItem('vd_page');
+    if(saved) {
+      // Restore silently — just show the right page without reloading data
+      document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+      const el = document.getElementById('page-'+saved);
+      if(el) el.classList.add('active');
+      const ni = document.querySelector('.nav-item[data-page="'+saved+'"]');
+      if(ni) ni.classList.add('active');
+      const PTITLES2 = {dashboard:'Dashboard',products:'Products',purchases:'Purchases',scan:'Scan',reports:'Reports',adjustments:'Adjustments',imports:'Import Sales',settings:'Settings'};
+      const pt = document.getElementById('pt');
+      if(pt) pt.textContent = PTITLES2[saved]||saved;
+    }
+  }
+});
+
 async function loadAll() {
   showL('Loading your data...');
   await Promise.all([loadCats(),loadSups(),loadProds2()]);
-  hideL(); loadDash();
+  hideL();
+  // Restore last page if app was already open in this browser session (tab switch)
+  // Otherwise always start on dashboard
+  const saved = sessionStorage.getItem('vd_page');
+  nav(saved || 'dashboard');
 }
 
 async function loadCats() {
