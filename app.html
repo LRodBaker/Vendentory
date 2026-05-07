@@ -636,6 +636,15 @@ let sb = null;
 let CU = null, CP = null, AP = [], AC = [], AS2 = [], PL = [], adjP = null, impRows = [], rScans = [], curRT = 'weekly';
 let VP_LINES = []; // variety pack component lines for the product edit modal
 
+// ── Get current auth token (session token if logged in, anon key as fallback) ──
+async function getAuthToken() {
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    if (session?.access_token) return session.access_token;
+  } catch(e) {}
+  return SKEY;
+}
+
 // ── Universal Supabase REST helper — always use this instead of sb.from() ──
 // The JS client hangs on INSERT/UPDATE with large payloads (e.g. base64 images).
 // Direct fetch() works reliably for every operation.
@@ -654,9 +663,10 @@ async function dbFetch(table, {method='GET', select='*', filters={}, order=null,
     Object.entries(filters).forEach(([k,v]) => params.push(k.replace(/\d+$/,'')+'='+encodeURIComponent(v)));
   }
   if(params.length) url += '?' + params.join('&');
+  const token = await getAuthToken();
   const headers = {
     'apikey': SKEY,
-    'Authorization': 'Bearer ' + SKEY,
+    'Authorization': 'Bearer ' + token,
     'Content-Type': 'application/json',
     'Prefer': prefer
   };
@@ -712,15 +722,7 @@ function setDates() {
 }
 
 function showLogin() { document.getElementById('ls').style.display='block'; document.getElementById('app').style.display='none'; }
-let _appInitialized = false;
-function showApp() {
-  document.getElementById('ls').style.display='none';
-  document.getElementById('app').style.display='block';
-  if(_appInitialized) return; // tab refocus — auth fired again, don't re-nav
-  _appInitialized = true;
-  loadAll();
-  // On fresh boot always go to dashboard; sessionStorage page is only used for tab restore
-}
+function showApp() { document.getElementById('ls').style.display='none'; document.getElementById('app').style.display='block'; loadAll(); nav('dashboard'); }
 
 async function doLogin() {
   const e=document.getElementById('le').value.trim(), p=document.getElementById('lp').value;
@@ -738,7 +740,7 @@ async function doSignup() {
   const {data,error} = await sb.auth.signUp({email:e,password:p});
   hideL();
   if(error){showSE(error.message);return;}
-  if(data.user) await fetch(SURL+'/rest/v1/user_profiles',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify({id:data.user.id,full_name:n,role:'admin'})});
+  if(data.user) await fetch(SURL+'/rest/v1/user_profiles',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+(data.session?.access_token||SKEY),'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify({id:data.user.id,full_name:n,role:'admin'})});
   closeM('msu');
   toast('Account created! Check email to confirm.','ok');
 }
@@ -774,8 +776,6 @@ function nav(pg) {
   if(ni) ni.classList.add('active');
   document.getElementById('pt').textContent=PTITLES[pg]||pg;
   closeSB();
-  // Remember current page so we can restore it when tabbing back
-  sessionStorage.setItem('vd_page', pg);
   if(pg==='dashboard') loadDash();
   if(pg==='products') renderProds();
   if(pg==='adjustments'){loadRAJ();setDates();}
@@ -793,33 +793,10 @@ document.querySelectorAll('.nav-item').forEach(it=>it.addEventListener('click',(
 function toggleSB(){document.getElementById('sb').classList.toggle('open');document.getElementById('ov').classList.toggle('show');}
 function closeSB(){document.getElementById('sb').classList.remove('open');document.getElementById('ov').classList.remove('show');}
 
-// When tab becomes visible again, restore the page the user was on — no reload
-document.addEventListener('visibilitychange', () => {
-  if(document.visibilityState === 'visible' && _appInitialized) {
-    const saved = sessionStorage.getItem('vd_page');
-    if(saved) {
-      // Restore silently — just show the right page without reloading data
-      document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-      document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
-      const el = document.getElementById('page-'+saved);
-      if(el) el.classList.add('active');
-      const ni = document.querySelector('.nav-item[data-page="'+saved+'"]');
-      if(ni) ni.classList.add('active');
-      const PTITLES2 = {dashboard:'Dashboard',products:'Products',purchases:'Purchases',scan:'Scan',reports:'Reports',adjustments:'Adjustments',imports:'Import Sales',settings:'Settings'};
-      const pt = document.getElementById('pt');
-      if(pt) pt.textContent = PTITLES2[saved]||saved;
-    }
-  }
-});
-
 async function loadAll() {
   showL('Loading your data...');
   await Promise.all([loadCats(),loadSups(),loadProds2()]);
-  hideL();
-  // Restore last page if app was already open in this browser session (tab switch)
-  // Otherwise always start on dashboard
-  const saved = sessionStorage.getItem('vd_page');
-  nav(saved || 'dashboard');
+  hideL(); loadDash();
 }
 
 async function loadCats() {
@@ -967,52 +944,10 @@ async function openPD(id) {
         <div class="ir"><div style="color:var(--gray-400)">Inventory value</div><div style="font-weight:500">${fmt(p.inventory_value)}</div></div>
       </div>
     </div>
-    <div id="pd-vp-section"></div>
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
       <button class="btn btn-p btn-sm" onclick="closeM('mpd');nav('purchases')">Receive inventory</button>
       <button class="btn btn-sm" onclick="closeM('mpd');nav('adjustments')">Adjust quantity</button>
     </div>`;
-  // Fetch variety pack components — simple query, no FK joins, resolve names from AP
-  let vpHTML = '';
-  if(p.is_variety_pack) {
-    const compResp = await fetch(
-      SURL+'/rest/v1/product_components?pack_product_id=eq.'+p.id+'&select=component_product_id,qty_per_pack&order=id',
-      {headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY}}
-    );
-    const comps = compResp.ok ? await compResp.json() : [];
-    if(comps.length) {
-      const rows = comps.map(c => {
-        const cp = AP.find(x => x.id === c.component_product_id) || {};
-        const nm = cp.name || c.component_product_id;
-        const onHand = cp.on_hand_qty ?? '—';
-        const statusColor = (onHand !== '—' && onHand <= 0) ? 'var(--red-mid)' : 'var(--teal)';
-        return `<div class="ir" style="padding:7px 0;border-bottom:0.5px solid var(--border)">
-          <div style="font-weight:500">${nm}</div>
-          <div style="display:flex;align-items:center;gap:10px">
-            <span style="font-size:12px;color:var(--gray-400)">${c.qty_per_pack} per pack</span>
-            <span style="font-size:12px;font-weight:700;color:${statusColor}">${onHand} in stock</span>
-          </div>
-        </div>`;
-      }).join('');
-      vpHTML = `
-        <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
-          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);margin-bottom:8px">&#127381; Variety pack contents (${comps.length} items)</div>
-          <div style="background:var(--gray-50);border-radius:10px;padding:10px 12px">
-            ${rows}
-            <div style="margin-top:8px;padding-top:6px;font-size:11px;color:var(--gray-400)">
-              When received in a purchase, inventory is added to each component — not to this pack.
-            </div>
-          </div>
-        </div>`;
-    } else {
-      vpHTML = `
-        <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
-          <div style="font-size:11px;font-weight:600;color:#f59e0b;margin-bottom:6px">&#9888;&#65039; Variety pack — no components defined</div>
-          <div style="font-size:12px;color:var(--gray-400)">Click Edit to add components. Until then, inventory will be tracked on the pack itself when received.</div>
-        </div>`;
-    }
-  }
-  document.getElementById('pd-vp-section').innerHTML = vpHTML;
   openM('mpd');
 }
 
@@ -1096,21 +1031,17 @@ async function openEP(id) {
   document.getElementById('variety-section').style.display = p.is_variety_pack ? 'block' : 'none';
   if(p.is_variety_pack) {
     const compResp = await fetch(
-      SURL+'/rest/v1/product_components?pack_product_id=eq.'+p.id+'&select=id,component_product_id,qty_per_pack&order=id',
+      SURL+'/rest/v1/product_components?pack_product_id=eq.'+p.id+'&select=id,component_product_id,qty_per_pack,products!product_components_component_product_id_fkey(id,name,barcode)&order=id',
       { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
     );
     const comps = compResp.ok ? await compResp.json() : [];
-    // Resolve product names from AP cache — no FK join needed
-    VP_LINES = comps.map(c => {
-      const cp = AP.find(x => x.id === c.component_product_id) || {};
-      return {
-        component_product_id: c.component_product_id,
-        name: cp.name || '',
-        barcode: cp.barcode || '',
-        qty_per_pack: c.qty_per_pack,
-        db_id: c.id
-      };
-    });
+    VP_LINES = comps.map(c=>({
+      component_product_id: c.component_product_id,
+      name: c.products?.name||'Unknown',
+      barcode: c.products?.barcode||'',
+      qty_per_pack: c.qty_per_pack,
+      db_id: c.id
+    }));
     renderVPLines();
   } else {
     document.getElementById('vp-lines').innerHTML='';
@@ -1169,14 +1100,12 @@ function renderVPLines() {
   c.innerHTML = VP_LINES.map((l,i) => `
     <div style="display:grid;grid-template-columns:1fr 90px 32px;gap:6px;align-items:center;margin-bottom:6px">
       <div style="position:relative">
-        <input class="fi" style="font-size:12px;padding:6px 9px;border-color:${l.component_product_id ? 'var(--border)' : 'var(--red-mid)'};" placeholder="Search or scan barcode..."
+        <input class="fi" style="font-size:12px;padding:6px 9px" placeholder="Search product name or barcode..."
           value="${l.name ? l.name.replace(/"/g,'&quot;') : ''}"
           oninput="vpSearch(${i},this.value)"
           onfocus="vpSearch(${i},this.value)"
-          onkeydown="vpKeydown(event,${i})"
           onblur="setTimeout(()=>{ const d=document.getElementById('vpdd-${i}'); if(d) d.style.display='none'; },180)"
           id="vpinput-${i}">
-        ${!l.component_product_id && l.name ? `<div style="font-size:10px;color:var(--red-mid);margin-top:2px;padding-left:2px">&#9888; Select a product from the list</div>` : ''}
         <div id="vpdd-${i}" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:0.5px solid var(--border);border-radius:8px;max-height:160px;overflow-y:auto;z-index:600;box-shadow:0 4px 16px rgba(0,0,0,0.12)"></div>
       </div>
       <input class="fi" style="font-size:12px;padding:6px 9px;text-align:center" type="number" min="1" value="${l.qty_per_pack}"
@@ -1192,33 +1121,22 @@ const _vpMatches = {};
 function vpSearch(i, q) {
   const dd = document.getElementById('vpdd-'+i);
   if(!dd) return;
-  const raw = (q||'').trim();
-  const ql = raw.toLowerCase();
-  if(!ql) { dd.style.display='none'; return; }
-
-  // Exact barcode match — auto-select immediately (handles scanner mid-input)
-  const exactBC = AP.find(p => !p.is_variety_pack && p.barcode && p.barcode === raw);
-  if(exactBC) { vpSelectProduct(i, exactBC); return; }
-
+  q = (q||'').toLowerCase().trim();
+  if(!q) { dd.style.display='none'; return; }
   const matches = AP.filter(p =>
     !p.is_variety_pack &&
-    (p.name.toLowerCase().includes(ql) || (p.barcode||'').includes(ql) || (p.product_code||'').toLowerCase().includes(ql))
-  ).slice(0,10);
-
-  if(!matches.length) {
-    dd.innerHTML='<div style="padding:8px 11px;font-size:12px;color:var(--gray-400)">No products found</div>';
-    dd.style.display='block';
-    return;
-  }
-
-  _vpMatches[i] = matches;
+    (p.name.toLowerCase().includes(q) || (p.barcode||'').includes(q) || (p.product_code||'').toLowerCase().includes(q))
+  ).slice(0,8);
+  if(!matches.length) { dd.style.display='none'; return; }
+  _vpMatches[i] = matches; // store so vpSelect can look up by index
   dd.innerHTML = matches.map((p,mi) => `
-    <div data-mi="${mi}" style="padding:8px 11px;cursor:pointer;font-size:12px;border-bottom:0.5px solid var(--border);background:white">
+    <div data-mi="${mi}" style="padding:8px 11px;cursor:pointer;font-size:12px;border-bottom:0.5px solid var(--border)">
       <div style="font-weight:600">${p.name.replace(/</g,'&lt;')}</div>
-      <div style="font-size:11px;color:var(--gray-400)">${p.barcode ? '&#35; '+p.barcode : 'No barcode'}${p.product_code ? ' · '+p.product_code : ''}</div>
+      <div style="font-size:11px;color:var(--gray-400)">${p.barcode ? 'Barcode: '+p.barcode : ''}${p.product_code ? ' · Code: '+p.product_code : ''}</div>
     </div>`).join('');
+  // Attach mousedown via addEventListener — no inline strings, no escaping issues
   dd.querySelectorAll('[data-mi]').forEach(el => {
-    el.addEventListener('mousedown', e => { e.preventDefault(); vpSelect(i, parseInt(el.dataset.mi)); });
+    el.addEventListener('mousedown', () => vpSelect(i, parseInt(el.dataset.mi)));
   });
   dd.style.display='block';
 }
@@ -1226,58 +1144,13 @@ function vpSearch(i, q) {
 function vpSelect(lineIdx, matchIdx) {
   const p = (_vpMatches[lineIdx]||[])[matchIdx];
   if(!p) return;
-  vpSelectProduct(lineIdx, p);
-}
-
-// Handle Enter key from barcode scanner or keyboard in VP component search
-function vpKeydown(e, i) {
-  if(e.key !== 'Enter') return;
-  e.preventDefault();
-  const q = (document.getElementById('vpinput-'+i)?.value||'').trim();
-  if(!q) return;
-
-  const matches = _vpMatches[i] || [];
-
-  // 1. Exact barcode match — auto-select immediately (scanner use case)
-  const exactBarcode = AP.find(p => !p.is_variety_pack && (p.barcode||'') === q);
-  if(exactBarcode) {
-    vpSelectProduct(i, exactBarcode);
-    return;
-  }
-
-  // 2. Single match in dropdown — auto-select it
-  if(matches.length === 1) {
-    vpSelect(i, 0);
-    return;
-  }
-
-  // 3. Multiple matches — highlight first one so user can see options
-  const dd = document.getElementById('vpdd-'+i);
-  if(dd && matches.length > 0) {
-    dd.style.display = 'block';
-    dd.firstElementChild?.scrollIntoView({block:'nearest'});
-  }
-}
-
-// Select a product object directly (used by both dropdown clicks and barcode scanner)
-function vpSelectProduct(i, p) {
-  VP_LINES[i].component_product_id = p.id;
-  VP_LINES[i].name = p.name;
-  VP_LINES[i].barcode = p.barcode||'';
-  const dd = document.getElementById('vpdd-'+i);
+  VP_LINES[lineIdx].component_product_id = p.id;
+  VP_LINES[lineIdx].name = p.name;
+  VP_LINES[lineIdx].barcode = p.barcode||'';
+  const dd = document.getElementById('vpdd-'+lineIdx);
   if(dd) dd.style.display='none';
-  const inp = document.getElementById('vpinput-'+i);
-  if(inp) {
-    inp.value = p.name;
-    inp.style.borderColor = 'var(--teal)';
-    inp.style.background = '#d1fae5';
-    setTimeout(()=>{ inp.style.background=''; inp.style.borderColor=''; }, 1000);
-  }
-  // Re-render to clear any warning indicators
-  renderVPLines();
-  // Restore focus-cleared value after re-render
-  const inp2 = document.getElementById('vpinput-'+i);
-  if(inp2) inp2.value = p.name;
+  const inp = document.getElementById('vpinput-'+lineIdx);
+  if(inp) inp.value = p.name;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1314,18 +1187,18 @@ async function saveProd() {
     };
 
     let dbError = null;
-    let savedId = eid || null; // will be set from DB response for new products
     try {
       // Use direct fetch for both INSERT and UPDATE — avoids JS client hang with large payloads (e.g. base64 images)
+      const ptok = await getAuthToken();
       const resp = await fetch(
         SURL+'/rest/v1/products'+(eid?'?id=eq.'+eid:''),
         {
           method: eid ? 'PATCH' : 'POST',
           headers:{
             'apikey':SKEY,
-            'Authorization':'Bearer '+SKEY,
+            'Authorization':'Bearer '+ptok,
             'Content-Type':'application/json',
-            'Prefer':'return=representation'
+            'Prefer':'return=minimal'
           },
           body:JSON.stringify(pl)
         }
@@ -1333,11 +1206,6 @@ async function saveProd() {
       if(!resp.ok){
         const txt=await resp.text();
         dbError={message:txt||('HTTP '+resp.status)};
-      } else {
-        // Capture the returned row so we have the ID for new products
-        const rows = await resp.json();
-        const row = Array.isArray(rows) ? rows[0] : rows;
-        if(row?.id && !eid) savedId = row.id;
       }
     } catch(dbErr) {
       toast('Save error: '+dbErr.message,'err');
@@ -1348,39 +1216,33 @@ async function saveProd() {
     document.getElementById('mprod').style.display='none';
     toast(eid?'Product updated!':'Product added!','ok');
 
-    // Save variety pack components
+    // Get the saved product ID (for new products, fetch it back)
+    let savedId = eid || null;
+    if(!savedId) {
+      // For new products, fetch the ID we just created
+      const {data:newP} = await dbFetch('products',{select:'id',filters:{'name':'eq.'+encodeURIComponent(nm)},order:'created_at.desc',single:true});
+      savedId = newP?.id || null;
+    }
+
+    // Save variety pack components — use direct fetch() to avoid JS client hang
     if(savedId) {
-      // Step 1: Delete all existing components for this product
-      const delResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+savedId, {
+      const ctok = await getAuthToken();
+      const ch = {'apikey':SKEY,'Authorization':'Bearer '+ctok};
+      // Always delete existing components first (works for both variety and non-variety)
+      await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+savedId, {
         method:'DELETE',
-        headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json'}
+        headers:ch
       });
-
-      // Step 2: Insert new components if variety pack
+      // Re-insert components if this is a variety pack with valid lines
       if(isVariety) {
-        const validLines = VP_LINES.filter(l => l.component_product_id && l.component_product_id.length > 10);
-        const skipped = VP_LINES.length - validLines.length;
-
-        if(validLines.length === 0 && VP_LINES.length > 0) {
-          toast('No components saved — search for each product and tap it in the dropdown to link it.','err');
-        } else if(validLines.length > 0) {
-          const compRows = validLines.map(l => ({
-            pack_product_id: savedId,
-            component_product_id: l.component_product_id,
-            qty_per_pack: Math.max(1, parseInt(l.qty_per_pack)||1)
-          }));
-          const insResp = await fetch(SURL+'/rest/v1/product_components', {
+        const compRows = VP_LINES.filter(l => l.component_product_id && l.qty_per_pack > 0)
+          .map(l => ({ pack_product_id: savedId, component_product_id: l.component_product_id, qty_per_pack: l.qty_per_pack }));
+        if(compRows.length) {
+          await fetch(SURL+'/rest/v1/product_components', {
             method:'POST',
-            headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=representation'},
+            headers:{...ch,'Content-Type':'application/json','Prefer':'return=minimal'},
             body: JSON.stringify(compRows)
           });
-          if(!insResp.ok) {
-            const txt = await insResp.text();
-            toast('Component save error: '+txt,'err');
-          } else {
-            const saved = await insResp.json();
-            toast('Saved '+saved.length+' component'+(saved.length===1?'':'s')+(skipped?' ('+skipped+' unlinked lines skipped)':''),'ok');
-          }
         }
       }
     }
@@ -1644,10 +1506,12 @@ async function savePur() {
   const sh=parseFloat(document.getElementById('push').value)||0;
   const tx=parseFloat(document.getElementById('putx').value)||0;
   const ex=parseFloat(document.getElementById('puex').value)||0;
+  const tok = await getAuthToken();
+  const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
   // Insert purchase header — use fetch() to avoid JS client hang
   const purResp = await fetch(SURL+'/rest/v1/purchases', {
     method:'POST',
-    headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=representation'},
+    headers:{...wh,'Prefer':'return=representation'},
     body:JSON.stringify({supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,status:document.getElementById('pustat').value,notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex,created_by:CU?.id})
   });
   if(!purResp.ok){hideL();toast('Error saving purchase','err');return;}
@@ -1658,7 +1522,7 @@ async function savePur() {
   // Insert purchase lines
   await fetch(SURL+'/rest/v1/purchase_lines', {
     method:'POST',
-    headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},
+    headers:{...wh,'Prefer':'return=minimal'},
     body:JSON.stringify(vl.map(l=>({purchase_id:pur.id,product_id:l.product_id,cases:l.cases,cost_per_case:l.cost_per_case,units_received:l.units,unit_cost:l.unit_cost,line_total:l.total})))
   });
 
@@ -1670,7 +1534,7 @@ async function savePur() {
     const prod = AP.find(p => p.id === l.product_id || p.product_id === l.product_id);
     if(prod?.is_variety_pack) {
       // Fetch components via direct fetch
-      const compResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY}});
+      const compResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
       const comps = compResp.ok ? await compResp.json() : [];
       if(comps.length) {
         const totalItemsPerPack = comps.reduce((s,x)=>s+x.qty_per_pack,0);
@@ -1691,7 +1555,7 @@ async function savePur() {
   }
 
   // Insert all inventory transactions in one batch
-  if(invTxns.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
+  if(invTxns.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
 
   // Update WAC for each affected product
   for(const u of wacUpdates) {
@@ -1699,91 +1563,11 @@ async function savePur() {
     const cq = parseFloat(prod?.on_hand_qty)||0, cc = parseFloat(prod?.average_cost)||0;
     const nq = cq + u.units;
     const na = nq > 0 ? ((cq*cc)+(u.units*u.unit_cost))/nq : u.unit_cost;
-    await fetch(SURL+'/rest/v1/products?id=eq.'+u.product_id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({average_cost:na,last_cost:u.unit_cost,updated_at:new Date().toISOString()})});
+    await fetch(SURL+'/rest/v1/products?id=eq.'+u.product_id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({average_cost:na,last_cost:u.unit_cost,updated_at:new Date().toISOString()})});
   }
   hideL();
+  toast('Purchase received! Inventory updated.','ok');
   clrPur(); await loadProds2(); renderProds(); loadPurHistory();
-
-  // Show receipt — if any variety packs were exploded, show full breakdown
-  showPurReceipt(vl, wacUpdates, invTxns);
-}
-
-function showPurReceipt(vl, wacUpdates, invTxns) {
-  // Group explosion results: which packs produced which components
-  const exploded = vl.filter(l => {
-    const p = AP.find(x => x.id === l.product_id);
-    return p?.is_variety_pack;
-  });
-  const normal = vl.filter(l => {
-    const p = AP.find(x => x.id === l.product_id);
-    return !p?.is_variety_pack;
-  });
-
-  let html = `<div style="font-size:13px">`;
-
-  // Normal lines
-  if(normal.length) {
-    html += `<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);margin-bottom:8px">Products received</div>`;
-    html += `<div style="background:var(--gray-50);border-radius:10px;padding:10px 12px;margin-bottom:12px">`;
-    normal.forEach(l => {
-      const p = AP.find(x => x.id === l.product_id) || {};
-      html += `<div class="ir" style="padding:4px 0">
-        <div style="font-weight:500">${p.name||l.product_id}</div>
-        <div style="font-weight:700;color:var(--teal)">+${l.units} units</div>
-      </div>`;
-    });
-    html += `</div>`;
-  }
-
-  // Exploded variety packs
-  if(exploded.length) {
-    html += `<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);margin-bottom:8px">&#127381; Variety packs exploded</div>`;
-    exploded.forEach(l => {
-      const pack = AP.find(x => x.id === l.product_id) || {};
-      // Find the inventory transactions that came from this pack
-      const packTxns = invTxns.filter(t =>
-        t.notes && t.notes.includes(pack.name||'__NOMATCH__')
-      );
-      html += `<div style="background:var(--gray-50);border-radius:10px;padding:10px 12px;margin-bottom:8px">
-        <div style="font-weight:600;margin-bottom:6px;color:var(--gray-700)">
-          ${pack.name||'Variety pack'} &times; ${l.units} packs received
-        </div>`;
-      if(packTxns.length) {
-        packTxns.forEach(t => {
-          const comp = AP.find(x => x.id === t.product_id) || {};
-          html += `<div class="ir" style="padding:3px 0;font-size:12px">
-            <div style="color:var(--gray-600)">${comp.name||t.product_id}</div>
-            <div style="font-weight:700;color:var(--teal)">+${t.quantity_change} units added</div>
-          </div>`;
-        });
-      } else {
-        html += `<div style="font-size:12px;color:var(--gray-400)">No components found — inventory tracked on pack itself.</div>`;
-      }
-      html += `</div>`;
-    });
-  }
-
-  html += `<div style="margin-top:4px;text-align:center">
-    <button class="btn btn-p" onclick="closeM('mpur-receipt')">Done</button>
-  </div></div>`;
-
-  // Show in a modal
-  let modal = document.getElementById('mpur-receipt');
-  if(!modal) {
-    modal = document.createElement('div');
-    modal.id = 'mpur-receipt';
-    modal.className = 'modal-bg';
-    modal.innerHTML = `<div class="modal" style="max-width:420px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <div style="font-family:var(--font-head);font-size:16px;font-weight:700">&#9989; Purchase Receipt</div>
-        <button class="close-btn" onclick="closeM('mpur-receipt')">&#10005;</button>
-      </div>
-      <div id="mpur-receipt-body"></div>
-    </div>`;
-    document.body.appendChild(modal);
-  }
-  document.getElementById('mpur-receipt-body').innerHTML = html;
-  openM('mpur-receipt');
 }
 
 async function srchAdj(){
@@ -1813,9 +1597,10 @@ async function saveAdj(){
   const qty=parseInt(document.getElementById('aq').value)||0;
   if(!qty){toast('Enter a quantity change','err');return;}
   showL('Saving...');
+  const tok=await getAuthToken();
   const adjResp=await fetch(SURL+'/rest/v1/inventory_transactions',{
     method:'POST',
-    headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},
+    headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},
     body:JSON.stringify({product_id:adjP.product_id,transaction_date:new Date(document.getElementById('ad').value).toISOString(),transaction_type:document.getElementById('at').value,quantity_change:qty,warehouse_quantity_change:qty,reason_code:document.getElementById('ar').value,notes:document.getElementById('an').value||null,created_by:CU?.id})
   });
   hideL();
@@ -1867,7 +1652,9 @@ async function confImport(){
   if(!impRows.length)return;
   showL('Importing sales data...');
   const sd=document.getElementById('isd').value,ed=document.getElementById('ied').value;
-  const irResp = await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
+  const tok2=await getAuthToken();
+  const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
+  const irResp = await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
   if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
   const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
   if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
@@ -1888,8 +1675,8 @@ async function confImport(){
     if(matched&&u>0)invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
   }
   // Batch insert all at once instead of one-by-one
-  if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify(lines)});
-  if(invTxnsBatch.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify(invTxnsBatch)});
+  if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
+  if(invTxnsBatch.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(invTxnsBatch)});
   hideL();
   toast('Import complete! '+lines.length+' products imported.','ok');
   cancImport(); await loadProds2(); loadIH();
@@ -2121,7 +1908,8 @@ function editCat(id){
 async function saveCat(id){
   const val=document.getElementById('cedit-'+id).value.trim();
   if(!val){toast('Name cannot be empty','err');return;}
-  const catResp=await fetch(SURL+'/rest/v1/categories?id=eq.'+id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:val})});
+  const tok=await getAuthToken();
+  const catResp=await fetch(SURL+'/rest/v1/categories?id=eq.'+id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:val})});
   if(!catResp.ok){toast('Error updating category','err');return;}
   await loadCats();loadSets();toast('Category updated!','ok');
 }
@@ -2136,12 +1924,13 @@ function editSup(id){
 async function saveSup(id){
   const val=document.getElementById('sedit-'+id).value.trim();
   if(!val){toast('Name cannot be empty','err');return;}
-  const supResp=await fetch(SURL+'/rest/v1/suppliers?id=eq.'+id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:val})});
+  const tok=await getAuthToken();
+  const supResp=await fetch(SURL+'/rest/v1/suppliers?id=eq.'+id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:val})});
   if(!supResp.ok){toast('Error updating supplier','err');return;}
   await loadSups();loadSets();toast('Supplier updated!','ok');
 }
 
-async function savePro(){const nm=document.getElementById('sn').value.trim();if(!nm)return;await fetch(SURL+'/rest/v1/user_profiles?id=eq.'+CU.id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({full_name:nm,updated_at:new Date().toISOString()})});toast('Profile updated!','ok');await loadProf();}
+async function savePro(){const nm=document.getElementById('sn').value.trim();if(!nm)return;const tok=await getAuthToken();await fetch(SURL+'/rest/v1/user_profiles?id=eq.'+CU.id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({full_name:nm,updated_at:new Date().toISOString()})});toast('Profile updated!','ok');await loadProf();}
 
 async function chgPW(){
   const pw=document.getElementById('spw').value,cp=document.getElementById('scpw').value;
@@ -2153,8 +1942,8 @@ async function chgPW(){
   document.getElementById('spw').value='';document.getElementById('scpw').value='';
 }
 
-async function addCat(){const n=document.getElementById('nc').value.trim();if(!n)return;await fetch(SURL+'/rest/v1/categories',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:n})});document.getElementById('nc').value='';await loadCats();loadSets();toast('Category added!','ok');}
-async function addSup(){const n=document.getElementById('ns').value.trim();if(!n)return;await fetch(SURL+'/rest/v1/suppliers',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:n})});document.getElementById('ns').value='';await loadSups();loadSets();toast('Supplier added!','ok');}
+async function addCat(){const n=document.getElementById('nc').value.trim();if(!n)return;const tok=await getAuthToken();await fetch(SURL+'/rest/v1/categories',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:n})});document.getElementById('nc').value='';await loadCats();loadSets();toast('Category added!','ok');}
+async function addSup(){const n=document.getElementById('ns').value.trim();if(!n)return;const tok=await getAuthToken();await fetch(SURL+'/rest/v1/suppliers',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:n})});document.getElementById('ns').value='';await loadSups();loadSets();toast('Supplier added!','ok');}
 
 function downloadCSV(tableId, filename) {
   const table = document.getElementById(tableId);
