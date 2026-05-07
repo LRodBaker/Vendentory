@@ -1468,7 +1468,6 @@ async function togglePurLines(id,btn){
   if(el.style.display!=='none'){el.style.display='none';btn.textContent='▸ Details';return;}
   el.style.display='block';
   btn.textContent='▾ Hide';
-  if(el.dataset.loaded==='1')return; // already loaded
   el.dataset.loaded='1';
   el.innerHTML='<div class="tm" style="font-size:12px">Loading...</div>';
   const {data:lines,error}=await dbFetch('purchase_lines',{select:'*,products(name)',filters:{'purchase_id':'eq.'+id},order:'id'});
