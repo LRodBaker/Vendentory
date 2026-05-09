@@ -985,21 +985,12 @@ function openAP() {
 
 async function openEP(id) {
   if(!id){ toast('No product ID — cannot edit','err'); return; }
-  showL('Loading product...');
-  // Always fetch fresh from DB — avoids any stale cache issues
-  let p = null;
-  try {
-    const {data, error} = await dbFetch('products',{filters:{'id':'eq.'+id},single:true});
-    if(error) throw error;
-    p = data;
-  } catch(e) {
-    // Fallback to cache if DB fetch fails
-    p = AP.find(x => x.id === id || x.product_id === id) || null;
-    if(!p){ hideL(); toast('Could not load product: '+e.message,'err'); return; }
-  }
-  hideL();
-  await loadCats();
-  await loadSups();
+  // Use cached product data — avoids extra DB round trip on every edit click
+  let p = AP.find(x => x.id === id || x.product_id === id) || null;
+  if(!p){ toast('Product not found in cache — try refreshing the page','err'); return; }
+  // Reload cats/sups only if not already loaded
+  if(!AC.length) await loadCats();
+  if(!AS2.length) await loadSups();
   document.getElementById('mpt').textContent = 'Edit product';
   document.getElementById('peid').value = p.id;
   document.getElementById('pb').value = p.barcode||'';
