@@ -1224,26 +1224,24 @@ async function saveProd() {
     let savedId = eid || _newProductId || null;
     _newProductId = null; // reset
 
-    // Save variety pack components — use direct fetch() to avoid JS client hang
-    if(savedId) {
+    // Save variety pack components — only touch product_components for variety packs
+    // (Skipping DELETE for non-variety avoids a hanging fetch on every normal product save)
+    if(savedId && isVariety) {
       const ctok = await getAuthToken();
       const ch = {'apikey':SKEY,'Authorization':'Bearer '+ctok};
-      // Always delete existing components first (works for both variety and non-variety)
+      // Delete existing components first, then re-insert
       await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+savedId, {
         method:'DELETE',
         headers:ch
       });
-      // Re-insert components if this is a variety pack with valid lines
-      if(isVariety) {
-        const compRows = VP_LINES.filter(l => l.component_product_id && l.qty_per_pack > 0)
-          .map(l => ({ pack_product_id: savedId, component_product_id: l.component_product_id, qty_per_pack: l.qty_per_pack }));
-        if(compRows.length) {
-          await fetch(SURL+'/rest/v1/product_components', {
-            method:'POST',
-            headers:{...ch,'Content-Type':'application/json','Prefer':'return=minimal'},
-            body: JSON.stringify(compRows)
-          });
-        }
+      const compRows = VP_LINES.filter(l => l.component_product_id && l.qty_per_pack > 0)
+        .map(l => ({ pack_product_id: savedId, component_product_id: l.component_product_id, qty_per_pack: l.qty_per_pack }));
+      if(compRows.length) {
+        await fetch(SURL+'/rest/v1/product_components', {
+          method:'POST',
+          headers:{...ch,'Content-Type':'application/json','Prefer':'return=minimal'},
+          body: JSON.stringify(compRows)
+        });
       }
     }
 
