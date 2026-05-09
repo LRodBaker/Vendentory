@@ -1209,7 +1209,8 @@ async function saveProd() {
       );
       if(!resp.ok){
         const txt=await resp.text();
-        dbError={message:txt||('HTTP '+resp.status)};
+        console.error('saveProd error', resp.status, txt);
+        dbError={message:'HTTP '+resp.status+(txt?' - '+txt:'')};
       } else if(!eid) {
         // For new products, grab the returned row to get the ID
         try {
@@ -1220,6 +1221,7 @@ async function saveProd() {
       }
     } catch(dbErr) {
       toast('Save error: '+dbErr.message,'err');
+      if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='Save product';}
       return;
     }
     if(dbError){toast('DB Error: '+dbError.message,'err');return;}
