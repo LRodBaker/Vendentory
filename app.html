@@ -673,7 +673,16 @@ async function dbFetch(table, {method='GET', select='*', filters={}, order=null,
   };
   const opts = { method, headers };
   if(body) opts.body = JSON.stringify(body);
-  const resp = await fetch(url, opts);
+  const dbCtrl = new AbortController();
+  const dbTimer = setTimeout(()=>dbCtrl.abort(), 12000);
+  let resp;
+  try {
+    resp = await fetch(url, {...opts, signal: dbCtrl.signal});
+  } catch(fetchErr) {
+    clearTimeout(dbTimer);
+    throw new Error(fetchErr.name==='AbortError' ? 'DB request timed out' : fetchErr.message);
+  }
+  clearTimeout(dbTimer);
   if(!resp.ok) {
     const txt = await resp.text();
     throw new Error(txt || 'HTTP ' + resp.status);
@@ -1249,7 +1258,7 @@ async function saveProd() {
       const idx=AP.findIndex(x=>x.product_id===eid||x.id===eid);
       if(idx>=0){ AP[idx]={...AP[idx],...pl}; renderProds(); }
     }
-    setTimeout(async()=>{ await loadProds2(); renderProds(); }, eid ? 600 : 1200);
+    setTimeout(async()=>{ try{ await loadProds2(); renderProds(); } catch(e){} }, eid ? 600 : 1200);
 
   } catch(e) {
     showSaveErr('Unexpected error: '+e.message);
