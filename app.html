@@ -849,9 +849,12 @@ async function loadDash() {
   // Current month 1st to today
   const mStart=new Date(now.getFullYear(),now.getMonth(),1).toISOString().split('T')[0];
   const todayStr=now.toISOString().split('T')[0];
+  // Week ago for top sellers query
+  const waDate=new Date(now);waDate.setDate(now.getDate()-7);
+  const wa=waDate.toISOString().split('T')[0];
   const [{data:ws},{data:ms}]=await Promise.all([
-    dbFetch('sales_lines',{select:'sales_amount',filters:{'period_start_date':'gte.'+monStr+'&period_start_date=lte.'+todayStr}}),
-    dbFetch('sales_lines',{select:'sales_amount',filters:{'period_start_date':'gte.'+mStart+'&period_start_date=lte.'+todayStr}})
+    dbFetch('sales_lines',{select:'sales_amount',filters:{'period_start_date':'gte.'+monStr,'period_start_date2':'lte.'+todayStr}}),
+    dbFetch('sales_lines',{select:'sales_amount',filters:{'period_start_date':'gte.'+mStart,'period_start_date2':'lte.'+todayStr}})
   ]);
   document.getElementById('sw').textContent=fmt((ws||[]).reduce((s,r)=>s+parseFloat(r.sales_amount||0),0));
   document.getElementById('sm').textContent=fmt((ms||[]).reduce((s,r)=>s+parseFloat(r.sales_amount||0),0));
@@ -1050,6 +1053,7 @@ async function openEP(id) {
 }
 
 let _newImageDataUrl = null;
+let _newProductId = null;
 
 function prevPI(input) {
   if(!input.files[0])return;
@@ -1198,7 +1202,7 @@ async function saveProd() {
             'apikey':SKEY,
             'Authorization':'Bearer '+ptok,
             'Content-Type':'application/json',
-            'Prefer':'return=minimal'
+            'Prefer': eid ? 'return=minimal' : 'return=representation'
           },
           body:JSON.stringify(pl)
         }
@@ -1206,6 +1210,13 @@ async function saveProd() {
       if(!resp.ok){
         const txt=await resp.text();
         dbError={message:txt||('HTTP '+resp.status)};
+      } else if(!eid) {
+        // For new products, grab the returned row to get the ID
+        try {
+          const rows = await resp.json();
+          const row = Array.isArray(rows) ? rows[0] : rows;
+          if(row?.id) _newProductId = row.id;
+        } catch(e) {}
       }
     } catch(dbErr) {
       toast('Save error: '+dbErr.message,'err');
@@ -1216,13 +1227,9 @@ async function saveProd() {
     document.getElementById('mprod').style.display='none';
     toast(eid?'Product updated!':'Product added!','ok');
 
-    // Get the saved product ID (for new products, fetch it back)
-    let savedId = eid || null;
-    if(!savedId) {
-      // For new products, fetch the ID we just created
-      const {data:newP} = await dbFetch('products',{select:'id',filters:{'name':'eq.'+encodeURIComponent(nm)},order:'created_at.desc',single:true});
-      savedId = newP?.id || null;
-    }
+    // Get the saved product ID
+    let savedId = eid || _newProductId || null;
+    _newProductId = null; // reset
 
     // Save variety pack components — use direct fetch() to avoid JS client hang
     if(savedId) {
@@ -1438,7 +1445,8 @@ async function loadPurHistory(){
   if(monthVal){
     const start=monthVal+'-01';
     const end=new Date(monthVal.split('-')[0],monthVal.split('-')[1],0).toISOString().split('T')[0];
-    purFilters['purchase_date']='gte.'+start+'&purchase_date=lte.'+end;
+    purFilters['purchase_date']='gte.'+start;
+    purFilters['purchase_date2']='lte.'+end;
   }
   const {data:purs,error}=await dbFetch('purchases',{select:'id,purchase_date,invoice_number,status,subtotal_amount,shipping_cost,tax_amount,extra_costs,total_amount,notes,suppliers(name)',filters:purFilters,order:'purchase_date.desc',limit:50});
   if(error){el.innerHTML='<div class="tm">Error loading history</div>';return;}
