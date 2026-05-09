@@ -1258,7 +1258,7 @@ async function saveProd() {
       const idx=AP.findIndex(x=>x.product_id===eid||x.id===eid);
       if(idx>=0){ AP[idx]={...AP[idx],...pl}; renderProds(); }
     }
-    setTimeout(async()=>{ try{ await loadProds2(); renderProds(); } catch(e){} }, eid ? 600 : 1200);
+    // Removed post-save DB reload — cache update above is sufficient
 
   } catch(e) {
     showSaveErr('Unexpected error: '+e.message);
