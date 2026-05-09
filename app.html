@@ -787,7 +787,7 @@ function nav(pg) {
   document.getElementById('pt').textContent=PTITLES[pg]||pg;
   closeSB();
   if(pg==='dashboard') loadDash();
-  if(pg==='products') renderProds();
+  if(pg==='products'){ loadProds2().then(()=>renderProds()).catch(()=>renderProds()); }
   if(pg==='adjustments'){loadRAJ();setDates();}
   if(pg==='reports'){
     document.getElementById('rpt-wpick').style.display='block';
@@ -827,12 +827,13 @@ async function loadSups() {
 }
 
 async function loadProds2() {
-  // Query products table directly so newly added products (with no transactions yet) always appear.
-  // Join in inventory_on_hand data where available for on_hand_qty, stock_status, inventory_value.
-  const [{data:prods},{data:inv}] = await Promise.all([
-    dbFetch('products',{select:'*,categories(name),suppliers(name)',filters:{'is_active':'eq.true'},order:'name'}),
-    dbFetch('inventory_on_hand',{select:'product_id,on_hand_qty,stock_status,inventory_value'})
-  ]);
+  // Query products and inventory separately with fallback so one timeout doesn't kill both
+  const {data:prods} = await dbFetch('products',{select:'*,categories(name),suppliers(name)',filters:{'is_active':'eq.true'},order:'name'});
+  let inv = null;
+  try {
+    const r = await dbFetch('inventory_on_hand',{select:'product_id,on_hand_qty,stock_status,inventory_value'});
+    inv = r.data;
+  } catch(e) { inv = []; }
   const invMap={};
   (inv||[]).forEach(r=>invMap[r.product_id]=r);
   AP=(prods||[]).map(p=>({
@@ -1253,12 +1254,22 @@ async function saveProd() {
     clearSaveErr();
     toast(eid?'Product updated!':'Product added!','ok');
 
-    // Update local cache immediately
+    // Update local cache immediately — no DB reload needed
     if(eid){
       const idx=AP.findIndex(x=>x.product_id===eid||x.id===eid);
-      if(idx>=0){ AP[idx]={...AP[idx],...pl}; renderProds(); }
+      if(idx>=0){ AP[idx]={...AP[idx],...pl,id:eid,product_id:eid}; }
+    } else if(savedId) {
+      // New product — add to cache so it appears without a reload
+      const cat=AC.find(c=>c.id===pl.category_id);
+      const sup=AS2.find(s=>s.id===pl.last_supplier_id);
+      AP.push({...pl,id:savedId,product_id:savedId,
+        category_name:cat?.name||'',
+        on_hand_qty:0,stock_status:'OK',inventory_value:0,
+        categories:{name:cat?.name||''},suppliers:{name:sup?.name||''}
+      });
+      AP.sort((a,b)=>a.name.localeCompare(b.name));
     }
-    // Removed post-save DB reload — cache update above is sufficient
+    renderProds();
 
   } catch(e) {
     showSaveErr('Unexpected error: '+e.message);
