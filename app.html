@@ -593,6 +593,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
       </div>
     </div>
 
+    <div id="mprod-err" style="display:none;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px;margin-top:10px;font-size:13px;color:#991b1b"></div>
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       <button class="btn btn-p" onclick="saveProd()">Save product</button>
       <button class="btn" onclick="closeM('mprod')">Cancel</button>
@@ -1152,13 +1153,16 @@ function vpSelect(lineIdx, matchIdx) {
 
 async function saveProd() {
   const nm=document.getElementById('pn').value.trim();
-  if(!nm){toast('Product name is required','err');return;}
+  const errDiv=document.getElementById('mprod-err');
+  function showSaveErr(msg){ if(errDiv){errDiv.textContent=msg;errDiv.style.display='block';} toast(msg,'err'); }
+  function clearSaveErr(){ if(errDiv){errDiv.style.display='none';errDiv.textContent='';} }
+  if(!nm){ showSaveErr('Product name is required'); return; }
+  clearSaveErr();
   const saveBtn=document.querySelector('#mprod .btn-p');
   if(saveBtn){saveBtn.disabled=true;saveBtn.textContent='Saving...';}
   try {
     const eid=document.getElementById('peid').value;
     const lastCost=parseFloat(document.getElementById('plc').value)||0;
-
     const isVariety = document.getElementById('pIsVariety').checked;
     const pl={
       name:nm,
@@ -1181,11 +1185,13 @@ async function saveProd() {
       updated_at:new Date().toISOString()
     };
 
-    let dbError = null;
+    // Build fetch with 15s timeout
+    const ptok = await getAuthToken();
+    const controller = new AbortController();
+    const timer = setTimeout(()=>controller.abort(), 15000);
+    let resp;
     try {
-      // Use direct fetch for both INSERT and UPDATE — avoids JS client hang with large payloads (e.g. base64 images)
-      const ptok = await getAuthToken();
-      const resp = await fetch(
+      resp = await fetch(
         SURL+'/rest/v1/products'+(eid?'?id=eq.'+eid:''),
         {
           method: eid ? 'PATCH' : 'POST',
@@ -1195,66 +1201,58 @@ async function saveProd() {
             'Content-Type':'application/json',
             'Prefer': eid ? 'return=minimal' : 'return=representation'
           },
-          body:JSON.stringify(pl)
+          body:JSON.stringify(pl),
+          signal: controller.signal
         }
       );
-      if(!resp.ok){
-        const txt=await resp.text();
-        console.error('saveProd error', resp.status, txt);
-        dbError={message:'HTTP '+resp.status+(txt?' - '+txt:'')};
-      } else if(!eid) {
-        // For new products, grab the returned row to get the ID
-        try {
-          const rows = await resp.json();
-          const row = Array.isArray(rows) ? rows[0] : rows;
-          if(row?.id) _newProductId = row.id;
-        } catch(e) {}
-      }
-    } catch(dbErr) {
-      toast('Save error: '+dbErr.message,'err');
-      if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='Save product';}
+    } catch(fetchErr) {
+      clearTimeout(timer);
+      showSaveErr(fetchErr.name==='AbortError' ? 'Save timed out — check your internet connection' : 'Network error: '+fetchErr.message);
       return;
     }
-    if(dbError){toast('DB Error: '+dbError.message,'err');return;}
+    clearTimeout(timer);
 
-    document.getElementById('mprod').style.display='none';
-    toast(eid?'Product updated!':'Product added!','ok');
+    if(!resp.ok){
+      const txt=await resp.text();
+      showSaveErr('Save failed (HTTP '+resp.status+'): '+txt);
+      return;
+    }
 
-    // Get the saved product ID
-    let savedId = eid || _newProductId || null;
-    _newProductId = null; // reset
+    // For new products, grab the returned ID
+    let savedId = eid || null;
+    if(!eid) {
+      try {
+        const rows = await resp.json();
+        const row = Array.isArray(rows) ? rows[0] : rows;
+        if(row?.id) savedId = row.id;
+      } catch(e) {}
+    }
 
-    // Save variety pack components — only touch product_components for variety packs
-    // (Skipping DELETE for non-variety avoids a hanging fetch on every normal product save)
+    // Only touch product_components for variety packs
     if(savedId && isVariety) {
       const ctok = await getAuthToken();
       const ch = {'apikey':SKEY,'Authorization':'Bearer '+ctok};
-      // Delete existing components first, then re-insert
-      await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+savedId, {
-        method:'DELETE',
-        headers:ch
-      });
-      const compRows = VP_LINES.filter(l => l.component_product_id && l.qty_per_pack > 0)
-        .map(l => ({ pack_product_id: savedId, component_product_id: l.component_product_id, qty_per_pack: l.qty_per_pack }));
+      await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+savedId, {method:'DELETE',headers:ch});
+      const compRows = VP_LINES.filter(l=>l.component_product_id&&l.qty_per_pack>0)
+        .map(l=>({pack_product_id:savedId,component_product_id:l.component_product_id,qty_per_pack:l.qty_per_pack}));
       if(compRows.length) {
-        await fetch(SURL+'/rest/v1/product_components', {
-          method:'POST',
-          headers:{...ch,'Content-Type':'application/json','Prefer':'return=minimal'},
-          body: JSON.stringify(compRows)
-        });
+        await fetch(SURL+'/rest/v1/product_components',{method:'POST',headers:{...ch,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify(compRows)});
       }
     }
 
-    // For edits: patch local cache immediately so grid updates without flicker
+    document.getElementById('mprod').style.display='none';
+    clearSaveErr();
+    toast(eid?'Product updated!':'Product added!','ok');
+
+    // Update local cache immediately
     if(eid){
       const idx=AP.findIndex(x=>x.product_id===eid||x.id===eid);
       if(idx>=0){ AP[idx]={...AP[idx],...pl}; renderProds(); }
     }
-
-    // Always reload from DB to get accurate view data
     setTimeout(async()=>{ await loadProds2(); renderProds(); }, eid ? 600 : 1200);
+
   } catch(e) {
-    toast('Outer error: '+e.message,'err');
+    showSaveErr('Unexpected error: '+e.message);
   } finally {
     if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='Save product';}
   }
