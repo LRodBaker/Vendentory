@@ -640,7 +640,8 @@ let VP_LINES = []; // variety pack component lines for the product edit modal
 // ── Get current auth token (session token if logged in, anon key as fallback) ──
 async function getAuthToken() {
   try {
-    const { data: { session } } = await sb.auth.getSession();
+    const timeout = new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), 5000));
+    const { data: { session } } = await Promise.race([sb.auth.getSession(), timeout]);
     if (session?.access_token) return session.access_token;
   } catch(e) {}
   return SKEY;
