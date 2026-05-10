@@ -1242,11 +1242,35 @@ async function saveProd() {
     if(savedId && isVariety) {
       const ctok = await getAuthToken();
       const ch = {'apikey':SKEY,'Authorization':'Bearer '+ctok};
-      await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+savedId, {method:'DELETE',headers:ch});
+
+      // DELETE existing components (10s timeout)
+      const delCtrl = new AbortController();
+      const delTimer = setTimeout(()=>delCtrl.abort(), 10000);
+      try {
+        const delResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+savedId, {method:'DELETE',headers:ch,signal:delCtrl.signal});
+        clearTimeout(delTimer);
+        if(!delResp.ok) { const t=await delResp.text(); showSaveErr('Component delete failed: '+t); return; }
+      } catch(e) {
+        clearTimeout(delTimer);
+        showSaveErr(e.name==='AbortError'?'Component delete timed out':'Component delete error: '+e.message);
+        return;
+      }
+
+      // INSERT new components (10s timeout)
       const compRows = VP_LINES.filter(l=>l.component_product_id&&l.qty_per_pack>0)
         .map(l=>({pack_product_id:savedId,component_product_id:l.component_product_id,qty_per_pack:l.qty_per_pack}));
       if(compRows.length) {
-        await fetch(SURL+'/rest/v1/product_components',{method:'POST',headers:{...ch,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify(compRows)});
+        const insCtrl = new AbortController();
+        const insTimer = setTimeout(()=>insCtrl.abort(), 10000);
+        try {
+          const insResp = await fetch(SURL+'/rest/v1/product_components',{method:'POST',headers:{...ch,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify(compRows),signal:insCtrl.signal});
+          clearTimeout(insTimer);
+          if(!insResp.ok) { const t=await insResp.text(); showSaveErr('Component save failed: '+t); return; }
+        } catch(e) {
+          clearTimeout(insTimer);
+          showSaveErr(e.name==='AbortError'?'Component save timed out':'Component save error: '+e.message);
+          return;
+        }
       }
     }
 
