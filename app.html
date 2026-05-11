@@ -622,6 +622,16 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
       </div>
     </div>
 
+    <!-- ALTERNATE BARCODES SECTION -->
+    <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
+      <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:4px">Alternate Barcodes</div>
+      <div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">If this product has more than one individual barcode (e.g. two varieties in the same case), add them here. Scanning any of them will count toward this product's inventory.</div>
+      <div style="background:var(--gray-50);border-radius:10px;padding:12px">
+        <div id="alt-barcode-lines"></div>
+        <button class="btn btn-sm" style="margin-top:8px" onclick="addAltBarcode()">+ Add alternate barcode</button>
+      </div>
+    </div>
+
     <div id="mprod-err" style="display:none;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px;margin-top:10px;font-size:13px;color:#991b1b"></div>
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       <button class="btn btn-p" onclick="saveProd()">Save product</button>
@@ -670,6 +680,7 @@ let CU = null, CP = null, AP = [], AC = [], AS2 = [], PL = [], adjP = null, impR
 let VP_LINES = []; // variety pack component lines for the product edit modal
 let SKU_LINES = []; // bulk barcode lines for the product edit modal
 let BASE_LINES = []; // base product links for bulk products
+let ALT_BARCODES = []; // alternate individual barcodes for a product
 
 // ── Get current auth token (session token if logged in, anon key as fallback) ──
 let _cachedToken = null;
@@ -1041,6 +1052,9 @@ async function openAP() {
   // Reset base product links
   BASE_LINES = [];
   document.getElementById('base-lines').innerHTML='';
+  // Reset alternate barcodes
+  ALT_BARCODES = [];
+  document.getElementById('alt-barcode-lines').innerHTML='';
   // Await so dropdowns are populated before modal opens — prevents stale/blank selects
   await Promise.all([loadCats(), loadSups()]);
   // Ensure dropdowns reset to blank for a fresh Add
@@ -1144,6 +1158,20 @@ async function openEP(id) {
         _mode: 'link'
       }));
       renderBaseLines();
+    }
+  }
+  // Load alternate barcodes for this product
+  ALT_BARCODES = [];
+  document.getElementById('alt-barcode-lines').innerHTML='';
+  if(p.id) {
+    const altResp = await fetch(
+      SURL+'/rest/v1/product_barcodes?product_id=eq.'+p.id+'&select=id,barcode&order=created_at',
+      { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
+    );
+    if(altResp.ok) {
+      const altRows = await altResp.json();
+      ALT_BARCODES = altRows.map(r=>({ db_id:r.id, barcode:r.barcode||'' }));
+      renderAltBarcodes();
     }
   }
   openM('mprod');
@@ -1405,6 +1433,37 @@ function baseSelect(lineIdx, matchIdx) {
   if(inp) inp.value = p.name;
 }
 
+// ── ALTERNATE BARCODES UI ────────────────────────────────────────────────────
+
+function addAltBarcode() {
+  ALT_BARCODES.push({ barcode:'', db_id:null });
+  renderAltBarcodes();
+  setTimeout(()=>{
+    const inputs = document.querySelectorAll('.alt-bc-input');
+    if(inputs.length) inputs[inputs.length-1].focus();
+  }, 50);
+}
+
+function removeAltBarcode(i) {
+  ALT_BARCODES.splice(i,1);
+  renderAltBarcodes();
+}
+
+function renderAltBarcodes() {
+  const c = document.getElementById('alt-barcode-lines');
+  if(!ALT_BARCODES.length) {
+    c.innerHTML='<div class="tm" style="font-size:12px;padding:6px 0">No alternate barcodes. Click "+ Add alternate barcode" to add one.</div>';
+    return;
+  }
+  c.innerHTML = ALT_BARCODES.map((b,i) => `
+    <div style="display:grid;grid-template-columns:1fr 28px;gap:6px;align-items:center;margin-bottom:6px">
+      <input class="fi alt-bc-input" style="font-size:12px;padding:6px 9px" placeholder="Scan or type barcode..."
+        value="${(b.barcode||'').replace(/"/g,'&quot;')}"
+        oninput="ALT_BARCODES[${i}].barcode=this.value">
+      <button style="background:var(--red-light);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;color:var(--red-mid);font-size:14px;display:flex;align-items:center;justify-content:center" onclick="removeAltBarcode(${i})">&#10005;</button>
+    </div>`).join('');
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function saveProd() {
@@ -1562,6 +1621,41 @@ async function saveProd() {
         } catch(e) {
           clearTimeout(skuInsTimer);
           showSaveErr(e.name==='AbortError'?'SKU save timed out':'SKU save error: '+e.message);
+          return;
+        }
+      }
+    }
+
+    // Save alternate barcodes — delete all then re-insert
+    if(savedId) {
+      const altTok = await getAuthToken();
+      const altH = {'apikey':SKEY,'Authorization':'Bearer '+altTok,'Content-Type':'application/json'};
+      const altDelCtrl = new AbortController();
+      const altDelTimer = setTimeout(()=>altDelCtrl.abort(), 10000);
+      try {
+        const altDelResp = await fetch(SURL+'/rest/v1/product_barcodes?product_id=eq.'+savedId,
+          {method:'DELETE',headers:altH,signal:altDelCtrl.signal});
+        clearTimeout(altDelTimer);
+        if(!altDelResp.ok){ const t=await altDelResp.text(); showSaveErr('Alt barcode delete failed: '+t); return; }
+      } catch(e) {
+        clearTimeout(altDelTimer);
+        showSaveErr(e.name==='AbortError'?'Alt barcode delete timed out':'Alt barcode delete error: '+e.message);
+        return;
+      }
+      const altRows = ALT_BARCODES
+        .filter(b => b.barcode && b.barcode.trim())
+        .map(b => ({ product_id:savedId, barcode:b.barcode.trim() }));
+      if(altRows.length) {
+        const altInsCtrl = new AbortController();
+        const altInsTimer = setTimeout(()=>altInsCtrl.abort(), 10000);
+        try {
+          const altInsResp = await fetch(SURL+'/rest/v1/product_barcodes',
+            {method:'POST',headers:{...altH,'Prefer':'return=minimal'},body:JSON.stringify(altRows),signal:altInsCtrl.signal});
+          clearTimeout(altInsTimer);
+          if(!altInsResp.ok){ const t=await altInsResp.text(); showSaveErr('Alt barcode save failed: '+t); return; }
+        } catch(e) {
+          clearTimeout(altInsTimer);
+          showSaveErr(e.name==='AbortError'?'Alt barcode save timed out':'Alt barcode save error: '+e.message);
           return;
         }
       }
@@ -1748,7 +1842,21 @@ function stopCam(){
 async function lookupBC() {
   const bc=document.getElementById('si').value.trim();
   if(!bc)return;
-  const prod=AP.find(p=>p.barcode===bc);
+  // Check primary barcode first
+  let prod=AP.find(p=>p.barcode===bc);
+  // If not found, check alternate barcodes table
+  if(!prod) {
+    try {
+      const altResp = await fetch(
+        SURL+'/rest/v1/product_barcodes?barcode=eq.'+encodeURIComponent(bc)+'&select=product_id',
+        { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
+      );
+      if(altResp.ok) {
+        const altRows = await altResp.json();
+        if(altRows.length) prod = AP.find(p=>p.id===altRows[0].product_id||p.product_id===altRows[0].product_id);
+      }
+    } catch(e) {}
+  }
   const re=document.getElementById('sres');
   if(!prod){
     // ── Step 1: Check supplier_skus for a bulk pack barcode match ────────────
