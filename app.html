@@ -1291,7 +1291,7 @@ function setProdType(type) {
   // Show/hide sections
   document.getElementById('section-variety').style.display = type==='variety'    ? 'block' : 'none';
   document.getElementById('section-base').style.display    = type==='bulk'       ? 'block' : 'none';
-  document.getElementById('section-skus').style.display    = (type==='bulk'||type==='variety') ? 'block' : 'none';
+  document.getElementById('section-skus').style.display    = 'none'; // top barcode field covers this
   document.getElementById('section-altbc').style.display   = type==='individual' ? 'block' : 'none';
   // Auto-add first component line for variety if empty
   if(type==='variety' && VP_LINES.length===0) addVPLine();
