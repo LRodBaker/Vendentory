@@ -1406,6 +1406,8 @@ function baseSelect(lineIdx, matchIdx) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+async function saveProd() {
   const nm=document.getElementById('pn').value.trim();
   const errDiv=document.getElementById('mprod-err');
   function showSaveErr(msg){ if(errDiv){errDiv.textContent=msg;errDiv.style.display='block';} toast(msg,'err'); }
