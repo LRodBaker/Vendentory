@@ -756,7 +756,7 @@ function setDates() {
 }
 
 function showLogin() { document.getElementById('ls').style.display='block'; document.getElementById('app').style.display='none'; }
-function showApp() { document.getElementById('ls').style.display='none'; document.getElementById('app').style.display='block'; loadAll(); nav('dashboard'); }
+function showApp() { document.getElementById('ls').style.display='none'; document.getElementById('app').style.display='block'; loadAll(); let _lp='dashboard'; try { _lp=localStorage.getItem('vd_last_page')||'dashboard'; } catch(e){} nav(_lp); }
 
 async function doLogin() {
   const e=document.getElementById('le').value.trim(), p=document.getElementById('lp').value;
@@ -810,6 +810,7 @@ function nav(pg) {
   if(ni) ni.classList.add('active');
   document.getElementById('pt').textContent=PTITLES[pg]||pg;
   closeSB();
+  try { localStorage.setItem('vd_last_page', pg); } catch(e) {}
   if(pg==='dashboard') loadDash();
   if(pg==='products'){ loadProds2().then(()=>renderProds()).catch(()=>renderProds()); }
   if(pg==='adjustments'){loadRAJ();setDates();}
@@ -818,7 +819,7 @@ function nav(pg) {
     ['rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
     loadWeekOpts();
   }
-  if(pg==='purchases') {     loadPurHistory();     // ── Auto-fill from bulk barcode scan (_pendingReceive set by Scan page) ──     if(window._pendingReceive) {       const pr = window._pendingReceive;       window._pendingReceive = null; // consume so it only fires once       // Find the product in local cache       const prod = AP.find(p => p.id === pr.product_id || p.product_id === pr.product_id);       if(prod) {         // Add a pre-filled line item         const unitCost = parseFloat(prod.average_cost) || 0;         const units = pr.units || parseInt(prod.units_per_case) || 1;         PL.push({           product_id: prod.id || prod.product_id,           name: prod.name,           cases: 1,           cost_per_case: unitCost * units,           units: units,           unit_cost: unitCost,           total: units * unitCost         });         renderPL();         toast('Line pre-filled from scan: ' + prod.name, 'ok');       }     }   }
+  if(pg==='purchases') loadPurHistory();
   if(pg==='settings'){loadSets();loadProf();}
   if(pg==='imports') loadIH();
 }
