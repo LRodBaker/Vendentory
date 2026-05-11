@@ -818,7 +818,7 @@ function nav(pg) {
     ['rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
     loadWeekOpts();
   }
-  if(pg==='purchases') loadPurHistory();
+  if(pg==='purchases') {     loadPurHistory();     // ── Auto-fill from bulk barcode scan (_pendingReceive set by Scan page) ──     if(window._pendingReceive) {       const pr = window._pendingReceive;       window._pendingReceive = null; // consume so it only fires once       // Find the product in local cache       const prod = AP.find(p => p.id === pr.product_id || p.product_id === pr.product_id);       if(prod) {         // Add a pre-filled line item         const unitCost = parseFloat(prod.average_cost) || 0;         const units = pr.units || parseInt(prod.units_per_case) || 1;         PL.push({           product_id: prod.id || prod.product_id,           name: prod.name,           cases: 1,           cost_per_case: unitCost * units,           units: units,           unit_cost: unitCost,           total: units * unitCost         });         renderPL();         toast('Line pre-filled from scan: ' + prod.name, 'ok');       }     }   }
   if(pg==='settings'){loadSets();loadProf();}
   if(pg==='imports') loadIH();
 }
