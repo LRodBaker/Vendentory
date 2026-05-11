@@ -633,9 +633,12 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
     </div>
 
     <div id="mprod-err" style="display:none;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px;margin-top:10px;font-size:13px;color:#991b1b"></div>
-    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-      <button class="btn btn-p" onclick="saveProd()">Save product</button>
-      <button class="btn" onclick="closeM('mprod')">Cancel</button>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;justify-content:space-between;align-items:center">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-p" onclick="saveProd()">Save product</button>
+        <button class="btn" onclick="closeM('mprod')">Cancel</button>
+      </div>
+      <button class="btn btn-d" id="del-prod-btn" style="display:none" onclick="deleteProd()">&#128465; Delete product</button>
     </div>
   </div>
 </div>
@@ -1040,6 +1043,7 @@ function pdEditClicked() {
 
 async function openAP() {
   document.getElementById('mpt').textContent='Add product';
+  document.getElementById('del-prod-btn').style.display='none';
   document.getElementById('peid').value='';
   ['pb','pn','pco','pbr','psz','psu2'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('pupc').value='1';
@@ -1083,6 +1087,7 @@ async function openEP(id) {
   if(!AC.length) await loadCats();
   if(!AS2.length) await loadSups();
   document.getElementById('mpt').textContent = 'Edit product';
+  document.getElementById('del-prod-btn').style.display='inline-flex';
   document.getElementById('peid').value = p.id;
   document.getElementById('pb').value = p.barcode||'';
   document.getElementById('pn').value = p.name||'';
@@ -1777,6 +1782,33 @@ async function saveProd() {
     if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='Save product';}
   }
 }
+
+// ── DELETE PRODUCT ──────────────────────────────────────────────────────────
+async function deleteProd() {
+  const eid = document.getElementById('peid').value;
+  if(!eid) return;
+  const p = AP.find(x => x.id === eid || x.product_id === eid);
+  const nm = p ? p.name : 'this product';
+  if(!confirm('Delete "' + nm + '"?\n\nThis will permanently remove the product and all its barcodes, SKUs, and component links. Inventory transactions and purchase history will be preserved.\n\nThis cannot be undone.')) return;
+  showL('Deleting...');
+  const tok = await getAuthToken();
+  const h = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+  // Delete child records first (CASCADE may handle some, but be explicit)
+  await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+eid, {method:'DELETE',headers:h});
+  await fetch(SURL+'/rest/v1/product_components?component_product_id=eq.'+eid, {method:'DELETE',headers:h});
+  await fetch(SURL+'/rest/v1/supplier_skus?product_id=eq.'+eid, {method:'DELETE',headers:h});
+  await fetch(SURL+'/rest/v1/product_barcodes?product_id=eq.'+eid, {method:'DELETE',headers:h});
+  // Delete the product itself
+  const delResp = await fetch(SURL+'/rest/v1/products?id=eq.'+eid, {method:'DELETE',headers:h});
+  hideL();
+  if(!delResp.ok) { toast('Delete failed — check console','err'); return; }
+  closeM('mprod');
+  // Remove from local cache
+  AP = AP.filter(x => x.id !== eid && x.product_id !== eid);
+  renderProds();
+  toast('"'+nm+'" deleted','ok');
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ── CAMERA BARCODE SCANNER (html5-qrcode — works on iOS Safari & Chrome) ───
 let _html5Scanner=null;
