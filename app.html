@@ -299,6 +299,11 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
         <div class="page" id="page-products">
           <div class="fbar">
             <div class="sw"><input placeholder="Search name, barcode, or code..." id="psrch" oninput="renderProds()"></div>
+            <select class="fs" style="width:auto" id="pclf" onchange="renderProds()">
+              <option value="">All Products</option>
+              <option value="individual">Individual</option>
+              <option value="bulk">Bulk Packs</option>
+            </select>
             <select class="fs" style="width:auto" id="pcf" onchange="renderProds()"><option value="">All Categories</option></select>
             <select class="fs" style="width:auto" id="psf" onchange="renderProds()"><option value="">All Status</option><option value="REORDER">Reorder needed</option><option value="OK">OK</option></select>
             <button class="btn" onclick="nav('scan')">&#128247; Scan</button>
@@ -999,9 +1004,17 @@ function tLbl(t){return{purchase_receipt:'Purchase received',sales_consumption:'
 
 function renderProds() {
   const q=(document.getElementById('psrch')?.value||'').toLowerCase();
+  const clf=document.getElementById('pclf')?.value||'';
   const cf=document.getElementById('pcf')?.value||'';
   const sf=document.getElementById('psf')?.value||'';
-  const f=AP.filter(p=>(!q||p.name.toLowerCase().includes(q)||(p.barcode||'').includes(q)||(p.product_code||'').toLowerCase().includes(q))&&(!cf||p.category_id===cf)&&(!sf||p.stock_status===sf));
+  const f=AP.filter(p=>{
+    if(q&&!p.name.toLowerCase().includes(q)&&!(p.barcode||'').includes(q)&&!(p.product_code||'').toLowerCase().includes(q)) return false;
+    if(cf&&p.category_id!==cf) return false;
+    if(sf&&p.stock_status!==sf) return false;
+    if(clf==='individual'&&(p.is_variety_pack||parseInt(p.units_per_case||1)>1)) return false;
+    if(clf==='bulk'&&(!p.is_variety_pack&&parseInt(p.units_per_case||1)<=1)) return false;
+    return true;
+  });
   const g=document.getElementById('pgrid');
   if(!f.length){g.innerHTML='<div class="tm">No products found</div>';return;}
   // Use data-pid attribute — never put UUIDs inside onclick strings
@@ -1306,7 +1319,7 @@ function setProdType(type) {
   // Show/hide sections
   document.getElementById('section-variety').style.display = type==='variety'    ? 'block' : 'none';
   document.getElementById('section-base').style.display    = type==='bulk'       ? 'block' : 'none';
-  document.getElementById('section-skus').style.display    = 'none'; // top barcode field covers this
+  document.getElementById('section-skus').style.display    = 'none';
   document.getElementById('section-altbc').style.display   = type==='individual' ? 'block' : 'none';
   // Auto-add first component line for variety if empty
   if(type==='variety' && VP_LINES.length===0) addVPLine();
