@@ -548,42 +548,71 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
   <div class="modal" style="max-width:600px">
     <div class="modal-title" id="mpt">Add product</div>
     <button class="mc" onclick="closeM('mprod')">&#10005;</button>
-    <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:14px">
-      <div class="iu" onclick="document.getElementById('pii').click()">
-        <img id="pip" src="" style="display:none">
-        <div id="pph" style="text-align:center"><div style="font-size:20px">&#128247;</div><div style="font-size:10px;color:var(--gray-400);margin-top:2px">Add photo</div></div>
-      </div>
-      <input type="file" id="pii" accept="image/*" style="display:none" onchange="prevPI(this)">
-      <div style="flex:1">
-        <div class="fg"><label class="fl">Barcode</label><div style="display:flex;gap:6px"><input class="fi" id="pb" placeholder="UPC / EAN — scan or type..."><button class="btn btn-sm" title="Click then scan with Bluetooth/USB scanner" onclick="document.getElementById('pb').focus();document.getElementById('pb').select()">&#128247;</button></div></div>
-        <div class="fg"><label class="fl">Product name *</label><input class="fi" id="pn" placeholder="e.g. Monster Zero Ultra Can 16 oz"></div>
-      </div>
-    </div>
-    <div class="g2">
-      <div class="fg"><label class="fl">Product code</label><input class="fi" id="pco" placeholder="e.g. 1003"></div>
-      <div class="fg"><label class="fl">Category</label><select class="fs" id="pca"></select></div>
-      <div class="fg"><label class="fl">Brand</label><input class="fi" id="pbr" placeholder="e.g. Monster"></div>
-      <div class="fg"><label class="fl">Supplier</label><select class="fs" id="psu"></select></div>
-      <div class="fg"><label class="fl">Size value</label><input class="fi" id="psz" placeholder="16"></div>
-      <div class="fg"><label class="fl">Size unit</label><input class="fi" id="psu2" placeholder="oz, ml, g"></div>
-      <div class="fg"><label class="fl">Units per case</label><input class="fi" type="number" id="pupc" value="1" min="1"></div>
-      <div class="fg"><label class="fl">Reorder point</label><input class="fi" type="number" id="prp" value="0" min="0"></div>
-      <div class="fg"><label class="fl">Order up to</label><input class="fi" type="number" id="pou" value="0" min="0"></div>
-      <div class="fg"><label class="fl">Last cost ($)</label><input class="fi" type="number" id="plc" value="0" step="0.01"></div>
-      <div class="fg"><label class="fl">Selling price ($)</label><input class="fi" type="number" id="psp" value="0" step="0.01"></div>
-      <div class="fg"><label class="fl">Active</label><select class="fs" id="pac"><option value="true">Yes</option><option value="false">No</option></select></div>
-    </div>
-    <input type="hidden" id="peid">
-    <input type="hidden" id="piurl">
 
-    <!-- VARIETY PACK SECTION -->
-    <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
-      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;font-size:13px;font-weight:600;color:var(--gray-700)">
-        <input type="checkbox" id="pIsVariety" onchange="toggleVarietySection()" style="width:16px;height:16px;accent-color:var(--teal);cursor:pointer">
-        This is a variety pack — explode into individual products when received
-      </label>
-      <div id="variety-section" style="display:none;margin-top:12px">
-        <div style="font-size:12px;color:var(--gray-400);margin-bottom:8px">Define what individual products are inside each pack. When you receive this pack in a Purchase, inventory will be added to each component instead of the pack.</div>
+    <!-- PRODUCT TYPE SELECTOR -->
+    <div id="prod-type-bar" style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:var(--gray-600);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Product type</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <button id="ptype-individual" onclick="setProdType('individual')" class="btn" style="flex-direction:column;gap:4px;padding:12px 8px;text-align:center;border-radius:10px">
+          <div style="font-size:20px">&#127968;</div>
+          <div style="font-size:12px;font-weight:600">Individual</div>
+          <div style="font-size:10px;color:var(--gray-400);line-height:1.3">Single item sold<br>from the machine</div>
+        </button>
+        <button id="ptype-bulk" onclick="setProdType('bulk')" class="btn" style="flex-direction:column;gap:4px;padding:12px 8px;text-align:center;border-radius:10px">
+          <div style="font-size:20px">&#128230;</div>
+          <div style="font-size:12px;font-weight:600">Bulk Pack</div>
+          <div style="font-size:10px;color:var(--gray-400);line-height:1.3">Case/box bought<br>from supplier</div>
+        </button>
+        <button id="ptype-variety" onclick="setProdType('variety')" class="btn" style="flex-direction:column;gap:4px;padding:12px 8px;text-align:center;border-radius:10px">
+          <div style="font-size:20px">&#127873;</div>
+          <div style="font-size:12px;font-weight:600">Variety Pack</div>
+          <div style="font-size:10px;color:var(--gray-400);line-height:1.3">Mixed pack that<br>splits into items</div>
+        </button>
+      </div>
+    </div>
+
+    <!-- FIELDS (shown after type is chosen) -->
+    <div id="prod-fields" style="display:none">
+
+      <!-- Photo + barcode + name — always shown -->
+      <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:14px">
+        <div class="iu" onclick="document.getElementById('pii').click()">
+          <img id="pip" src="" style="display:none">
+          <div id="pph" style="text-align:center"><div style="font-size:20px">&#128247;</div><div style="font-size:10px;color:var(--gray-400);margin-top:2px">Add photo</div></div>
+        </div>
+        <input type="file" id="pii" accept="image/*" style="display:none" onchange="prevPI(this)">
+        <div style="flex:1">
+          <div class="fg"><label class="fl">Barcode</label><div style="display:flex;gap:6px"><input class="fi" id="pb" placeholder="UPC / EAN — scan or type..."><button class="btn btn-sm" title="Scan with Bluetooth/USB scanner" onclick="document.getElementById('pb').focus();document.getElementById('pb').select()">&#128247;</button></div></div>
+          <div class="fg"><label class="fl">Product name *</label><input class="fi" id="pn" placeholder="e.g. Monster Zero Ultra Can 16 oz"></div>
+        </div>
+      </div>
+
+      <!-- Common fields grid -->
+      <div class="g2">
+        <div class="fg"><label class="fl">Product code</label><input class="fi" id="pco" placeholder="e.g. 1003"></div>
+        <div class="fg"><label class="fl">Category</label><select class="fs" id="pca"></select></div>
+        <div class="fg"><label class="fl">Brand</label><input class="fi" id="pbr" placeholder="e.g. Monster"></div>
+        <div class="fg"><label class="fl">Supplier</label><select class="fs" id="psu"></select></div>
+        <div class="fg"><label class="fl">Size value</label><input class="fi" id="psz" placeholder="16"></div>
+        <div class="fg"><label class="fl">Size unit</label><input class="fi" id="psu2" placeholder="oz, ml, g"></div>
+        <!-- Units per case — bulk & variety only -->
+        <div class="fg" id="fg-upc" style="display:none"><label class="fl">Units per case</label><input class="fi" type="number" id="pupc" value="1" min="1"></div>
+        <!-- Reorder + order-up-to — individual only -->
+        <div class="fg" id="fg-rp" style="display:none"><label class="fl">Reorder point</label><input class="fi" type="number" id="prp" value="0" min="0"></div>
+        <div class="fg" id="fg-ou" style="display:none"><label class="fl">Order up to</label><input class="fi" type="number" id="pou" value="0" min="0"></div>
+        <!-- Cost + price — individual only -->
+        <div class="fg" id="fg-lc" style="display:none"><label class="fl">Last cost ($)</label><input class="fi" type="number" id="plc" value="0" step="0.01"></div>
+        <div class="fg" id="fg-sp" style="display:none"><label class="fl">Selling price ($)</label><input class="fi" type="number" id="psp" value="0" step="0.01"></div>
+        <div class="fg"><label class="fl">Active</label><select class="fs" id="pac"><option value="true">Yes</option><option value="false">No</option></select></div>
+      </div>
+      <input type="hidden" id="peid">
+      <input type="hidden" id="piurl">
+      <input type="checkbox" id="pIsVariety" style="display:none">
+
+      <!-- VARIETY PACK COMPONENTS — variety only -->
+      <div id="section-variety" style="display:none;margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
+        <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:4px">Variety Pack Components</div>
+        <div style="font-size:12px;color:var(--gray-400);margin-bottom:8px">Define the individual products inside each pack. Receiving this pack will add inventory to each component.</div>
         <div style="background:var(--gray-50);border-radius:10px;padding:12px">
           <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;margin-bottom:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);padding:0 4px">
             <div>Component product</div><div>Qty per pack</div><div></div>
@@ -592,55 +621,56 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
           <button class="btn btn-sm" style="margin-top:8px" onclick="addVPLine()">+ Add component</button>
         </div>
       </div>
-    </div>
 
-    <!-- BASE PRODUCTS SECTION -->
-    <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
-      <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:4px">Base Products</div>
-      <div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">If this is a bulk pack, link the individual base product(s) it contains. When you receive this bulk pack, inventory will be credited to the base product. You can also enter a base UPC to create a new base product on the spot.</div>
-      <div style="background:var(--gray-50);border-radius:10px;padding:12px">
-        <div style="display:grid;grid-template-columns:1fr 80px 28px;gap:6px;margin-bottom:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);padding:0 2px">
-          <div>Base product</div><div>Qty/case</div><div></div>
+      <!-- BASE PRODUCTS — bulk only -->
+      <div id="section-base" style="display:none;margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
+        <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:4px">Base Products</div>
+        <div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">Link the individual product(s) this case contains. Receiving this bulk pack will credit inventory to the base product.</div>
+        <div style="background:var(--gray-50);border-radius:10px;padding:12px">
+          <div style="display:grid;grid-template-columns:1fr 80px 28px;gap:6px;margin-bottom:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);padding:0 2px">
+            <div>Base product</div><div>Qty/case</div><div></div>
+          </div>
+          <div id="base-lines"></div>
+          <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+            <button class="btn btn-sm" onclick="addBaseLine()">+ Link existing product</button>
+            <button class="btn btn-sm" onclick="addBaseLineNew()">+ Create new base product</button>
+          </div>
         </div>
-        <div id="base-lines"></div>
-        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
-          <button class="btn btn-sm" onclick="addBaseLine()">+ Link existing product</button>
-          <button class="btn btn-sm" onclick="addBaseLineNew()">+ Create new base product</button>
+      </div>
+
+      <!-- BULK PACK BARCODES — bulk & variety -->
+      <div id="section-skus" style="display:none;margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
+        <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:4px">Bulk Pack Barcodes</div>
+        <div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">The barcode on the bulk box/case from your supplier. Scanning it at receiving will auto-link to this product.</div>
+        <div style="background:var(--gray-50);border-radius:10px;padding:12px">
+          <div style="display:grid;grid-template-columns:1.4fr 1fr 1.2fr 28px;gap:6px;margin-bottom:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);padding:0 2px">
+            <div>Bulk barcode</div><div>Supplier</div><div>Note</div><div></div>
+          </div>
+          <div id="sku-lines"></div>
+          <button class="btn btn-sm" style="margin-top:8px" onclick="addSKULine()">+ Add bulk barcode</button>
         </div>
       </div>
-    </div>
 
-    <!-- SUPPLIER PACK SIZES SECTION (bulk barcode for scan-to-receive) -->
-    <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
-      <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:4px">Bulk Pack Barcodes</div>
-      <div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">Enter the barcode on the bulk box/case you buy. Scanning it at receiving will auto-link to this product.</div>
-      <div style="background:var(--gray-50);border-radius:10px;padding:12px">
-        <div style="display:grid;grid-template-columns:1.4fr 1fr 1.2fr 28px;gap:6px;margin-bottom:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);padding:0 2px">
-          <div>Bulk barcode</div><div>Supplier</div><div>Note</div><div></div>
+      <!-- ALTERNATE BARCODES — individual only -->
+      <div id="section-altbc" style="display:none;margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
+        <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:4px">Alternate Barcodes</div>
+        <div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">Extra barcodes that all point to this product. Scanning any of them counts toward this product's inventory.</div>
+        <div style="background:var(--gray-50);border-radius:10px;padding:12px">
+          <div id="alt-barcode-lines"></div>
+          <button class="btn btn-sm" style="margin-top:8px" onclick="addAltBarcode()">+ Add alternate barcode</button>
         </div>
-        <div id="sku-lines"></div>
-        <button class="btn btn-sm" style="margin-top:8px" onclick="addSKULine()">+ Add bulk barcode</button>
       </div>
-    </div>
 
-    <!-- ALTERNATE BARCODES SECTION -->
-    <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
-      <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:4px">Alternate Barcodes</div>
-      <div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">If this product has more than one individual barcode (e.g. two varieties in the same case), add them here. Scanning any of them will count toward this product's inventory.</div>
-      <div style="background:var(--gray-50);border-radius:10px;padding:12px">
-        <div id="alt-barcode-lines"></div>
-        <button class="btn btn-sm" style="margin-top:8px" onclick="addAltBarcode()">+ Add alternate barcode</button>
+      <div id="mprod-err" style="display:none;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px;margin-top:10px;font-size:13px;color:#991b1b"></div>
+      <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;justify-content:space-between;align-items:center">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-p" onclick="saveProd()">Save product</button>
+          <button class="btn" onclick="closeM('mprod')">Cancel</button>
+        </div>
+        <button class="btn btn-d" id="del-prod-btn" style="display:none" onclick="deleteProd()">&#128465; Delete product</button>
       </div>
-    </div>
 
-    <div id="mprod-err" style="display:none;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px;margin-top:10px;font-size:13px;color:#991b1b"></div>
-    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;justify-content:space-between;align-items:center">
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-p" onclick="saveProd()">Save product</button>
-        <button class="btn" onclick="closeM('mprod')">Cancel</button>
-      </div>
-      <button class="btn btn-d" id="del-prod-btn" style="display:none" onclick="deleteProd()">&#128465; Delete product</button>
-    </div>
+    </div><!-- /prod-fields -->
   </div>
 </div>
 
@@ -1046,6 +1076,13 @@ async function openAP() {
   document.getElementById('mpt').textContent='Add product';
   document.getElementById('del-prod-btn').style.display='none';
   document.getElementById('peid').value='';
+  // Reset type selector
+  _prodType='';
+  ['individual','bulk','variety'].forEach(t=>{
+    const btn=document.getElementById('ptype-'+t);
+    if(btn){btn.style.background='var(--white)';btn.style.color='var(--gray-900)';btn.style.borderColor='var(--border)';}
+  });
+  document.getElementById('prod-fields').style.display='none';
   ['pb','pn','pco','pbr','psz','psu2'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('pupc').value='1';
   document.getElementById('prp').value='0';
@@ -1060,7 +1097,7 @@ async function openAP() {
   // Reset variety pack
   document.getElementById('pIsVariety').checked = false;
   VP_LINES = [];
-  document.getElementById('variety-section').style.display='none';
+  document.getElementById('section-variety').style.display='none';
   document.getElementById('vp-lines').innerHTML='';
   // Reset supplier SKUs
   SKU_LINES = [];
@@ -1090,6 +1127,9 @@ async function openEP(id) {
   document.getElementById('mpt').textContent = 'Edit product';
   document.getElementById('del-prod-btn').style.display='inline-flex';
   document.getElementById('peid').value = p.id;
+  // Auto-detect product type and reveal correct fields
+  const _detectedType = p.is_variety_pack ? 'variety' : (parseInt(p.units_per_case||1)>1 ? 'bulk' : 'individual');
+  setProdType(_detectedType);
   document.getElementById('pb').value = p.barcode||'';
   document.getElementById('pn').value = p.name||'';
   document.getElementById('pco').value = p.product_code||'';
@@ -1119,7 +1159,7 @@ async function openEP(id) {
   // Load variety pack components — use direct fetch() to avoid JS client hang
   VP_LINES = [];
   document.getElementById('pIsVariety').checked = !!p.is_variety_pack;
-  document.getElementById('variety-section').style.display = p.is_variety_pack ? 'block' : 'none';
+  // type auto-detected by setProdType() in openEP
   if(p.is_variety_pack) {
     const compResp = await fetch(
       SURL+'/rest/v1/product_components?pack_product_id=eq.'+p.id+'&select=id,component_product_id,qty_per_pack,products!product_components_component_product_id_fkey(id,name,barcode)&order=id',
@@ -1224,9 +1264,43 @@ function prevPI(input) {
 
 // ── VARIETY PACK UI ──────────────────────────────────────────────────────────
 
+// ── PRODUCT TYPE SELECTOR ────────────────────────────────────────────────────
+let _prodType = ''; // 'individual' | 'bulk' | 'variety'
+
+function setProdType(type) {
+  _prodType = type;
+  // Highlight selected button
+  ['individual','bulk','variety'].forEach(t => {
+    const btn = document.getElementById('ptype-'+t);
+    if(!btn) return;
+    btn.style.background = t===type ? 'var(--teal)' : 'var(--white)';
+    btn.style.color = t===type ? '#fff' : 'var(--gray-900)';
+    btn.style.borderColor = t===type ? 'var(--teal)' : 'var(--border)';
+  });
+  // Show the fields panel
+  document.getElementById('prod-fields').style.display = 'block';
+  // Sync hidden checkbox for saveProd() compatibility
+  const isVariety = type === 'variety';
+  document.getElementById('pIsVariety').checked = isVariety;
+  // Show/hide field groups
+  document.getElementById('fg-upc').style.display    = (type==='bulk'||type==='variety') ? '' : 'none';
+  document.getElementById('fg-rp').style.display     = type==='individual' ? '' : 'none';
+  document.getElementById('fg-ou').style.display     = type==='individual' ? '' : 'none';
+  document.getElementById('fg-lc').style.display     = type==='individual' ? '' : 'none';
+  document.getElementById('fg-sp').style.display     = type==='individual' ? '' : 'none';
+  // Show/hide sections
+  document.getElementById('section-variety').style.display = type==='variety'    ? 'block' : 'none';
+  document.getElementById('section-base').style.display    = type==='bulk'       ? 'block' : 'none';
+  document.getElementById('section-skus').style.display    = (type==='bulk'||type==='variety') ? 'block' : 'none';
+  document.getElementById('section-altbc').style.display   = type==='individual' ? 'block' : 'none';
+  // Auto-add first component line for variety if empty
+  if(type==='variety' && VP_LINES.length===0) addVPLine();
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 function toggleVarietySection() {
+// Legacy — kept for compatibility; setProdType() is the main driver now
   const checked = document.getElementById('pIsVariety').checked;
-  document.getElementById('variety-section').style.display = checked ? 'block' : 'none';
   if(checked && VP_LINES.length === 0) addVPLine();
 }
 
