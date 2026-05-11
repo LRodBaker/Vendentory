@@ -593,16 +593,32 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
       </div>
     </div>
 
-    <!-- SUPPLIER PACK SIZES SECTION -->
+    <!-- BASE PRODUCTS SECTION -->
     <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
-      <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:4px">Supplier Pack Sizes</div>
-      <div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">Scan or enter the bulk/case barcode for each pack you buy. When you scan that barcode at receiving, the app will automatically link it to this product and pre-fill the unit count.</div>
+      <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:4px">Base Products</div>
+      <div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">If this is a bulk pack, link the individual base product(s) it contains. When you receive this bulk pack, inventory will be credited to the base product. You can also enter a base UPC to create a new base product on the spot.</div>
       <div style="background:var(--gray-50);border-radius:10px;padding:12px">
-        <div style="display:grid;grid-template-columns:1.4fr .7fr 1fr 1.2fr 28px;gap:6px;margin-bottom:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);padding:0 2px">
-          <div>Bulk pack barcode</div><div>Units/case</div><div>Supplier</div><div>Note</div><div></div>
+        <div style="display:grid;grid-template-columns:1fr 80px 28px;gap:6px;margin-bottom:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);padding:0 2px">
+          <div>Base product</div><div>Qty/case</div><div></div>
+        </div>
+        <div id="base-lines"></div>
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="addBaseLine()">+ Link existing product</button>
+          <button class="btn btn-sm" onclick="addBaseLineNew()">+ Create new base product</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUPPLIER PACK SIZES SECTION (bulk barcode for scan-to-receive) -->
+    <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
+      <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:4px">Bulk Pack Barcodes</div>
+      <div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">Enter the barcode on the bulk box/case you buy. Scanning it at receiving will auto-link to this product.</div>
+      <div style="background:var(--gray-50);border-radius:10px;padding:12px">
+        <div style="display:grid;grid-template-columns:1.4fr 1fr 1.2fr 28px;gap:6px;margin-bottom:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);padding:0 2px">
+          <div>Bulk barcode</div><div>Supplier</div><div>Note</div><div></div>
         </div>
         <div id="sku-lines"></div>
-        <button class="btn btn-sm" style="margin-top:8px" onclick="addSKULine()">+ Add pack size</button>
+        <button class="btn btn-sm" style="margin-top:8px" onclick="addSKULine()">+ Add bulk barcode</button>
       </div>
     </div>
 
@@ -652,7 +668,8 @@ const SKEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZ
 let sb = null;
 let CU = null, CP = null, AP = [], AC = [], AS2 = [], PL = [], adjP = null, impRows = [], rScans = [], curRT = 'weekly';
 let VP_LINES = []; // variety pack component lines for the product edit modal
-let SKU_LINES = []; // supplier pack size lines for the product edit modal
+let SKU_LINES = []; // bulk barcode lines for the product edit modal
+let BASE_LINES = []; // base product links for bulk products
 
 // ── Get current auth token (session token if logged in, anon key as fallback) ──
 let _cachedToken = null;
@@ -810,6 +827,7 @@ function nav(pg) {
   if(ni) ni.classList.add('active');
   document.getElementById('pt').textContent=PTITLES[pg]||pg;
   closeSB();
+  try { localStorage.setItem('vd_last_page', pg); } catch(e) {}
   try { localStorage.setItem('vd_last_page', pg); } catch(e) {}
   if(pg==='dashboard') loadDash();
   if(pg==='products'){ loadProds2().then(()=>renderProds()).catch(()=>renderProds()); }
@@ -1020,6 +1038,9 @@ async function openAP() {
   // Reset supplier SKUs
   SKU_LINES = [];
   document.getElementById('sku-lines').innerHTML='';
+  // Reset base product links
+  BASE_LINES = [];
+  document.getElementById('base-lines').innerHTML='';
   // Await so dropdowns are populated before modal opens — prevents stale/blank selects
   await Promise.all([loadCats(), loadSups()]);
   // Ensure dropdowns reset to blank for a fresh Add
@@ -1103,6 +1124,26 @@ async function openEP(id) {
         description: s.description||''
       }));
       renderSKULines();
+    }
+  }
+  // Load base product links (stored in product_components, separate from variety pack)
+  BASE_LINES = [];
+  document.getElementById('base-lines').innerHTML='';
+  if(p.id && !p.is_variety_pack) {
+    const baseResp = await fetch(
+      SURL+'/rest/v1/product_components?pack_product_id=eq.'+p.id+'&select=id,component_product_id,qty_per_pack,products!product_components_component_product_id_fkey(id,name,barcode)&order=id',
+      { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
+    );
+    if(baseResp.ok) {
+      const baseRows = await baseResp.json();
+      BASE_LINES = baseRows.map(r=>({
+        db_id: r.id,
+        product_id: r.component_product_id,
+        name: r.products?.name||'',
+        qty_per_case: r.qty_per_pack,
+        _mode: 'link'
+      }));
+      renderBaseLines();
     }
   }
   openM('mprod');
@@ -1235,31 +1276,26 @@ function removeSKULine(i) {
 function renderSKULines() {
   const c = document.getElementById('sku-lines');
   if(!SKU_LINES.length) {
-    c.innerHTML='<div class="tm" style="font-size:12px;padding:6px 0">No pack sizes yet. Click "+ Add pack size" to link a bulk barcode.</div>';
+    c.innerHTML='<div class="tm" style="font-size:12px;padding:6px 0">No bulk barcodes yet. Click "+ Add bulk barcode" to link a case barcode.</div>';
     return;
   }
   const supOpts = AS2.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
   c.innerHTML = SKU_LINES.map((s,i) => `
-    <div style="display:grid;grid-template-columns:1.4fr .7fr 1fr 1.2fr 28px;gap:6px;align-items:center;margin-bottom:6px">
+    <div style="display:grid;grid-template-columns:1.4fr 1fr 1.2fr 28px;gap:6px;align-items:center;margin-bottom:6px">
       <input class="fi sku-bc-input" style="font-size:12px;padding:6px 9px" placeholder="Scan or type bulk barcode"
         value="${s.bulk_barcode.replace(/"/g,'&quot;')}"
         oninput="SKU_LINES[${i}].bulk_barcode=this.value"
         title="Scan the barcode on the bulk/case package">
-      <input class="fi" style="font-size:12px;padding:6px 9px;text-align:center" type="number" min="1"
-        value="${s.units_per_case}"
-        oninput="SKU_LINES[${i}].units_per_case=parseInt(this.value)||1"
-        placeholder="Units">
       <select class="fs" style="font-size:12px;padding:6px 9px"
         onchange="SKU_LINES[${i}].supplier_id=this.value">
-        <option value="">Any</option>
+        <option value="">Any supplier</option>
         ${supOpts}
       </select>
-      <input class="fi" style="font-size:12px;padding:6px 9px" placeholder="e.g. Sam's 50-pk"
+      <input class="fi" style="font-size:12px;padding:6px 9px" placeholder="e.g. Sam's 24-pk"
         value="${s.description.replace(/"/g,'&quot;')}"
         oninput="SKU_LINES[${i}].description=this.value">
       <button style="background:var(--red-light);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;color:var(--red-mid);font-size:14px;display:flex;align-items:center;justify-content:center" onclick="removeSKULine(${i})">&#10005;</button>
     </div>`).join('');
-  // Set supplier selects to current values (can't do in template due to selected attr)
   SKU_LINES.forEach((s,i) => {
     const sel = c.querySelectorAll('select')[i];
     if(sel && s.supplier_id) sel.value = s.supplier_id;
@@ -1268,7 +1304,108 @@ function renderSKULines() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function saveProd() {
+// ── BASE PRODUCTS UI (bulk product → individual base unit links) ─────────────
+
+function addBaseLine() {
+  BASE_LINES.push({ product_id:'', name:'', qty_per_case:1, db_id:null, _new_barcode:'', _new_name:'' });
+  renderBaseLines();
+  setTimeout(()=>{
+    const inputs = document.querySelectorAll('.base-search-input');
+    if(inputs.length) inputs[inputs.length-1].focus();
+  }, 50);
+}
+
+function addBaseLineNew() {
+  // Add a line in "create new" mode — shows barcode + name fields instead of search
+  BASE_LINES.push({ product_id:'', name:'', qty_per_case:1, db_id:null, _mode:'create', _new_barcode:'', _new_name:'' });
+  renderBaseLines();
+  setTimeout(()=>{
+    const inputs = document.querySelectorAll('.base-newbc-input');
+    if(inputs.length) inputs[inputs.length-1].focus();
+  }, 50);
+}
+
+function removeBaseLine(i) {
+  BASE_LINES.splice(i, 1);
+  renderBaseLines();
+}
+
+const _baseMatches = {};
+
+function renderBaseLines() {
+  const c = document.getElementById('base-lines');
+  if(!BASE_LINES.length) {
+    c.innerHTML='<div class="tm" style="font-size:12px;padding:6px 0">No base products linked. Click a button below to link or create one.</div>';
+    return;
+  }
+  c.innerHTML = BASE_LINES.map((l,i) => {
+    if(l._mode === 'create') {
+      return `
+        <div style="display:grid;grid-template-columns:1fr 1fr 80px 28px;gap:6px;align-items:center;margin-bottom:6px">
+          <input class="fi base-newbc-input" style="font-size:12px;padding:6px 9px" placeholder="Base unit barcode (UPC)"
+            value="${(l._new_barcode||'').replace(/"/g,'&quot;')}"
+            oninput="BASE_LINES[${i}]._new_barcode=this.value">
+          <input class="fi" style="font-size:12px;padding:6px 9px" placeholder="Product name"
+            value="${(l._new_name||'').replace(/"/g,'&quot;')}"
+            oninput="BASE_LINES[${i}]._new_name=this.value">
+          <input class="fi" style="font-size:12px;padding:6px 9px;text-align:center" type="number" min="1"
+            value="${l.qty_per_case}" placeholder="Qty"
+            oninput="BASE_LINES[${i}].qty_per_case=parseInt(this.value)||1">
+          <button style="background:var(--red-light);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;color:var(--red-mid);font-size:14px;display:flex;align-items:center;justify-content:center" onclick="removeBaseLine(${i})">&#10005;</button>
+        </div>`;
+    }
+    return `
+      <div style="display:grid;grid-template-columns:1fr 80px 28px;gap:6px;align-items:center;margin-bottom:6px">
+        <div style="position:relative">
+          <input class="fi base-search-input" style="font-size:12px;padding:6px 9px" placeholder="Search product name or barcode..."
+            value="${(l.name||'').replace(/"/g,'&quot;')}"
+            oninput="baseSearch(${i},this.value)"
+            onfocus="baseSearch(${i},this.value)"
+            onblur="setTimeout(()=>{ const d=document.getElementById('basedd-${i}'); if(d) d.style.display='none'; },180)"
+            id="baseinput-${i}">
+          <div id="basedd-${i}" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:0.5px solid var(--border);border-radius:8px;max-height:160px;overflow-y:auto;z-index:600;box-shadow:0 4px 16px rgba(0,0,0,0.12)"></div>
+        </div>
+        <input class="fi" style="font-size:12px;padding:6px 9px;text-align:center" type="number" min="1"
+          value="${l.qty_per_case}" placeholder="Qty"
+          oninput="BASE_LINES[${i}].qty_per_case=parseInt(this.value)||1">
+        <button style="background:var(--red-light);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;color:var(--red-mid);font-size:14px;display:flex;align-items:center;justify-content:center" onclick="removeBaseLine(${i})">&#10005;</button>
+      </div>`;
+  }).join('');
+}
+
+function baseSearch(i, q) {
+  const dd = document.getElementById('basedd-'+i);
+  if(!dd) return;
+  q = (q||'').toLowerCase().trim();
+  if(!q) { dd.style.display='none'; return; }
+  const matches = AP.filter(p =>
+    (p.name.toLowerCase().includes(q) || (p.barcode||'').includes(q) || (p.product_code||'').toLowerCase().includes(q))
+  ).slice(0,8);
+  if(!matches.length) { dd.style.display='none'; return; }
+  _baseMatches[i] = matches;
+  dd.innerHTML = matches.map((p,mi) => `
+    <div data-mi="${mi}" style="padding:8px 11px;cursor:pointer;font-size:12px;border-bottom:0.5px solid var(--border)">
+      <div style="font-weight:600">${p.name.replace(/</g,'&lt;')}</div>
+      <div style="font-size:11px;color:var(--gray-400)">${p.barcode ? 'Barcode: '+p.barcode : ''}${p.product_code ? ' · '+p.product_code : ''}</div>
+    </div>`).join('');
+  dd.querySelectorAll('[data-mi]').forEach(el => {
+    el.addEventListener('mousedown', () => baseSelect(i, parseInt(el.dataset.mi)));
+  });
+  dd.style.display='block';
+}
+
+function baseSelect(lineIdx, matchIdx) {
+  const p = (_baseMatches[lineIdx]||[])[matchIdx];
+  if(!p) return;
+  BASE_LINES[lineIdx].product_id = p.id;
+  BASE_LINES[lineIdx].name = p.name;
+  const dd = document.getElementById('basedd-'+lineIdx);
+  if(dd) dd.style.display='none';
+  const inp = document.getElementById('baseinput-'+lineIdx);
+  if(inp) inp.value = p.name;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
   const nm=document.getElementById('pn').value.trim();
   const errDiv=document.getElementById('mprod-err');
   function showSaveErr(msg){ if(errDiv){errDiv.textContent=msg;errDiv.style.display='block';} toast(msg,'err'); }
@@ -1423,6 +1560,83 @@ async function saveProd() {
         } catch(e) {
           clearTimeout(skuInsTimer);
           showSaveErr(e.name==='AbortError'?'SKU save timed out':'SKU save error: '+e.message);
+          return;
+        }
+      }
+    }
+
+    // Save base product links — delete existing then re-insert
+    // Only for non-variety-pack products
+    if(savedId && !isVariety) {
+      const bTok = await getAuthToken();
+      const bH = {'apikey':SKEY,'Authorization':'Bearer '+bTok,'Content-Type':'application/json'};
+
+      // First: create any new base products (_mode === 'create')
+      for(let li=0; li<BASE_LINES.length; li++) {
+        const bl = BASE_LINES[li];
+        if(bl._mode === 'create' && bl._new_name && bl._new_name.trim()) {
+          const newProd = {
+            name: bl._new_name.trim(),
+            barcode: bl._new_barcode ? bl._new_barcode.trim() : null,
+            is_active: true,
+            units_per_case: 1,
+            reorder_point: 0,
+            order_up_to_level: 0,
+            last_cost: 0,
+            average_cost: 0,
+            selling_price: parseFloat(document.getElementById('psp').value)||0,
+            updated_at: new Date().toISOString()
+          };
+          const newResp = await fetch(SURL+'/rest/v1/products',
+            {method:'POST',headers:{...bH,'Prefer':'return=representation'},body:JSON.stringify(newProd)});
+          if(newResp.ok) {
+            const newRows = await newResp.json();
+            const newRow = Array.isArray(newRows) ? newRows[0] : newRows;
+            if(newRow?.id) {
+              BASE_LINES[li].product_id = newRow.id;
+              BASE_LINES[li].name = newRow.name;
+              // Add to local cache
+              AP.push({...newProd,id:newRow.id,product_id:newRow.id,
+                category_name:'',on_hand_qty:0,stock_status:'OK',inventory_value:0});
+              AP.sort((a,b)=>a.name.localeCompare(b.name));
+            }
+          }
+        }
+      }
+
+      // Delete existing product_components for this product
+      const bDelCtrl = new AbortController();
+      const bDelTimer = setTimeout(()=>bDelCtrl.abort(), 10000);
+      try {
+        const bDelResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+savedId,
+          {method:'DELETE',headers:bH,signal:bDelCtrl.signal});
+        clearTimeout(bDelTimer);
+        if(!bDelResp.ok){ const t=await bDelResp.text(); showSaveErr('Base product delete failed: '+t); return; }
+      } catch(e) {
+        clearTimeout(bDelTimer);
+        showSaveErr(e.name==='AbortError'?'Base product delete timed out':'Base product delete error: '+e.message);
+        return;
+      }
+
+      // Insert updated base product links
+      const baseRows = BASE_LINES
+        .filter(bl => bl.product_id)
+        .map(bl => ({
+          pack_product_id: savedId,
+          component_product_id: bl.product_id,
+          qty_per_pack: parseInt(bl.qty_per_case)||1
+        }));
+      if(baseRows.length) {
+        const bInsCtrl = new AbortController();
+        const bInsTimer = setTimeout(()=>bInsCtrl.abort(), 10000);
+        try {
+          const bInsResp = await fetch(SURL+'/rest/v1/product_components',
+            {method:'POST',headers:{...bH,'Prefer':'return=minimal'},body:JSON.stringify(baseRows),signal:bInsCtrl.signal});
+          clearTimeout(bInsTimer);
+          if(!bInsResp.ok){ const t=await bInsResp.text(); showSaveErr('Base product link save failed: '+t); return; }
+        } catch(e) {
+          clearTimeout(bInsTimer);
+          showSaveErr(e.name==='AbortError'?'Base product link timed out':'Base product link error: '+e.message);
           return;
         }
       }
@@ -1862,21 +2076,16 @@ async function savePur() {
 
   for(const l of vl) {
     const prod = AP.find(p => p.id === l.product_id || p.product_id === l.product_id);
-    if(prod?.is_variety_pack) {
-      // Fetch components via direct fetch
-      const compResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
-      const comps = compResp.ok ? await compResp.json() : [];
-      if(comps.length) {
-        const totalItemsPerPack = comps.reduce((s,x)=>s+x.qty_per_pack,0);
-        for(const c of comps) {
-          const totalUnits = l.units * c.qty_per_pack;
-          const compUnitCost = totalItemsPerPack > 0 ? (l.unit_cost / totalItemsPerPack) : 0;
-          invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',quantity_change:totalUnits,warehouse_quantity_change:totalUnits,unit_cost:compUnitCost,reference_type:'purchase',reference_id:pur.id,notes:invNote+' (from variety pack: '+(prod.name||'')+')',created_by:CU?.id});
-          wacUpdates.push({product_id:c.component_product_id,units:totalUnits,unit_cost:compUnitCost});
-        }
-      } else {
-        invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units,warehouse_quantity_change:l.units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:pur.id,notes:invNote,created_by:CU?.id});
-        wacUpdates.push({product_id:l.product_id,units:l.units,unit_cost:l.unit_cost});
+    // Check for base product links (works for variety packs AND regular bulk products)
+    const compResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
+    const comps = compResp.ok ? await compResp.json() : [];
+    if(comps.length) {
+      const totalItemsPerPack = comps.reduce((s,x)=>s+x.qty_per_pack,0);
+      for(const c of comps) {
+        const totalUnits = l.units * c.qty_per_pack;
+        const compUnitCost = totalItemsPerPack > 0 ? (l.unit_cost / totalItemsPerPack) : 0;
+        invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',quantity_change:totalUnits,warehouse_quantity_change:totalUnits,unit_cost:compUnitCost,reference_type:'purchase',reference_id:pur.id,notes:invNote+' (from bulk: '+(prod?.name||'')+')',created_by:CU?.id});
+        wacUpdates.push({product_id:c.component_product_id,units:totalUnits,unit_cost:compUnitCost});
       }
     } else {
       invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units,warehouse_quantity_change:l.units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:pur.id,notes:invNote,created_by:CU?.id});
