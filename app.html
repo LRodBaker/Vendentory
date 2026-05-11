@@ -604,7 +604,10 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
 <!-- MODAL: Product Detail -->
 <div class="modal-bg" id="mpd" style="display:none">
   <div class="modal" style="max-width:640px">
-    <button class="mc" onclick="closeM('mpd')">&#10005;</button>
+    <div style="position:absolute;top:14px;right:14px;display:flex;gap:8px;align-items:center;z-index:10">
+      <button class="btn btn-p btn-sm" onclick="pdEditClicked()" style="padding:5px 13px;font-size:12px">&#9998; Edit</button>
+      <button class="mc" onclick="closeM('mpd')" style="position:static;font-size:20px;background:none;border:none;cursor:pointer;color:var(--gray-400);line-height:1;padding:0">&#10005;</button>
+    </div>
     <div id="pdc"></div>
   </div>
 </div>
@@ -642,8 +645,11 @@ let _cachedToken = null;
 async function getAuthToken() {
   if (_cachedToken) return _cachedToken;
   try {
-    const timeout = new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), 5000));
-    const { data: { session } } = await Promise.race([sb.auth.getSession(), timeout]);
+    // Hard 4s timeout — if getSession hangs (common on iOS background tab),
+    // fall back to anon key immediately so the save fetch can still proceed.
+    const timeout = new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), 4000));
+    const result = await Promise.race([sb.auth.getSession(), timeout]);
+    const session = result?.data?.session;
     if (session?.access_token) { _cachedToken = session.access_token; return _cachedToken; }
   } catch(e) {}
   return SKEY;
@@ -942,7 +948,7 @@ async function openPD(id) {
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
           <span class="badge ${p.stock_status==='REORDER'?'b-red':'b-ok'}">${p.stock_status==='REORDER'?'Reorder needed':'In stock'}</span>
           ${p.category_name?`<span class="badge b-gray">${p.category_name}</span>`:''}
-          <button class="btn btn-p btn-sm" onclick="pdEditClicked()" style="white-space:nowrap;padding:3px 12px;font-size:12px">&#9998; Edit</button>
+
         </div>
       </div>
     </div>
@@ -977,11 +983,13 @@ function pdEditClicked() {
   openEP(id);
 }
 
-function openAP() {
+async function openAP() {
   document.getElementById('mpt').textContent='Add product';
   document.getElementById('peid').value='';
   ['pb','pn','pco','pbr','psz','psu2'].forEach(id=>document.getElementById(id).value='');
-  ['pupc','prp','pou'].forEach(id=>document.getElementById(id).value='1');
+  document.getElementById('pupc').value='1';
+  document.getElementById('prp').value='0';
+  document.getElementById('pou').value='0';
   ['plc','psp'].forEach(id=>document.getElementById(id).value='0');
   document.getElementById('pac').value='true';
   document.getElementById('piurl').value='';
@@ -994,7 +1002,11 @@ function openAP() {
   VP_LINES = [];
   document.getElementById('variety-section').style.display='none';
   document.getElementById('vp-lines').innerHTML='';
-  loadCats(); loadSups();
+  // Await so dropdowns are populated before modal opens — prevents stale/blank selects
+  await Promise.all([loadCats(), loadSups()]);
+  // Ensure dropdowns reset to blank for a fresh Add
+  const pcaEl=document.getElementById('pca'); if(pcaEl) pcaEl.value='';
+  const psuEl=document.getElementById('psu'); if(psuEl) psuEl.value='';
   openM('mprod');
 }
 
@@ -1174,6 +1186,10 @@ async function saveProd() {
   clearSaveErr();
   const saveBtn=document.querySelector('#mprod .btn-p');
   if(saveBtn){saveBtn.disabled=true;saveBtn.textContent='Saving...';}
+  // Hard 20s safety net — guarantees button resets even if an await never resolves
+  const _saveBtnTimer = setTimeout(()=>{
+    if(saveBtn&&saveBtn.disabled){saveBtn.disabled=false;saveBtn.textContent='Save product';showSaveErr('Save timed out — please try again');}
+  }, 20000);
   try {
     const eid=document.getElementById('peid').value;
     const lastCost=parseFloat(document.getElementById('plc').value)||0;
@@ -1302,6 +1318,7 @@ async function saveProd() {
   } catch(e) {
     showSaveErr('Unexpected error: '+e.message);
   } finally {
+    clearTimeout(_saveBtnTimer);
     if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='Save product';}
   }
 }
@@ -1426,7 +1443,7 @@ function renderRsc() {
     :'<div class="tm">No scans yet</div>';
 }
 
-function openAPfromScan(bc){openAP();setTimeout(()=>{document.getElementById('pb').value=bc;},100);}
+function openAPfromScan(bc){openAP().then(()=>{document.getElementById('pb').value=bc;});}
 function prefAdjFromScan(btn){prefAdj(btn.dataset.adjId, btn.dataset.adjName, parseInt(btn.dataset.adjQty)||0);}
 function prefAdj(id,nm,st){nav('adjustments');adjP={product_id:id,name:nm,on_hand_qty:st};document.getElementById('aps').value=nm;document.getElementById('api').style.display='block';document.getElementById('apn').textContent=nm;document.getElementById('apst').textContent=st+' units';updAP();}
 
