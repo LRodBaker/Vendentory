@@ -784,7 +784,17 @@ function setDates() {
 }
 
 function showLogin() { document.getElementById('ls').style.display='block'; document.getElementById('app').style.display='none'; }
-function showApp() { document.getElementById('ls').style.display='none'; document.getElementById('app').style.display='block'; loadAll(); let _lp='dashboard'; try { _lp=localStorage.getItem('vd_last_page')||'dashboard'; } catch(e){} nav(_lp); }
+function showApp() {
+  // Guard: if the app div is already visible, don't re-run nav/loadAll
+  // This prevents TOKEN_REFRESHED or duplicate SIGNED_IN from resetting the current page
+  if(document.getElementById('app').style.display==='block') return;
+  document.getElementById('ls').style.display='none';
+  document.getElementById('app').style.display='block';
+  loadAll();
+  let _lp='dashboard';
+  try { _lp=localStorage.getItem('vd_last_page')||'dashboard'; } catch(e){}
+  nav(_lp);
+}
 
 async function doLogin() {
   const e=document.getElementById('le').value.trim(), p=document.getElementById('lp').value;
@@ -838,7 +848,6 @@ function nav(pg) {
   if(ni) ni.classList.add('active');
   document.getElementById('pt').textContent=PTITLES[pg]||pg;
   closeSB();
-  try { localStorage.setItem('vd_last_page', pg); } catch(e) {}
   try { localStorage.setItem('vd_last_page', pg); } catch(e) {}
   if(pg==='dashboard') loadDash();
   if(pg==='products'){ loadProds2().then(()=>renderProds()).catch(()=>renderProds()); }
