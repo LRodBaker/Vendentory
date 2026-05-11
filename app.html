@@ -593,6 +593,19 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
       </div>
     </div>
 
+    <!-- SUPPLIER PACK SIZES SECTION -->
+    <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
+      <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:4px">Supplier Pack Sizes</div>
+      <div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">Scan or enter the bulk/case barcode for each pack you buy. When you scan that barcode at receiving, the app will automatically link it to this product and pre-fill the unit count.</div>
+      <div style="background:var(--gray-50);border-radius:10px;padding:12px">
+        <div style="display:grid;grid-template-columns:1.4fr .7fr 1fr 1.2fr 28px;gap:6px;margin-bottom:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);padding:0 2px">
+          <div>Bulk pack barcode</div><div>Units/case</div><div>Supplier</div><div>Note</div><div></div>
+        </div>
+        <div id="sku-lines"></div>
+        <button class="btn btn-sm" style="margin-top:8px" onclick="addSKULine()">+ Add pack size</button>
+      </div>
+    </div>
+
     <div id="mprod-err" style="display:none;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px;margin-top:10px;font-size:13px;color:#991b1b"></div>
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       <button class="btn btn-p" onclick="saveProd()">Save product</button>
@@ -639,6 +652,7 @@ const SKEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZ
 let sb = null;
 let CU = null, CP = null, AP = [], AC = [], AS2 = [], PL = [], adjP = null, impRows = [], rScans = [], curRT = 'weekly';
 let VP_LINES = []; // variety pack component lines for the product edit modal
+let SKU_LINES = []; // supplier pack size lines for the product edit modal
 
 // ── Get current auth token (session token if logged in, anon key as fallback) ──
 let _cachedToken = null;
@@ -1002,6 +1016,9 @@ async function openAP() {
   VP_LINES = [];
   document.getElementById('variety-section').style.display='none';
   document.getElementById('vp-lines').innerHTML='';
+  // Reset supplier SKUs
+  SKU_LINES = [];
+  document.getElementById('sku-lines').innerHTML='';
   // Await so dropdowns are populated before modal opens — prevents stale/blank selects
   await Promise.all([loadCats(), loadSups()]);
   // Ensure dropdowns reset to blank for a fresh Add
@@ -1066,6 +1083,26 @@ async function openEP(id) {
     renderVPLines();
   } else {
     document.getElementById('vp-lines').innerHTML='';
+  }
+  // Load supplier SKUs for this product
+  SKU_LINES = [];
+  document.getElementById('sku-lines').innerHTML='';
+  if(p.id) {
+    const skuResp = await fetch(
+      SURL+'/rest/v1/supplier_skus?product_id=eq.'+p.id+'&select=id,bulk_barcode,units_per_case,supplier_id,description&order=created_at',
+      { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
+    );
+    if(skuResp.ok) {
+      const skus = await skuResp.json();
+      SKU_LINES = skus.map(s=>({
+        db_id: s.id,
+        bulk_barcode: s.bulk_barcode||'',
+        units_per_case: s.units_per_case||1,
+        supplier_id: s.supplier_id||'',
+        description: s.description||''
+      }));
+      renderSKULines();
+    }
   }
   openM('mprod');
 }
@@ -1173,6 +1210,59 @@ function vpSelect(lineIdx, matchIdx) {
   if(dd) dd.style.display='none';
   const inp = document.getElementById('vpinput-'+lineIdx);
   if(inp) inp.value = p.name;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── SUPPLIER SKU UI ──────────────────────────────────────────────────────────
+
+function addSKULine() {
+  SKU_LINES.push({ bulk_barcode:'', units_per_case:1, supplier_id:'', description:'' });
+  renderSKULines();
+  // Auto-focus the new barcode input
+  setTimeout(()=>{
+    const inputs = document.querySelectorAll('.sku-bc-input');
+    if(inputs.length) inputs[inputs.length-1].focus();
+  }, 50);
+}
+
+function removeSKULine(i) {
+  SKU_LINES.splice(i, 1);
+  renderSKULines();
+}
+
+function renderSKULines() {
+  const c = document.getElementById('sku-lines');
+  if(!SKU_LINES.length) {
+    c.innerHTML='<div class="tm" style="font-size:12px;padding:6px 0">No pack sizes yet. Click "+ Add pack size" to link a bulk barcode.</div>';
+    return;
+  }
+  const supOpts = AS2.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  c.innerHTML = SKU_LINES.map((s,i) => `
+    <div style="display:grid;grid-template-columns:1.4fr .7fr 1fr 1.2fr 28px;gap:6px;align-items:center;margin-bottom:6px">
+      <input class="fi sku-bc-input" style="font-size:12px;padding:6px 9px" placeholder="Scan or type bulk barcode"
+        value="${s.bulk_barcode.replace(/"/g,'&quot;')}"
+        oninput="SKU_LINES[${i}].bulk_barcode=this.value"
+        title="Scan the barcode on the bulk/case package">
+      <input class="fi" style="font-size:12px;padding:6px 9px;text-align:center" type="number" min="1"
+        value="${s.units_per_case}"
+        oninput="SKU_LINES[${i}].units_per_case=parseInt(this.value)||1"
+        placeholder="Units">
+      <select class="fs" style="font-size:12px;padding:6px 9px"
+        onchange="SKU_LINES[${i}].supplier_id=this.value">
+        <option value="">Any</option>
+        ${supOpts}
+      </select>
+      <input class="fi" style="font-size:12px;padding:6px 9px" placeholder="e.g. Sam's 50-pk"
+        value="${s.description.replace(/"/g,'&quot;')}"
+        oninput="SKU_LINES[${i}].description=this.value">
+      <button style="background:var(--red-light);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;color:var(--red-mid);font-size:14px;display:flex;align-items:center;justify-content:center" onclick="removeSKULine(${i})">&#10005;</button>
+    </div>`).join('');
+  // Set supplier selects to current values (can't do in template due to selected attr)
+  SKU_LINES.forEach((s,i) => {
+    const sel = c.querySelectorAll('select')[i];
+    if(sel && s.supplier_id) sel.value = s.supplier_id;
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1294,6 +1384,49 @@ async function saveProd() {
       }
     }
 
+    // Save supplier SKUs — delete all for this product then re-insert
+    if(savedId) {
+      const skuTok = await getAuthToken();
+      const skuH = {'apikey':SKEY,'Authorization':'Bearer '+skuTok,'Content-Type':'application/json'};
+      // DELETE existing SKUs for this product
+      const skuDelCtrl = new AbortController();
+      const skuDelTimer = setTimeout(()=>skuDelCtrl.abort(), 10000);
+      try {
+        const skuDelResp = await fetch(SURL+'/rest/v1/supplier_skus?product_id=eq.'+savedId,
+          {method:'DELETE',headers:skuH,signal:skuDelCtrl.signal});
+        clearTimeout(skuDelTimer);
+        if(!skuDelResp.ok){ const t=await skuDelResp.text(); showSaveErr('SKU delete failed: '+t); return; }
+      } catch(e) {
+        clearTimeout(skuDelTimer);
+        showSaveErr(e.name==='AbortError'?'SKU delete timed out':'SKU delete error: '+e.message);
+        return;
+      }
+      // INSERT current SKU lines (skip any with blank barcode)
+      const skuRows = SKU_LINES
+        .filter(s => s.bulk_barcode && s.bulk_barcode.trim())
+        .map(s => ({
+          product_id: savedId,
+          bulk_barcode: s.bulk_barcode.trim(),
+          units_per_case: parseInt(s.units_per_case)||1,
+          supplier_id: s.supplier_id||null,
+          description: s.description||null
+        }));
+      if(skuRows.length) {
+        const skuInsCtrl = new AbortController();
+        const skuInsTimer = setTimeout(()=>skuInsCtrl.abort(), 10000);
+        try {
+          const skuInsResp = await fetch(SURL+'/rest/v1/supplier_skus',
+            {method:'POST',headers:{...skuH,'Prefer':'return=minimal'},body:JSON.stringify(skuRows),signal:skuInsCtrl.signal});
+          clearTimeout(skuInsTimer);
+          if(!skuInsResp.ok){ const t=await skuInsResp.text(); showSaveErr('SKU save failed: '+t); return; }
+        } catch(e) {
+          clearTimeout(skuInsTimer);
+          showSaveErr(e.name==='AbortError'?'SKU save timed out':'SKU save error: '+e.message);
+          return;
+        }
+      }
+    }
+
     document.getElementById('mprod').style.display='none';
     clearSaveErr();
     toast(eid?'Product updated!':'Product added!','ok');
@@ -1401,8 +1534,92 @@ async function lookupBC() {
   const prod=AP.find(p=>p.barcode===bc);
   const re=document.getElementById('sres');
   if(!prod){
+    // ── Step 1: Check supplier_skus for a bulk pack barcode match ────────────
     re.style.display='block';
-    re.innerHTML=`<div class="card"><div style="font-size:14px;font-weight:600;margin-bottom:8px">Barcode not found: ${bc}</div><button class="btn btn-p btn-sm" onclick="openAPfromScan('${bc}')">+ Add this product</button></div>`;
+    re.innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:10px;padding:4px 0"><div class="sp"></div><div style="font-size:13px;color:var(--gray-600)">Looking up barcode ${bc}…</div></div></div>`;
+    let skuMatch = null;
+    try {
+      const skuResp = await fetch(
+        SURL+'/rest/v1/supplier_skus?bulk_barcode=eq.'+encodeURIComponent(bc)+'&select=bulk_barcode,units_per_case,description,supplier_id,products(id,name,barcode,on_hand_qty,reorder_point,stock_status,selling_price,average_cost,image_url),suppliers(name)',
+        { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
+      );
+      if(skuResp.ok) {
+        const skuRows = await skuResp.json();
+        if(skuRows.length) skuMatch = skuRows[0];
+      }
+    } catch(e) {}
+
+    if(skuMatch) {
+      // Found as a bulk pack barcode — show receiving card
+      const sp = skuMatch.products;
+      const supName = skuMatch.suppliers?.name || '';
+      const imgHtml = sp?.image_url
+        ? `<img src="${sp.image_url}" style="width:100%;height:100%;object-fit:cover;border-radius:8px" onerror="this.parentElement.innerHTML='&#128230;'">`
+        : '&#128230;';
+      re.innerHTML=`
+        <div class="card">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--teal);margin-bottom:10px">Bulk pack recognised — ${skuMatch.units_per_case} units</div>
+          <div style="display:grid;grid-template-columns:68px 1fr;gap:12px;align-items:center;margin-bottom:12px">
+            <div style="width:68px;height:68px;border-radius:8px;background:var(--gray-50);display:flex;align-items:center;justify-content:center;font-size:30px;overflow:hidden">${imgHtml}</div>
+            <div>
+              <div style="font-size:15px;font-weight:700;margin-bottom:2px">${sp?.name||'Unknown product'}</div>
+              <div style="font-size:12px;color:var(--gray-400);margin-bottom:5px">${supName?supName+' · ':''}${skuMatch.description||''}</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+                <span class="badge b-teal">${skuMatch.units_per_case} units/case</span>
+                <span class="badge ${sp?.stock_status==='REORDER'?'b-red':'b-ok'}">${sp?.on_hand_qty||0} in stock</span>
+              </div>
+            </div>
+          </div>
+          <div style="background:var(--teal-light);border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">
+            Scanning this case will add <strong>${skuMatch.units_per_case} units</strong> to <strong>${sp?.name||'this product'}</strong>.
+          </div>
+          <button class="btn btn-p" onclick="nav('purchases')">Go to Receive Inventory</button>
+        </div>`;
+      // Pre-select this product on the purchases page for convenience
+      window._pendingReceive = { product_id: sp?.id, name: sp?.name, units: skuMatch.units_per_case };
+      rScans.unshift({barcode:bc, name:sp?.name||bc, status:sp?.stock_status||'OK'});
+      if(rScans.length>10) rScans.pop();
+      renderRsc();
+      document.getElementById('si').value='';
+      return;
+    }
+
+    // ── Step 2: UPC API lookup (external) ────────────────────────────────────
+    const upcData = await upcLookup(bc);
+    if(upcData){
+      // Found in UPC database — show rich card with pre-fill button
+      const imgHtml = upcData.image
+        ? `<img src="${upcData.image}" style="width:100%;height:100%;object-fit:contain;border-radius:8px" onerror="this.parentElement.innerHTML='&#128230;'">`
+        : '&#128230;';
+      re.innerHTML=`
+        <div class="card">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--teal);margin-bottom:10px">Found in product database</div>
+          <div style="display:grid;grid-template-columns:72px 1fr;gap:12px;align-items:flex-start;margin-bottom:12px">
+            <div style="width:72px;height:72px;border-radius:8px;background:var(--gray-50);display:flex;align-items:center;justify-content:center;font-size:30px;overflow:hidden;flex-shrink:0">${imgHtml}</div>
+            <div>
+              <div style="font-size:14px;font-weight:700;margin-bottom:3px;line-height:1.3">${upcData.title}</div>
+              ${upcData.brand?`<div style="font-size:12px;color:var(--gray-400);margin-bottom:5px">Brand: ${upcData.brand}</div>`:''}
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                ${upcData.unitsPerCase>1?`<span class="badge b-teal">${upcData.unitsPerCase}-pack</span>`:''}
+                ${upcData.priceHint?`<span class="badge b-gray">~${fmt(upcData.priceHint)} sell price</span>`:''}
+              </div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <button class="btn btn-p" data-upc-idx="0" onclick="openAPfromUPC()">&#43; Add pre-filled product</button>
+            <button class="btn" onclick="openAPfromScan('${bc}')">Add manually</button>
+          </div>
+        </div>`;
+      // Store on window so the button can reach it without inline JSON
+      window._lastUpcData = upcData;
+    } else {
+      // Not found in UPC database — fall back to manual add
+      re.innerHTML=`<div class="card">
+        <div style="font-size:14px;font-weight:600;margin-bottom:4px">Barcode not found: ${bc}</div>
+        <div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">Not in local inventory or product database.</div>
+        <button class="btn btn-p btn-sm" onclick="openAPfromScan('${bc}')">+ Add this product manually</button>
+      </div>`;
+    }
   } else {
     const mg=prod.selling_price>0&&prod.average_cost>0?(((prod.selling_price-prod.average_cost)/prod.selling_price)*100).toFixed(1):'—';
     re.style.display='block';
@@ -1444,6 +1661,57 @@ function renderRsc() {
 }
 
 function openAPfromScan(bc){openAP().then(()=>{document.getElementById('pb').value=bc;});}
+
+// ── UPC item database lookup (free tier, 100/day, no key needed) ─────────────
+async function upcLookup(bc) {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(()=>ctrl.abort(), 8000);
+    const resp = await fetch('https://api.upcitemdb.com/prod/trial/lookup?upc='+encodeURIComponent(bc),
+      { signal: ctrl.signal });
+    clearTimeout(timer);
+    if(!resp.ok) return null;
+    const json = await resp.json();
+    if(json.code !== 'OK' || !json.items || !json.items.length) return null;
+    const item = json.items[0];
+    // Parse pack size from title — e.g. "24 pk", "45 ct", "12 count", "50 pc"
+    const packMatch = (item.title||'').match(/(\d+)\s*(?:pk|pack|ct|count|piece|pc)/i);
+    const unitsPerCase = packMatch ? Math.min(Math.max(parseInt(packMatch[1]),1),999) : 1;
+    return {
+      barcode: bc,
+      title: item.title||'',
+      brand: item.brand||'',
+      image: (item.images&&item.images[0]) ? item.images[0] : null,
+      unitsPerCase,
+      priceHint: item.lowest_recorded_price ? parseFloat(item.lowest_recorded_price) : null
+    };
+  } catch(e) {
+    return null; // timeout or network error — fall back to manual
+  }
+}
+
+// ── Pre-fill Add Product form from UPC lookup result ─────────────────────────
+function openAPfromUPC() {
+  const d = window._lastUpcData;
+  if(!d){ openAP(); return; }
+  openAP().then(()=>{
+    document.getElementById('pb').value = d.barcode || '';
+    document.getElementById('pn').value = d.title || '';
+    document.getElementById('pbr').value = d.brand || '';
+    document.getElementById('pupc').value = d.unitsPerCase || 1;
+    if(d.priceHint) document.getElementById('psp').value = d.priceHint.toFixed(2);
+    if(d.image){
+      document.getElementById('piurl').value = d.image;
+      const pip = document.getElementById('pip');
+      const pph = document.getElementById('pph');
+      pip.src = d.image;
+      pip.style.display = 'block';
+      pph.style.display = 'none';
+    }
+    // Focus the name field so user can review/edit before saving
+    setTimeout(()=>{ const el=document.getElementById('pn'); if(el){el.focus();el.select();} }, 100);
+  });
+}
 function prefAdjFromScan(btn){prefAdj(btn.dataset.adjId, btn.dataset.adjName, parseInt(btn.dataset.adjQty)||0);}
 function prefAdj(id,nm,st){nav('adjustments');adjP={product_id:id,name:nm,on_hand_qty:st};document.getElementById('aps').value=nm;document.getElementById('api').style.display='block';document.getElementById('apn').textContent=nm;document.getElementById('apst').textContent=st+' units';updAP();}
 
