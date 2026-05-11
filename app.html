@@ -638,10 +638,13 @@ let CU = null, CP = null, AP = [], AC = [], AS2 = [], PL = [], adjP = null, impR
 let VP_LINES = []; // variety pack component lines for the product edit modal
 
 // ── Get current auth token (session token if logged in, anon key as fallback) ──
+let _cachedToken = null;
 async function getAuthToken() {
+  if (_cachedToken) return _cachedToken;
   try {
-    const { data: { session } } = await sb.auth.getSession();
-    if (session?.access_token) return session.access_token;
+    const timeout = new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), 5000));
+    const { data: { session } } = await Promise.race([sb.auth.getSession(), timeout]);
+    if (session?.access_token) { _cachedToken = session.access_token; return _cachedToken; }
   } catch(e) {}
   return SKEY;
 }
@@ -674,7 +677,7 @@ async function dbFetch(table, {method='GET', select='*', filters={}, order=null,
   const opts = { method, headers };
   if(body) opts.body = JSON.stringify(body);
   const dbCtrl = new AbortController();
-  const dbTimer = setTimeout(()=>dbCtrl.abort(), 12000);
+  const dbTimer = setTimeout(()=>dbCtrl.abort(), 20000);
   let resp;
   try {
     resp = await fetch(url, {...opts, signal: dbCtrl.signal});
@@ -715,11 +718,12 @@ window.addEventListener('DOMContentLoaded', function() {
   setDates();
   waitForSupabase(async function() {
     const { data: { session } } = await sb.auth.getSession();
-    if (session) { CU = session.user; await loadProf(); showApp(); }
+    if (session) { CU = session.user; _cachedToken = session.access_token||null; await loadProf(); showApp(); }
     else showLogin();
     sb.auth.onAuthStateChange(async (ev, sess) => {
-      if (ev === 'SIGNED_IN') { CU = sess.user; await loadProf(); showApp(); }
-      if (ev === 'SIGNED_OUT') { CU = null; showLogin(); }
+      if (ev === 'SIGNED_IN') { CU = sess.user; _cachedToken = sess.access_token||null; await loadProf(); showApp(); }
+      if (ev === 'TOKEN_REFRESHED') { _cachedToken = sess?.access_token||null; }
+      if (ev === 'SIGNED_OUT') { CU = null; _cachedToken = null; showLogin(); }
     });
   });
 });
@@ -1481,7 +1485,7 @@ async function loadPurHistory(){
     purFilters['purchase_date']='gte.'+start;
     purFilters['purchase_date2']='lte.'+end;
   }
-  const {data:purs,error}=await dbFetch('purchases',{select:'id,purchase_date,invoice_number,status,subtotal_amount,shipping_cost,tax_amount,extra_costs,total_amount,notes,suppliers(name)',filters:purFilters,order:'purchase_date.desc',limit:50});
+  const {data:purs,error}=await dbFetch('purchases',{select:'id,purchase_date,invoice_number,status,subtotal_amount,shipping_cost,tax_amount,extra_costs,total_amount,notes,suppliers(name)',filters:purFilters,order:'purchase_date.desc',limit:200});
   if(error){el.innerHTML='<div class="tm">Error loading history</div>';return;}
   if(!purs||!purs.length){el.innerHTML='<div class="tm">No purchases found</div>';return;}
   el.innerHTML=purs.map(p=>`
