@@ -640,8 +640,7 @@ let VP_LINES = []; // variety pack component lines for the product edit modal
 // ── Get current auth token (session token if logged in, anon key as fallback) ──
 async function getAuthToken() {
   try {
-    const timeout = new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), 5000));
-    const { data: { session } } = await Promise.race([sb.auth.getSession(), timeout]);
+    const { data: { session } } = await sb.auth.getSession();
     if (session?.access_token) return session.access_token;
   } catch(e) {}
   return SKEY;
@@ -936,12 +935,12 @@ async function openPD(id) {
       <div style="flex:1">
         <div style="font-family:var(--font-head);font-size:19px;font-weight:700;margin-bottom:2px">${p.name}</div>
         <div style="font-size:12px;color:var(--gray-400);margin-bottom:7px">${p.product_code||''} ${p.barcode?'&#183; '+p.barcode:''}</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
           <span class="badge ${p.stock_status==='REORDER'?'b-red':'b-ok'}">${p.stock_status==='REORDER'?'Reorder needed':'In stock'}</span>
           ${p.category_name?`<span class="badge b-gray">${p.category_name}</span>`:''}
+          <button class="btn btn-p btn-sm" onclick="pdEditClicked()" style="white-space:nowrap;padding:3px 12px;font-size:12px">&#9998; Edit</button>
         </div>
       </div>
-      <button class="btn btn-sm" onclick="pdEditClicked()">Edit</button>
     </div>
     <div class="g2">
       <div>
