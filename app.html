@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="Vendentory">
 <title>Vendentory</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Syne:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
 <script>
 // Inline Supabase loader — tries multiple CDNs in order
 (function(){
@@ -553,20 +554,20 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
     <div id="prod-type-bar" style="margin-bottom:16px">
       <div style="font-size:12px;font-weight:600;color:var(--gray-600);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Product type</div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-        <button id="ptype-individual" onclick="setProdType('individual')" class="btn" style="flex-direction:column;gap:4px;padding:12px 8px;text-align:center;border-radius:10px">
-          <div style="font-size:20px">&#127968;</div>
-          <div style="font-size:12px;font-weight:600">Individual</div>
-          <div style="font-size:10px;color:var(--gray-400);line-height:1.3">Single item sold<br>from the machine</div>
+        <button id="ptype-individual" onclick="setProdType('individual')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:#EAF3DE;border:0.5px solid #97C459;cursor:pointer;text-align:center;font-family:var(--font-body)">
+          <i class="ti ti-tag" style="font-size:26px;color:#3B6D11" aria-hidden="true"></i>
+          <span style="font-size:12px;font-weight:600;color:#27500A">Individual</span>
+          <span style="font-size:10px;color:#3B6D11;line-height:1.3">Single item sold<br>from the machine</span>
         </button>
-        <button id="ptype-bulk" onclick="setProdType('bulk')" class="btn" style="flex-direction:column;gap:4px;padding:12px 8px;text-align:center;border-radius:10px">
-          <div style="font-size:20px">&#128230;</div>
-          <div style="font-size:12px;font-weight:600">Bulk Pack</div>
-          <div style="font-size:10px;color:var(--gray-400);line-height:1.3">Case/box bought<br>from supplier</div>
+        <button id="ptype-bulk" onclick="setProdType('bulk')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:#E6F1FB;border:0.5px solid #85B7EB;cursor:pointer;text-align:center;font-family:var(--font-body)">
+          <i class="ti ti-box" style="font-size:26px;color:#185FA5" aria-hidden="true"></i>
+          <span style="font-size:12px;font-weight:600;color:#0C447C">Bulk Pack</span>
+          <span style="font-size:10px;color:#185FA5;line-height:1.3">Case/box bought<br>from supplier</span>
         </button>
-        <button id="ptype-variety" onclick="setProdType('variety')" class="btn" style="flex-direction:column;gap:4px;padding:12px 8px;text-align:center;border-radius:10px">
-          <div style="font-size:20px">&#127873;</div>
-          <div style="font-size:12px;font-weight:600">Variety Pack</div>
-          <div style="font-size:10px;color:var(--gray-400);line-height:1.3">Mixed pack that<br>splits into items</div>
+        <button id="ptype-variety" onclick="setProdType('variety')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:#FBEAF0;border:0.5px solid #ED93B1;cursor:pointer;text-align:center;font-family:var(--font-body)">
+          <i class="ti ti-arrows-split-2" style="font-size:26px;color:#993556" aria-hidden="true"></i>
+          <span style="font-size:12px;font-weight:600;color:#72243E">Variety Pack</span>
+          <span style="font-size:10px;color:#993556;line-height:1.3">Mixed pack that<br>splits into items</span>
         </button>
       </div>
     </div>
@@ -1269,13 +1270,27 @@ let _prodType = ''; // 'individual' | 'bulk' | 'variety'
 
 function setProdType(type) {
   _prodType = type;
-  // Highlight selected button
+  // Highlight selected button — each type has its own color scheme
+  const _typeStyles = {
+    individual: { bg:'#EAF3DE', border:'#639922', activeBg:'#3B6D11', activeBorder:'#27500A' },
+    bulk:       { bg:'#E6F1FB', border:'#378ADD', activeBg:'#185FA5', activeBorder:'#0C447C' },
+    variety:    { bg:'#FBEAF0', border:'#D4537E', activeBg:'#993556', activeBorder:'#72243E' }
+  };
   ['individual','bulk','variety'].forEach(t => {
     const btn = document.getElementById('ptype-'+t);
     if(!btn) return;
-    btn.style.background = t===type ? 'var(--teal)' : 'var(--white)';
-    btn.style.color = t===type ? '#fff' : 'var(--gray-900)';
-    btn.style.borderColor = t===type ? 'var(--teal)' : 'var(--border)';
+    const s = _typeStyles[t];
+    if(t === type) {
+      btn.style.background = s.activeBg;
+      btn.style.borderColor = s.activeBorder;
+      btn.style.borderWidth = '2px';
+      btn.querySelectorAll('i,span').forEach(el => el.style.color = '#fff');
+    } else {
+      btn.style.background = s.bg;
+      btn.style.borderColor = s.border;
+      btn.style.borderWidth = '0.5px';
+      btn.querySelectorAll('i,span').forEach(el => el.style.color = '');
+    }
   });
   // Show the fields panel
   document.getElementById('prod-fields').style.display = 'block';
