@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Vendentory">
 <title>Vendentory</title>
@@ -1789,24 +1790,50 @@ async function deleteProd() {
   if(!eid) return;
   const p = AP.find(x => x.id === eid || x.product_id === eid);
   const nm = p ? p.name : 'this product';
-  if(!confirm('Delete "' + nm + '"?\n\nThis will permanently remove the product and all its barcodes, SKUs, and component links. Inventory transactions and purchase history will be preserved.\n\nThis cannot be undone.')) return;
-  showL('Deleting...');
+
+  // Check if this product has any transactions or purchase lines — if so, soft delete only
   const tok = await getAuthToken();
   const h = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
-  // Delete child records first (CASCADE may handle some, but be explicit)
-  await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+eid, {method:'DELETE',headers:h});
-  await fetch(SURL+'/rest/v1/product_components?component_product_id=eq.'+eid, {method:'DELETE',headers:h});
-  await fetch(SURL+'/rest/v1/supplier_skus?product_id=eq.'+eid, {method:'DELETE',headers:h});
-  await fetch(SURL+'/rest/v1/product_barcodes?product_id=eq.'+eid, {method:'DELETE',headers:h});
-  // Delete the product itself
-  const delResp = await fetch(SURL+'/rest/v1/products?id=eq.'+eid, {method:'DELETE',headers:h});
-  hideL();
-  if(!delResp.ok) { toast('Delete failed — check console','err'); return; }
-  closeM('mprod');
-  // Remove from local cache
-  AP = AP.filter(x => x.id !== eid && x.product_id !== eid);
-  renderProds();
-  toast('"'+nm+'" deleted','ok');
+
+  const [txnResp, plResp] = await Promise.all([
+    fetch(SURL+'/rest/v1/inventory_transactions?product_id=eq.'+eid+'&select=id&limit=1', {headers:h}),
+    fetch(SURL+'/rest/v1/purchase_lines?product_id=eq.'+eid+'&select=id&limit=1', {headers:h})
+  ]);
+  const txns = txnResp.ok ? await txnResp.json() : [];
+  const pls  = plResp.ok  ? await plResp.json()  : [];
+  const hasHistory = txns.length > 0 || pls.length > 0;
+
+  if(hasHistory) {
+    // Soft delete — mark inactive, preserve all history
+    if(!confirm('Deactivate "' + nm + '"?\n\nThis product has purchase or inventory history so it cannot be permanently deleted. It will be marked inactive and hidden from your product list.\n\nYou can reactivate it later by editing it.')) return;
+    showL('Deactivating...');
+    const r = await fetch(SURL+'/rest/v1/products?id=eq.'+eid, {
+      method:'PATCH',
+      headers:{...h,'Prefer':'return=minimal'},
+      body:JSON.stringify({is_active:false, updated_at:new Date().toISOString()})
+    });
+    hideL();
+    if(!r.ok){ toast('Deactivate failed','err'); return; }
+    closeM('mprod');
+    AP = AP.filter(x => x.id !== eid && x.product_id !== eid);
+    renderProds();
+    toast('"'+nm+'" deactivated','ok');
+  } else {
+    // Hard delete — no history, safe to remove completely
+    if(!confirm('Permanently delete "' + nm + '"?\n\nThis product has no history and will be completely removed.\n\nThis cannot be undone.')) return;
+    showL('Deleting...');
+    await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+eid, {method:'DELETE',headers:h});
+    await fetch(SURL+'/rest/v1/product_components?component_product_id=eq.'+eid, {method:'DELETE',headers:h});
+    await fetch(SURL+'/rest/v1/supplier_skus?product_id=eq.'+eid, {method:'DELETE',headers:h});
+    await fetch(SURL+'/rest/v1/product_barcodes?product_id=eq.'+eid, {method:'DELETE',headers:h});
+    const delResp = await fetch(SURL+'/rest/v1/products?id=eq.'+eid, {method:'DELETE',headers:h});
+    hideL();
+    if(!delResp.ok){ toast('Delete failed','err'); return; }
+    closeM('mprod');
+    AP = AP.filter(x => x.id !== eid && x.product_id !== eid);
+    renderProds();
+    toast('"'+nm+'" deleted','ok');
+  }
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
