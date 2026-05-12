@@ -559,20 +559,20 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
     <div id="prod-type-bar" style="margin-bottom:16px">
       <div style="font-size:12px;font-weight:600;color:var(--gray-600);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Product type</div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-        <button id="ptype-individual" onclick="setProdType('individual')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:var(--white);border:0.5px solid var(--border);cursor:pointer;text-align:center;font-family:var(--font-body)">
-          <i class="ti ti-tag" style="font-size:26px;color:var(--gray-400)" aria-hidden="true"></i>
-          <span style="font-size:12px;font-weight:600;color:var(--gray-700)">Individual</span>
-          <span style="font-size:10px;color:var(--gray-400);line-height:1.3">Single item sold<br>from the machine</span>
+        <button id="ptype-individual" onclick="setProdType('individual')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:#EAF3DE;border:0.5px solid #97C459;cursor:pointer;text-align:center;font-family:var(--font-body)">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#3B6D11" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+          <span style="font-size:12px;font-weight:600;color:#27500A">Individual</span>
+          <span style="font-size:10px;color:#3B6D11;line-height:1.3">Single item sold<br>from the machine</span>
         </button>
-        <button id="ptype-bulk" onclick="setProdType('bulk')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:var(--white);border:0.5px solid var(--border);cursor:pointer;text-align:center;font-family:var(--font-body)">
-          <i class="ti ti-box" style="font-size:26px;color:var(--gray-400)" aria-hidden="true"></i>
-          <span style="font-size:12px;font-weight:600;color:var(--gray-700)">Bulk Pack</span>
-          <span style="font-size:10px;color:var(--gray-400);line-height:1.3">Case/box bought<br>from supplier</span>
+        <button id="ptype-bulk" onclick="setProdType('bulk')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:#E6F1FB;border:0.5px solid #85B7EB;cursor:pointer;text-align:center;font-family:var(--font-body)">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#185FA5" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          <span style="font-size:12px;font-weight:600;color:#0C447C">Bulk Pack</span>
+          <span style="font-size:10px;color:#185FA5;line-height:1.3">Case/box bought<br>from supplier</span>
         </button>
-        <button id="ptype-variety" onclick="setProdType('variety')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:var(--white);border:0.5px solid var(--border);cursor:pointer;text-align:center;font-family:var(--font-body)">
-          <i class="ti ti-arrows-split-2" style="font-size:26px;color:var(--gray-400)" aria-hidden="true"></i>
-          <span style="font-size:12px;font-weight:600;color:var(--gray-700)">Variety Pack</span>
-          <span style="font-size:10px;color:var(--gray-400);line-height:1.3">Mixed pack that<br>splits into items</span>
+        <button id="ptype-variety" onclick="setProdType('variety')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:#FBEAF0;border:0.5px solid #ED93B1;cursor:pointer;text-align:center;font-family:var(--font-body)">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#993556" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="17" y1="17" x2="22" y2="22"/><line x1="17" y1="7" x2="22" y2="2"/><path d="M2 12h7"/><path d="M9 6l-7 6 7 6"/><path d="M9 12h4l3-5"/><path d="M13 12l3 5"/></svg>
+          <span style="font-size:12px;font-weight:600;color:#72243E">Variety Pack</span>
+          <span style="font-size:10px;color:#993556;line-height:1.3">Mixed pack that<br>splits into items</span>
         </button>
       </div>
     </div>
@@ -1139,8 +1139,8 @@ async function openEP(id) {
   document.getElementById('mpt').textContent = 'Edit product';
   document.getElementById('del-prod-btn').style.display='inline-flex';
   document.getElementById('peid').value = p.id;
-  // Auto-detect product type and reveal correct fields
-  const _detectedType = p.is_variety_pack ? 'variety' : (parseInt(p.units_per_case||1)>1 ? 'bulk' : 'individual');
+  // Use stored product_type if present, otherwise fall back to detection
+  const _detectedType = p.product_type || (p.is_variety_pack ? 'variety' : (parseInt(p.units_per_case||1)>1 ? 'bulk' : 'individual'));
   setProdType(_detectedType);
   document.getElementById('pb').value = p.barcode||'';
   document.getElementById('pn').value = p.name||'';
@@ -1282,22 +1282,27 @@ let _prodType = ''; // 'individual' | 'bulk' | 'variety'
 function setProdType(type) {
   _prodType = type;
   // Highlight selected button — each type has its own color scheme
+  const _ptColors = {
+    individual: {bg:'#EAF3DE',border:'#97C459',activeBg:'#3B6D11',activeBorder:'#27500A',icon:'#3B6D11',activeIcon:'#fff',text:'#27500A',sub:'#3B6D11'},
+    bulk:       {bg:'#E6F1FB',border:'#85B7EB',activeBg:'#185FA5',activeBorder:'#0C447C',icon:'#185FA5',activeIcon:'#fff',text:'#0C447C',sub:'#185FA5'},
+    variety:    {bg:'#FBEAF0',border:'#ED93B1',activeBg:'#993556',activeBorder:'#72243E',icon:'#993556',activeIcon:'#fff',text:'#72243E',sub:'#993556'}
+  };
   ['individual','bulk','variety'].forEach(t => {
     const btn = document.getElementById('ptype-'+t);
     if(!btn) return;
+    const c = _ptColors[t];
     btn.style.display = 'flex';
     btn.style.flexDirection = 'column';
-    if(t === type) {
-      btn.style.background = 'var(--teal)';
-      btn.style.borderColor = 'var(--teal-dark)';
-      btn.style.borderWidth = '2px';
-      btn.querySelectorAll('i,span').forEach(el => el.style.color = '#fff');
-    } else {
-      btn.style.background = 'var(--white)';
-      btn.style.borderColor = 'var(--border)';
-      btn.style.borderWidth = '0.5px';
-      btn.querySelectorAll('i,span').forEach(el => el.style.color = '');
-    }
+    const active = t === type;
+    btn.style.background = active ? c.activeBg : c.bg;
+    btn.style.borderColor = active ? c.activeBorder : c.border;
+    btn.style.borderWidth = active ? '2px' : '0.5px';
+    // SVG strokes
+    btn.querySelectorAll('svg').forEach(svg => svg.setAttribute('stroke', active ? c.activeIcon : c.icon));
+    // Text spans
+    const spans = btn.querySelectorAll('span');
+    if(spans[0]) spans[0].style.color = active ? '#fff' : c.text;
+    if(spans[1]) spans[1].style.color = active ? 'rgba(255,255,255,0.8)' : c.sub;
   });
   // Show the fields panel
   document.getElementById('prod-fields').style.display = 'block';
@@ -1602,6 +1607,7 @@ async function saveProd() {
       product_code:document.getElementById('pco').value||null,
       brand:document.getElementById('pbr').value||null,
       category_id:document.getElementById('pca').value||null,
+      product_type:_prodType||null,
       last_supplier_id:document.getElementById('psu').value||null,
       size_value:parseFloat(document.getElementById('psz').value)||null,
       size_unit:document.getElementById('psu2').value||null,
