@@ -559,20 +559,20 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
     <div id="prod-type-bar" style="margin-bottom:16px">
       <div style="font-size:12px;font-weight:600;color:var(--gray-600);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Product type</div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-        <button id="ptype-individual" onclick="setProdType('individual')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:#EAF3DE;border:0.5px solid #97C459;cursor:pointer;text-align:center;font-family:var(--font-body)">
-          <i class="ti ti-tag" style="font-size:26px;color:#3B6D11" aria-hidden="true"></i>
-          <span style="font-size:12px;font-weight:600;color:#27500A">Individual</span>
-          <span style="font-size:10px;color:#3B6D11;line-height:1.3">Single item sold<br>from the machine</span>
+        <button id="ptype-individual" onclick="setProdType('individual')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:var(--white);border:0.5px solid var(--border);cursor:pointer;text-align:center;font-family:var(--font-body)">
+          <i class="ti ti-tag" style="font-size:26px;color:var(--gray-400)" aria-hidden="true"></i>
+          <span style="font-size:12px;font-weight:600;color:var(--gray-700)">Individual</span>
+          <span style="font-size:10px;color:var(--gray-400);line-height:1.3">Single item sold<br>from the machine</span>
         </button>
-        <button id="ptype-bulk" onclick="setProdType('bulk')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:#E6F1FB;border:0.5px solid #85B7EB;cursor:pointer;text-align:center;font-family:var(--font-body)">
-          <i class="ti ti-box" style="font-size:26px;color:#185FA5" aria-hidden="true"></i>
-          <span style="font-size:12px;font-weight:600;color:#0C447C">Bulk Pack</span>
-          <span style="font-size:10px;color:#185FA5;line-height:1.3">Case/box bought<br>from supplier</span>
+        <button id="ptype-bulk" onclick="setProdType('bulk')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:var(--white);border:0.5px solid var(--border);cursor:pointer;text-align:center;font-family:var(--font-body)">
+          <i class="ti ti-box" style="font-size:26px;color:var(--gray-400)" aria-hidden="true"></i>
+          <span style="font-size:12px;font-weight:600;color:var(--gray-700)">Bulk Pack</span>
+          <span style="font-size:10px;color:var(--gray-400);line-height:1.3">Case/box bought<br>from supplier</span>
         </button>
-        <button id="ptype-variety" onclick="setProdType('variety')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:#FBEAF0;border:0.5px solid #ED93B1;cursor:pointer;text-align:center;font-family:var(--font-body)">
-          <i class="ti ti-arrows-split-2" style="font-size:26px;color:#993556" aria-hidden="true"></i>
-          <span style="font-size:12px;font-weight:600;color:#72243E">Variety Pack</span>
-          <span style="font-size:10px;color:#993556;line-height:1.3">Mixed pack that<br>splits into items</span>
+        <button id="ptype-variety" onclick="setProdType('variety')" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border-radius:12px;background:var(--white);border:0.5px solid var(--border);cursor:pointer;text-align:center;font-family:var(--font-body)">
+          <i class="ti ti-arrows-split-2" style="font-size:26px;color:var(--gray-400)" aria-hidden="true"></i>
+          <span style="font-size:12px;font-weight:600;color:var(--gray-700)">Variety Pack</span>
+          <span style="font-size:10px;color:var(--gray-400);line-height:1.3">Mixed pack that<br>splits into items</span>
         </button>
       </div>
     </div>
@@ -1284,23 +1284,19 @@ let _prodType = ''; // 'individual' | 'bulk' | 'variety'
 function setProdType(type) {
   _prodType = type;
   // Highlight selected button — each type has its own color scheme
-  const _typeStyles = {
-    individual: { bg:'#EAF3DE', border:'#639922', activeBg:'#3B6D11', activeBorder:'#27500A' },
-    bulk:       { bg:'#E6F1FB', border:'#378ADD', activeBg:'#185FA5', activeBorder:'#0C447C' },
-    variety:    { bg:'#FBEAF0', border:'#D4537E', activeBg:'#993556', activeBorder:'#72243E' }
-  };
   ['individual','bulk','variety'].forEach(t => {
     const btn = document.getElementById('ptype-'+t);
     if(!btn) return;
-    const s = _typeStyles[t];
+    btn.style.display = 'flex';
+    btn.style.flexDirection = 'column';
     if(t === type) {
-      btn.style.background = s.activeBg;
-      btn.style.borderColor = s.activeBorder;
+      btn.style.background = 'var(--teal)';
+      btn.style.borderColor = 'var(--teal-dark)';
       btn.style.borderWidth = '2px';
       btn.querySelectorAll('i,span').forEach(el => el.style.color = '#fff');
     } else {
-      btn.style.background = s.bg;
-      btn.style.borderColor = s.border;
+      btn.style.background = 'var(--white)';
+      btn.style.borderColor = 'var(--border)';
       btn.style.borderWidth = '0.5px';
       btn.querySelectorAll('i,span').forEach(el => el.style.color = '');
     }
