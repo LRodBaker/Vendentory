@@ -915,7 +915,7 @@ async function loadAll() {
 }
 
 async function loadCats() {
-  const {data}=await dbFetch('categories',{order:'name'});
+  const {data}=await dbFetch('categories',{filters:{'is_active':'eq.true'},order:'name'});
   AC=data||[];
   const opts=AC.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
   const cf=document.getElementById('pcf');
@@ -2711,7 +2711,23 @@ function sTbl(rows){return`<div class="card"><table class="tbl"><thead><tr><th>#
 
 async function loadSets(){
   await loadCats();await loadSups();
-  document.getElementById('catl').innerHTML=AC.map(c=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--border);font-size:13px" id="crow-${c.id}"><span id="clbl-${c.id}">${c.name}</span><div id="cbtn-${c.id}"><button class="btn btn-sm" style="padding:2px 10px;font-size:12px" onclick="editCat('${c.id}')">✏️ Edit</button></div></div>`).join('');
+  // Fetch ALL categories (including inactive) for settings management
+  const tok=await getAuthToken();
+  const h={'apikey':SKEY,'Authorization':'Bearer '+tok};
+  const allCatsResp=await fetch(SURL+'/rest/v1/categories?order=name',{headers:h});
+  const allCats=allCatsResp.ok?await allCatsResp.json():AC;
+  document.getElementById('catl').innerHTML=allCats.map(c=>`
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:0.5px solid var(--border);font-size:13px" id="crow-${c.id}">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="clbl-${c.id}" style="color:${c.is_active?'var(--gray-900)':'var(--gray-400)');text-decoration:${c.is_active?'none':'line-through'}">${c.name}</span>
+        ${!c.is_active?'<span style="font-size:10px;background:var(--gray-50);color:var(--gray-400);padding:1px 6px;border-radius:4px;border:0.5px solid var(--border)">Inactive</span>':''}
+      </div>
+      <div id="cbtn-${c.id}" style="display:flex;gap:4px">
+        <button class="btn btn-sm" style="padding:2px 10px;font-size:12px" onclick="editCat('${c.id}')">✏️ Edit</button>
+        <button class="btn btn-sm" style="padding:2px 10px;font-size:12px" data-id="${c.id}" data-active="${c.is_active}" onclick="toggleCat(this.dataset.id,this.dataset.active==='true')">${c.is_active?'Deactivate':'Activate'}</button>
+        <button class="btn btn-sm btn-d" style="padding:2px 10px;font-size:12px" data-id="${c.id}" onclick="deleteCat(this.dataset.id)">🗑</button>
+      </div>
+    </div>`).join('');
   document.getElementById('supl').innerHTML=AS2.map(s=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--border);font-size:13px" id="srow-${s.id}"><span id="slbl-${s.id}">${s.name}</span><div id="sbtn-${s.id}"><button class="btn btn-sm" style="padding:2px 10px;font-size:12px" onclick="editSup('${s.id}')">✏️ Edit</button></div></div>`).join('');
 }
 
@@ -2729,6 +2745,39 @@ async function saveCat(id){
   const catResp=await fetch(SURL+'/rest/v1/categories?id=eq.'+id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:val})});
   if(!catResp.ok){toast('Error updating category','err');return;}
   await loadCats();loadSets();toast('Category updated!','ok');
+}
+
+async function toggleCat(id, currentlyActive){
+  const cat=AC.find(c=>c.id===id);
+  const nm=cat?cat.name:id;
+  const newState=!currentlyActive;
+  const tok=await getAuthToken();
+  const r=await fetch(SURL+'/rest/v1/categories?id=eq.'+id,{
+    method:'PATCH',
+    headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},
+    body:JSON.stringify({is_active:newState})
+  });
+  if(!r.ok){toast('Update failed','err');return;}
+  await loadCats();loadSets();
+  toast('"'+nm+'" '+(newState?'activated':'deactivated'),'ok');
+}
+
+async function deleteCat(id){
+  const cat=AC.find(c=>c.id===id);
+  const nm=cat?cat.name:'this category';
+  const tok=await getAuthToken();
+  const h={'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+  // Check if any products use this category
+  const chk=await fetch(SURL+'/rest/v1/products?category_id=eq.'+id+'&select=id&limit=1',{headers:h});
+  const used=chk.ok?await chk.json():[];
+  if(used.length>0){
+    toast('"'+nm+'" is used by products — reassign them first','err');
+    return;
+  }
+  if(!confirm('Delete category "'+nm+'"?\n\nNo products are using it. This cannot be undone.')) return;
+  const r=await fetch(SURL+'/rest/v1/categories?id=eq.'+id,{method:'DELETE',headers:h});
+  if(!r.ok){toast('Delete failed','err');return;}
+  await loadCats();loadSets();toast('"'+nm+'" deleted','ok');
 }
 
 function editSup(id){
