@@ -303,6 +303,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
               <option value="">All Products</option>
               <option value="individual">Individual</option>
               <option value="bulk">Bulk Packs</option>
+              <option value="variety">Variety Packs</option>
             </select>
             <select class="fs" style="width:auto" id="pcf" onchange="renderProds()"><option value="">All Categories</option></select>
             <select class="fs" style="width:auto" id="psf" onchange="renderProds()"><option value="">All Status</option><option value="REORDER">Reorder needed</option><option value="OK">OK</option></select>
@@ -1038,8 +1039,9 @@ function renderProds() {
     if(q&&!p.name.toLowerCase().includes(q)&&!(p.barcode||'').includes(q)&&!(p.product_code||'').toLowerCase().includes(q)) return false;
     if(cf&&p.category_id!==cf) return false;
     if(sf&&p.stock_status!==sf) return false;
-    if(clf==='individual'&&(p.is_variety_pack||parseInt(p.units_per_case||1)>1)) return false;
-    if(clf==='bulk'&&(!p.is_variety_pack&&parseInt(p.units_per_case||1)<=1)) return false;
+    if(clf==='individual'&&(p.product_type?p.product_type!=='individual':(p.is_variety_pack||parseInt(p.units_per_case||1)>1))) return false;
+    if(clf==='bulk'&&(p.product_type?p.product_type==='individual':(p.is_variety_pack||parseInt(p.units_per_case||1)<=1))) return false;
+    if(clf==='variety'&&(p.product_type?p.product_type!=='variety':!p.is_variety_pack)) return false;
     return true;
   });
   const g=document.getElementById('pgrid');
@@ -1200,9 +1202,9 @@ async function openEP(id) {
   }
   // Load variety pack components — use direct fetch() to avoid JS client hang
   VP_LINES = [];
-  document.getElementById('pIsVariety').checked = !!p.is_variety_pack;
+  document.getElementById('pIsVariety').checked = _detectedType === 'variety';
   // type auto-detected by setProdType() in openEP
-  if(p.is_variety_pack) {
+  if(_detectedType === 'variety') {
     const compResp = await fetch(
       SURL+'/rest/v1/product_components?pack_product_id=eq.'+p.id+'&select=id,component_product_id,qty_per_pack,products!product_components_component_product_id_fkey(id,name,barcode)&order=id',
       { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
@@ -1242,7 +1244,7 @@ async function openEP(id) {
   // Load base product links (stored in product_components, separate from variety pack)
   BASE_LINES = [];
   document.getElementById('base-lines').innerHTML='';
-  if(p.id && !p.is_variety_pack) {
+  if(p.id && _detectedType !== 'variety') {
     const baseResp = await fetch(
       SURL+'/rest/v1/product_components?pack_product_id=eq.'+p.id+'&select=id,component_product_id,qty_per_pack,products!product_components_component_product_id_fkey(id,name,barcode)&order=id',
       { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
@@ -1696,8 +1698,11 @@ async function saveProd() {
       } catch(e) {}
     }
 
-    // Only touch product_components for variety packs
-    if(savedId && isVariety) {
+    // Handle product_components based on type:
+    // - variety: delete old + insert new VP_LINES
+    // - bulk: delete old variety components (base links handled separately below)
+    // - individual: delete any stale components
+    if(savedId && (isVariety || _prodType === 'individual')) {
       const ctok = await getAuthToken();
       const ch = {'apikey':SKEY,'Authorization':'Bearer '+ctok};
 
@@ -1714,20 +1719,22 @@ async function saveProd() {
         return;
       }
 
-      // INSERT new components (10s timeout)
-      const compRows = VP_LINES.filter(l=>l.component_product_id&&l.qty_per_pack>0)
-        .map(l=>({pack_product_id:savedId,component_product_id:l.component_product_id,qty_per_pack:l.qty_per_pack}));
-      if(compRows.length) {
-        const insCtrl = new AbortController();
-        const insTimer = setTimeout(()=>insCtrl.abort(), 10000);
-        try {
-          const insResp = await fetch(SURL+'/rest/v1/product_components',{method:'POST',headers:{...ch,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify(compRows),signal:insCtrl.signal});
-          clearTimeout(insTimer);
-          if(!insResp.ok) { const t=await insResp.text(); showSaveErr('Component save failed: '+t); return; }
-        } catch(e) {
-          clearTimeout(insTimer);
-          showSaveErr(e.name==='AbortError'?'Component save timed out':'Component save error: '+e.message);
-          return;
+      // INSERT new components for variety packs only (10s timeout)
+      if(isVariety) {
+        const compRows = VP_LINES.filter(l=>l.component_product_id&&l.qty_per_pack>0)
+          .map(l=>({pack_product_id:savedId,component_product_id:l.component_product_id,qty_per_pack:l.qty_per_pack}));
+        if(compRows.length) {
+          const insCtrl = new AbortController();
+          const insTimer = setTimeout(()=>insCtrl.abort(), 10000);
+          try {
+            const insResp = await fetch(SURL+'/rest/v1/product_components',{method:'POST',headers:{...ch,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify(compRows),signal:insCtrl.signal});
+            clearTimeout(insTimer);
+            if(!insResp.ok) { const t=await insResp.text(); showSaveErr('Component save failed: '+t); return; }
+          } catch(e) {
+            clearTimeout(insTimer);
+            showSaveErr(e.name==='AbortError'?'Component save timed out':'Component save error: '+e.message);
+            return;
+          }
         }
       }
     }
@@ -1811,8 +1818,8 @@ async function saveProd() {
     }
 
     // Save base product links — delete existing then re-insert
-    // Only for non-variety-pack products
-    if(savedId && !isVariety) {
+    // Only for bulk products (not variety packs, not individual)
+    if(savedId && _prodType === 'bulk') {
       const bTok = await getAuthToken();
       const bH = {'apikey':SKEY,'Authorization':'Bearer '+bTok,'Content-Type':'application/json'};
 
@@ -2400,7 +2407,7 @@ function openAIImportPreview(data) {
     });
   }
   renderPL();
-  updPurTot();
+  updPT();
   // Show a summary toast
   const matched = data.lines.filter(l => l.matched_product_id).length;
   const total = data.lines.length;
