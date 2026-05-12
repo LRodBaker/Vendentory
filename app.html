@@ -112,7 +112,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
 @keyframes sl{0%,100%{top:15%}50%{top:80%}}
 .tw{position:fixed;bottom:24px;right:24px;z-index:999;display:flex;flex-direction:column;gap:8px}
 .toast{background:var(--gray-900);color:#fff;padding:11px 16px;border-radius:10px;font-size:13px;font-weight:500;animation:su .2s ease;max-width:300px}
-.toast.ok{background:var(--teal-dark)}.toast.err{background:var(--red)}
+.toast.ok{background:var(--teal-dark)}.toast.err{background:var(--red)}.toast.warn{background:#D97706}
 @keyframes su{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 .page{display:none}.page.active{display:block;animation:fi .17s ease}
 @keyframes fi{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
@@ -337,9 +337,15 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
                 <div style="font-size:13px" class="tm">Subtotal: <span id="pts">$0.00</span> · Ship: <span id="ptsh">$0.00</span> · Tax: <span id="pttx">$0.00</span> · Extra: <span id="ptex">$0.00</span></div>
                 <div style="font-size:18px;font-weight:700;font-family:var(--font-head)">Total: <span id="ptt">$0.00</span></div>
               </div>
-              <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-                <button class="btn btn-p" onclick="savePur()">Save &amp; receive purchase</button>
-                <button class="btn" onclick="clrPur()">Clear</button>
+              <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;justify-content:space-between;align-items:center">
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="btn btn-p" onclick="savePur()">Save &amp; receive purchase</button>
+                  <button class="btn" onclick="clrPur()">Clear</button>
+                </div>
+                <button id="ai-import-btn" class="btn" style="display:none;gap:6px;background:#6C47D8;color:#fff;border-color:#5535B8" onclick="openAIImport()">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+                  AI Import Receipt
+                </button>
               </div>
             </div>
             <!-- PURCHASE HISTORY -->
@@ -713,7 +719,7 @@ const SKEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZ
 // ═══════════════════════════════════════════════════
 
 let sb = null;
-let CU = null, CP = null, AP = [], AC = [], AS2 = [], PL = [], adjP = null, impRows = [], rScans = [], curRT = 'weekly';
+let CU = null, CP = null, FF = {}, AP = [], AC = [], AS2 = [], PL = [], adjP = null, impRows = [], rScans = [], curRT = 'weekly';
 let VP_LINES = []; // variety pack component lines for the product edit modal
 let SKU_LINES = []; // bulk barcode lines for the product edit modal
 let BASE_LINES = []; // base product links for bulk products
@@ -874,6 +880,26 @@ async function loadProf() {
   if(document.getElementById('sn')) document.getElementById('sn').value=nm;
   if(document.getElementById('se')) document.getElementById('se').value=CU.email;
   if(document.getElementById('sro')) document.getElementById('sro').value=rl;
+  // Load feature flags for this user
+  await loadFlags();
+}
+
+async function loadFlags() {
+  if(!CU) return;
+  try {
+    const tok = await getAuthToken();
+    const r = await fetch(SURL+'/rest/v1/feature_flags?user_id=eq.'+CU.id, {
+      headers:{'apikey':SKEY,'Authorization':'Bearer '+tok}
+    });
+    if(!r.ok) return;
+    const rows = await r.json();
+    FF = {};
+    rows.forEach(row => FF[row.feature] = row.enabled);
+  } catch(e) { console.warn('loadFlags failed',e); }
+}
+
+function hasFeature(feature) {
+  return FF[feature] === true;
 }
 
 const PTITLES={dashboard:'Dashboard',scan:'Scan Product',products:'Products',purchases:'Purchases',adjustments:'Adjustments',imports:'Import Sales',reports:'Reports',machines:'Machines',settings:'Settings'};
@@ -896,7 +922,11 @@ function nav(pg) {
     ['rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
     loadWeekOpts();
   }
-  if(pg==='purchases') loadPurHistory();
+  if(pg==='purchases') {
+    loadPurHistory();
+    const aiBtn = document.getElementById('ai-import-btn');
+    if(aiBtn) aiBtn.style.display = hasFeature('ai_purchase_import') ? 'inline-flex' : 'none';
+  }
   if(pg==='settings'){loadSets();loadProf();}
   if(pg==='imports') loadIH();
 }
@@ -2255,6 +2285,132 @@ function updPL(i,f,v){
 function rmPL(i){PL.splice(i,1);renderPL();}
 function clrPur(){PL=[];renderPL();['pui','pun'].forEach(id=>document.getElementById(id).value='');['push','putx','puex'].forEach(id=>document.getElementById(id).value='0');}
 
+// ── AI PURCHASE IMPORT ───────────────────────────────────────────────────────
+function openAIImport() {
+  if(!hasFeature('ai_purchase_import')) { toast('AI Import is not enabled for your account','err'); return; }
+  document.getElementById('ai-import-file').click();
+}
+
+async function handleAIImportFile(input) {
+  const file = input.files[0];
+  if(!file) return;
+  input.value = ''; // reset so same file can be re-selected
+  if(file.type !== 'application/pdf') { toast('Please select a PDF file','err'); return; }
+  if(file.size > 10 * 1024 * 1024) { toast('PDF too large (max 10MB)','err'); return; }
+  showL('Reading receipt with AI...');
+  try {
+    // Convert PDF to base64
+    const base64 = await new Promise((res, rej) => {
+      const reader = new FileReader();
+      reader.onload = () => res(reader.result.split(',')[1]);
+      reader.onerror = () => rej(new Error('Read failed'));
+      reader.readAsDataURL(file);
+    });
+    // Build product list context for matching
+    const prodContext = AP.map(p => `${p.name} (id:${p.id})`).join('\n');
+    const prompt = `You are a purchase receipt parser for a vending machine business inventory app.
+
+Extract all line items from this receipt PDF and match them to the product list below.
+
+PRODUCT LIST:
+${prodContext}
+
+Return ONLY a JSON object in this exact format, no other text:
+{
+  "supplier": "supplier name from receipt",
+  "purchase_date": "YYYY-MM-DD",
+  "invoice_number": "invoice or order number if present",
+  "subtotal": 0.00,
+  "tax": 0.00,
+  "shipping": 0.00,
+  "lines": [
+    {
+      "description": "exact item name from receipt",
+      "qty": 1,
+      "unit_cost": 0.00,
+      "line_total": 0.00,
+      "matched_product_id": "uuid or null if no match",
+      "matched_product_name": "matched product name or null",
+      "confidence": "high|medium|low|none"
+    }
+  ]
+}`;
+
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
+            { type: 'text', text: prompt }
+          ]
+        }]
+      })
+    });
+
+    if(!resp.ok) { const e = await resp.json(); throw new Error(e.error?.message||'AI call failed'); }
+    const aiData = await resp.json();
+    const raw = aiData.content.map(b => b.text||'').join('');
+    const clean = raw.replace(/```json|```/g,'').trim();
+    const parsed = JSON.parse(clean);
+    hideL();
+    openAIImportPreview(parsed);
+  } catch(e) {
+    hideL();
+    toast('AI import failed: '+e.message, 'err');
+    console.error('AI import error:', e);
+  }
+}
+
+function openAIImportPreview(data) {
+  // Populate the purchase form with the AI-extracted data
+  // Date
+  if(data.purchase_date) document.getElementById('pud').value = data.purchase_date;
+  // Invoice number
+  if(data.invoice_number) document.getElementById('pui').value = data.invoice_number;
+  // Tax / shipping
+  if(data.tax)      document.getElementById('putx').value = data.tax.toFixed(2);
+  if(data.shipping) document.getElementById('push').value = data.shipping.toFixed(2);
+  // Supplier — try to match by name
+  if(data.supplier) {
+    const supEl = document.getElementById('pus');
+    if(supEl) {
+      const opts = Array.from(supEl.options);
+      const match = opts.find(o => o.text.toLowerCase().includes(data.supplier.toLowerCase()));
+      if(match) supEl.value = match.value;
+    }
+  }
+  // Clear existing lines and add AI-matched ones
+  PL = [];
+  if(data.lines && data.lines.length > 0) {
+    data.lines.forEach(line => {
+      PL.push({
+        product_id: line.matched_product_id || '',
+        product_name: line.matched_product_name || line.description,
+        units: line.qty,
+        unit_cost: line.unit_cost,
+        _aiDescription: line.description,
+        _confidence: line.confidence,
+        _unmatched: !line.matched_product_id
+      });
+    });
+  }
+  renderPL();
+  updPurTot();
+  // Show a summary toast
+  const matched = data.lines.filter(l => l.matched_product_id).length;
+  const total = data.lines.length;
+  const unmatched = total - matched;
+  let msg = `AI imported ${total} lines — ${matched} matched`;
+  if(unmatched > 0) msg += `, ${unmatched} need product assignment`;
+  toast(msg, matched === total ? 'ok' : 'warn');
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function loadPurHistory(){
   const el=document.getElementById('pur-history');
   if(!el)return;
@@ -2848,5 +3004,7 @@ function toast(msg,type=''){
   setTimeout(()=>el.remove(),3500);
 }
 </script>
+  <!-- AI Import hidden file input -->
+  <input type="file" id="ai-import-file" accept="application/pdf" style="display:none" onchange="handleAIImportFile(this)">
 </body>
 </html>
