@@ -631,7 +631,10 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
             <div>Component product</div><div>Qty per pack</div><div></div>
           </div>
           <div id="vp-lines"></div>
-          <button class="btn btn-sm" style="margin-top:8px" onclick="addVPLine()">+ Add component</button>
+          <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+            <button class="btn btn-sm" onclick="addVPLine()">+ Link existing product</button>
+            <button class="btn btn-sm" onclick="addVPLineNew()">+ Create new component</button>
+          </div>
         </div>
       </div>
 
@@ -1369,6 +1372,15 @@ function addVPLine() {
   renderVPLines();
 }
 
+function addVPLineNew() {
+  VP_LINES.push({ component_product_id:'', name:'', barcode:'', qty_per_pack:1, _mode:'create', _new_barcode:'', _new_name:'' });
+  renderVPLines();
+  setTimeout(()=>{
+    const inputs = document.querySelectorAll('.vp-newbc-input');
+    if(inputs.length) inputs[inputs.length-1].focus();
+  }, 50);
+}
+
 function removeVPLine(i) {
   VP_LINES.splice(i,1);
   renderVPLines();
@@ -1376,23 +1388,39 @@ function removeVPLine(i) {
 
 function renderVPLines() {
   const c = document.getElementById('vp-lines');
-  if(!VP_LINES.length) { c.innerHTML='<div class="tm" style="font-size:12px;padding:6px 0">No components yet. Click "+ Add component".</div>'; return; }
-  c.innerHTML = VP_LINES.map((l,i) => `
-    <div style="display:grid;grid-template-columns:1fr 90px 32px;gap:6px;align-items:center;margin-bottom:6px">
-      <div style="position:relative">
-        <input class="fi" style="font-size:12px;padding:6px 9px" placeholder="Search product name or barcode..."
-          value="${l.name ? l.name.replace(/"/g,'&quot;') : ''}"
-          oninput="vpSearch(${i},this.value)"
-          onfocus="vpSearch(${i},this.value)"
-          onblur="setTimeout(()=>{ const d=document.getElementById('vpdd-${i}'); if(d) d.style.display='none'; },180)"
-          id="vpinput-${i}">
-        <div id="vpdd-${i}" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:0.5px solid var(--border);border-radius:8px;max-height:160px;overflow-y:auto;z-index:600;box-shadow:0 4px 16px rgba(0,0,0,0.12)"></div>
-      </div>
-      <input class="fi" style="font-size:12px;padding:6px 9px;text-align:center" type="number" min="1" value="${l.qty_per_pack}"
-        onchange="VP_LINES[${i}].qty_per_pack=parseInt(this.value)||1" placeholder="Qty">
-      <button style="background:var(--red-light);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;color:var(--red-mid);font-size:14px;display:flex;align-items:center;justify-content:center" onclick="removeVPLine(${i})">&#10005;</button>
-    </div>
-  `).join('');
+  if(!VP_LINES.length) { c.innerHTML='<div class="tm" style="font-size:12px;padding:6px 0">No components yet. Use the buttons below to link or create components.</div>'; return; }
+  c.innerHTML = VP_LINES.map((l,i) => {
+    if(l._mode === 'create') {
+      return `
+        <div style="display:grid;grid-template-columns:1fr 1fr 90px 32px;gap:6px;align-items:center;margin-bottom:6px">
+          <input class="fi vp-newbc-input" style="font-size:12px;padding:6px 9px" placeholder="Barcode (UPC)"
+            value="${(l._new_barcode||'').replace(/"/g,'&quot;')}"
+            oninput="VP_LINES[${i}]._new_barcode=this.value">
+          <input class="fi" style="font-size:12px;padding:6px 9px" placeholder="Product name"
+            value="${(l._new_name||'').replace(/"/g,'&quot;')}"
+            oninput="VP_LINES[${i}]._new_name=this.value">
+          <input class="fi" style="font-size:12px;padding:6px 9px;text-align:center" type="number" min="1"
+            value="${l.qty_per_pack}" placeholder="Qty"
+            oninput="VP_LINES[${i}].qty_per_pack=parseInt(this.value)||1">
+          <button style="background:var(--red-light);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;color:var(--red-mid);font-size:14px;display:flex;align-items:center;justify-content:center" onclick="removeVPLine(${i})">&#10005;</button>
+        </div>`;
+    }
+    return `
+      <div style="display:grid;grid-template-columns:1fr 90px 32px;gap:6px;align-items:center;margin-bottom:6px">
+        <div style="position:relative">
+          <input class="fi" style="font-size:12px;padding:6px 9px" placeholder="Search product name or barcode..."
+            value="${l.name ? l.name.replace(/"/g,'&quot;') : ''}"
+            oninput="vpSearch(${i},this.value)"
+            onfocus="vpSearch(${i},this.value)"
+            onblur="setTimeout(()=>{ const d=document.getElementById('vpdd-${i}'); if(d) d.style.display='none'; },180)"
+            id="vpinput-${i}">
+          <div id="vpdd-${i}" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:0.5px solid var(--border);border-radius:8px;max-height:160px;overflow-y:auto;z-index:600;box-shadow:0 4px 16px rgba(0,0,0,0.12)"></div>
+        </div>
+        <input class="fi" style="font-size:12px;padding:6px 9px;text-align:center" type="number" min="1" value="${l.qty_per_pack}"
+          onchange="VP_LINES[${i}].qty_per_pack=parseInt(this.value)||1" placeholder="Qty">
+        <button style="background:var(--red-light);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;color:var(--red-mid);font-size:14px;display:flex;align-items:center;justify-content:center" onclick="removeVPLine(${i})">&#10005;</button>
+      </div>`;
+  }).join('');
 }
 
 // Store VP search results keyed by line index so vpSelect can retrieve full objects safely
@@ -1722,6 +1750,41 @@ async function saveProd() {
 
       // INSERT new components for variety packs only (10s timeout)
       if(isVariety) {
+        // First: create any new products from _mode==='create' lines
+        for(let i=0; i<VP_LINES.length; i++) {
+          const l = VP_LINES[i];
+          if(l._mode !== 'create') continue;
+          if(!l._new_name || !l._new_name.trim()) continue;
+          const newProdCtrl = new AbortController();
+          const newProdTimer = setTimeout(()=>newProdCtrl.abort(), 10000);
+          try {
+            const catId = document.getElementById('pca').value || null;
+            const newProdResp = await fetch(SURL+'/rest/v1/products', {
+              method:'POST',
+              headers:{...ch,'Content-Type':'application/json','Prefer':'return=representation'},
+              body:JSON.stringify({
+                name: l._new_name.trim(),
+                barcode: l._new_barcode.trim()||null,
+                product_type: 'individual',
+                is_active: true,
+                category_id: catId
+              }),
+              signal:newProdCtrl.signal
+            });
+            clearTimeout(newProdTimer);
+            if(!newProdResp.ok){ const t=await newProdResp.text(); showSaveErr('Create component failed: '+t); return; }
+            const newProds = await newProdResp.json();
+            if(newProds && newProds[0]) {
+              VP_LINES[i].component_product_id = newProds[0].id;
+              VP_LINES[i].name = newProds[0].name;
+            }
+          } catch(e) {
+            clearTimeout(newProdTimer);
+            showSaveErr(e.name==='AbortError'?'Create component timed out':'Create component error: '+e.message);
+            return;
+          }
+        }
+        // Now insert all component rows that have a valid product ID
         const compRows = VP_LINES.filter(l=>l.component_product_id&&l.qty_per_pack>0)
           .map(l=>({pack_product_id:savedId,component_product_id:l.component_product_id,qty_per_pack:l.qty_per_pack}));
         if(compRows.length) {
