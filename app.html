@@ -450,6 +450,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
             <button class="tab-btn" onclick="switchRT('inventory',this)">Inventory</button>
             <button class="tab-btn" onclick="switchRT('top',this)">Top sellers</button>
             <button class="tab-btn" onclick="switchRT('bottom',this)">Bottom sellers</button>
+            <button class="tab-btn" onclick="switchRT('bookkeeper',this)">&#128196; Bookkeeper</button>
           </div>
           <div id="rpt-wpick" style="margin-bottom:14px">
             <div style="background:var(--white);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
@@ -480,6 +481,13 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
               <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">Start date</label><input class="fi" type="date" id="rpt-ps" style="width:160px"></div>
               <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">End date</label><input class="fi" type="date" id="rpt-pe" style="width:160px"></div>
               <button class="btn btn-p" onclick="runPLRpt()">Run P&amp;L report</button>
+            </div>
+          </div>
+          <div id="rpt-bkpick" style="display:none;margin-bottom:14px">
+            <div style="background:var(--white);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+              <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">Start date</label><input class="fi" type="date" id="rpt-bks" style="width:160px"></div>
+              <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">End date</label><input class="fi" type="date" id="rpt-bke" style="width:160px"></div>
+              <button class="btn btn-p" onclick="runBookkeeperRpt()">&#9654; Run report</button>
             </div>
           </div>
           <div id="rc"><div class="tm">Loading...</div></div>
@@ -920,7 +928,7 @@ function nav(pg) {
   if(pg==='adjustments'){loadRAJ();setDates();}
   if(pg==='reports'){
     document.getElementById('rpt-wpick').style.display='block';
-    ['rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
+    ['rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick','rpt-bkpick'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
     loadWeekOpts();
   }
   if(pg==='purchases') {
@@ -2752,7 +2760,7 @@ async function loadIH(){
 function switchRT(tab,btn){
   document.querySelectorAll('.tab-bar .tab-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active'); curRT=tab;
-  ['rpt-wpick','rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick'].forEach(id=>{
+  ['rpt-wpick','rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick','rpt-bkpick'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.style.display='none';
   });
   if(tab==='weekly'){
@@ -2785,6 +2793,13 @@ function switchRT(tab,btn){
     if(ps&&!ps.value)ps.value=ago.toISOString().split('T')[0];
     if(pe&&!pe.value)pe.value=now.toISOString().split('T')[0];
     document.getElementById('rc').innerHTML='<div class="muted">Set your date range and click Run P&L report.</div>';
+  }
+  else if(tab==='bookkeeper'){
+    const el=document.getElementById('rpt-bkpick');if(el)el.style.display='block';
+    const bks=document.getElementById('rpt-bks'),bke=document.getElementById('rpt-bke');
+    if(bks&&!bks.value)bks.value='2026-04-01';
+    if(bke&&!bke.value)bke.value='2026-04-30';
+    document.getElementById('rc').innerHTML='<div class="muted">Select a date range and click Run report to generate the bookkeeper export.</div>';
   }
 }
 
@@ -3076,6 +3091,261 @@ function downloadCSV(tableId, filename) {
 
 function fmt(v){return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(parseFloat(v)||0);}
 function fmtD(dt){if(!dt)return'—';const d=new Date(dt);return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});}
+
+// ── Bookkeeper Export ──────────────────────────────────────────────────────────
+let _bkData = null; // cache last run for CSV/PDF downloads
+
+async function runBookkeeperRpt(){
+  const start=document.getElementById('rpt-bks')?.value, end=document.getElementById('rpt-bke')?.value;
+  if(!start||!end){toast('Please select start and end dates','err');return;}
+  document.getElementById('rc').innerHTML='<div class="muted">Loading bookkeeper data...</div>';
+
+  // 1. Sales lines with product + category
+  const {data:sl,error:sErr}=await dbFetch('sales_lines',{
+    select:'units_sold,sales_amount,product_id,raw_product_name,products(name,average_cost,categories(name))',
+    filters:{'period_start_date':'gte.'+start,'period_start_date2':'lte.'+end,'product_id':'not.is.null'}
+  });
+  if(sErr){document.getElementById('rc').innerHTML='<div style="color:var(--red)">Error loading sales: '+sErr.message+'</div>';return;}
+
+  // 2. Purchases received in date range
+  const {data:purs,error:pErr}=await dbFetch('purchases',{
+    select:'total_amount,purchase_date',
+    filters:{'purchase_date':'gte.'+start,'purchase_date2':'lte.'+end,'status':'eq.received'}
+  });
+  if(pErr){document.getElementById('rc').innerHTML='<div style="color:var(--red)">Error loading purchases: '+pErr.message+'</div>';return;}
+
+  // 3. Current inventory on hand (snapshot at time of report)
+  const {data:inv}=await dbFetch('inventory_on_hand',{select:'product_id,on_hand_qty,inventory_value,average_cost,category_name'});
+  const invMap={};(inv||[]).forEach(r=>{invMap[r.product_id]=r;});
+
+  // ── Aggregate sales by product ──
+  const prodMap={};
+  (sl||[]).forEach(r=>{
+    const pid=r.product_id;
+    const name=r.products?.name||r.raw_product_name||'Unknown';
+    const cat=r.products?.categories?.name||'Uncategorized';
+    const wac=parseFloat(r.products?.average_cost||0);
+    if(!prodMap[pid])prodMap[pid]={pid,name,cat,sales:0,units:0,cogs:0};
+    prodMap[pid].sales+=parseFloat(r.sales_amount||0);
+    prodMap[pid].units+=parseInt(r.units_sold||0);
+    prodMap[pid].cogs+=parseInt(r.units_sold||0)*wac;
+  });
+  const prodRows=Object.values(prodMap).sort((a,b)=>b.sales-a.sales);
+
+  // ── Category rollups ──
+  const catMap={};
+  prodRows.forEach(r=>{
+    const c=r.cat;
+    if(!catMap[c])catMap[c]={cat:c,sales:0,units:0,cogs:0};
+    catMap[c].sales+=r.sales; catMap[c].units+=r.units; catMap[c].cogs+=r.cogs;
+  });
+  const catRows=Object.values(catMap).sort((a,b)=>b.sales-a.sales);
+
+  // ── Purchases total ──
+  const totalPurchases=(purs||[]).reduce((s,r)=>s+parseFloat(r.total_amount||0),0);
+
+  // ── Inventory value totals by category ──
+  const invByCat={};
+  (inv||[]).forEach(r=>{
+    const c=r.category_name||'Uncategorized';
+    if(!invByCat[c])invByCat[c]=0;
+    invByCat[c]+=parseFloat(r.inventory_value||0);
+  });
+  const totalInvValue=(inv||[]).reduce((s,r)=>s+parseFloat(r.inventory_value||0),0);
+
+  // ── Totals ──
+  const totalSales=prodRows.reduce((s,r)=>s+r.sales,0);
+  const totalCOGS=prodRows.reduce((s,r)=>s+r.cogs,0);
+  const totalUnits=prodRows.reduce((s,r)=>s+r.units,0);
+  const grossProfit=totalSales-totalCOGS;
+  const margin=totalSales>0?(grossProfit/totalSales*100).toFixed(1):0;
+
+  // Cache for downloads
+  _bkData={start,end,prodRows,catRows,totalSales,totalCOGS,totalUnits,grossProfit,margin,totalPurchases,totalInvValue,invByCat};
+
+  // ── Render ──
+  const catInvRows=Object.entries(invByCat).sort((a,b)=>b[1]-a[1]);
+  document.getElementById('rc').innerHTML=`
+    <div class="card" style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+        <div>
+          <div style="font-size:15px;font-weight:700;font-family:var(--font-head)">&#128196; Bookkeeper Export</div>
+          <div style="font-size:12px;color:var(--gray-400);margin-top:2px">${start} &mdash; ${end}</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="downloadBookkeeperCSV()">&#11015; Download CSV</button>
+          <button class="btn btn-sm btn-p" onclick="downloadBookkeeperPDF()">&#128196; Download PDF</button>
+        </div>
+      </div>
+
+      <!-- Summary stats -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:18px">
+        ${[
+          ['Total Sales',fmt(totalSales),'var(--teal-dark)'],
+          ['Total COGS','('+fmt(totalCOGS)+')','var(--red)'],
+          ['Gross Profit',fmt(grossProfit),grossProfit>=0?'var(--green)':'var(--red)'],
+          ['Gross Margin',margin+'%',margin>=40?'var(--green)':margin>=20?'var(--amber)':'var(--red)'],
+          ['Total Purchases',fmt(totalPurchases),'var(--gray-700)'],
+          ['Inventory Value',fmt(totalInvValue),'var(--gray-700)'],
+        ].map(([label,val,color])=>`
+          <div style="background:var(--gray-50);border-radius:10px;padding:12px 14px">
+            <div style="font-size:11px;color:var(--gray-400);font-weight:600;margin-bottom:4px">${label}</div>
+            <div style="font-size:16px;font-weight:700;color:${color}">${val}</div>
+          </div>`).join('')}
+      </div>
+
+      <!-- By Category summary -->
+      <div style="font-size:13px;font-weight:600;margin-bottom:8px">By Category</div>
+      <table class="tbl" style="margin-bottom:18px">
+        <thead><tr><th>Category</th><th>Units Sold</th><th>Sales</th><th>COGS</th><th>Gross Profit</th><th>Margin</th><th>Inv. Value</th></tr></thead>
+        <tbody>
+          ${catRows.map(r=>{const gp=r.sales-r.cogs,mg=r.sales>0?((gp/r.sales)*100).toFixed(1):0;return`
+          <tr>
+            <td><strong>${r.cat}</strong></td>
+            <td>${r.units}</td>
+            <td>${fmt(r.sales)}</td>
+            <td style="color:var(--red)">(${fmt(r.cogs)})</td>
+            <td style="color:${gp>=0?'var(--green)':'var(--red)'};font-weight:600">${fmt(gp)}</td>
+            <td style="color:${mg>=40?'var(--green)':mg>=20?'var(--amber)':'var(--red)'}">${mg}%</td>
+            <td>${fmt(invByCat[r.cat]||0)}</td>
+          </tr>`;}).join('')}
+          <tr style="border-top:2px solid var(--border);background:var(--gray-50)">
+            <td><strong>TOTAL</strong></td>
+            <td><strong>${totalUnits}</strong></td>
+            <td><strong>${fmt(totalSales)}</strong></td>
+            <td style="color:var(--red)"><strong>(${fmt(totalCOGS)})</strong></td>
+            <td style="color:${grossProfit>=0?'var(--green)':'var(--red)'};font-weight:700">${fmt(grossProfit)}</td>
+            <td><strong>${margin}%</strong></td>
+            <td><strong>${fmt(totalInvValue)}</strong></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Purchases received -->
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px">Purchases Received in Period</div>
+      <div style="background:var(--gray-50);border-radius:8px;padding:10px 14px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:13px;color:var(--gray-600)">${(purs||[]).length} purchase order${(purs||[]).length!==1?'s':''} received</div>
+        <div style="font-size:15px;font-weight:700">${fmt(totalPurchases)}</div>
+      </div>
+    </div>
+
+    <!-- Product detail -->
+    <div class="card">
+      <div style="font-size:13px;font-weight:600;margin-bottom:10px">Product Detail</div>
+      <table class="tbl" id="bk-prod-table">
+        <thead><tr><th>#</th><th>Product</th><th>Category</th><th>Units</th><th>Sales</th><th>COGS</th><th>Gross Profit</th><th>Margin</th></tr></thead>
+        <tbody>
+          ${prodRows.map((r,i)=>{const gp=r.sales-r.cogs,mg=r.sales>0?((gp/r.sales)*100).toFixed(1):0;return`
+          <tr>
+            <td style="color:var(--gray-400)">${i+1}</td>
+            <td><strong>${r.name}</strong></td>
+            <td><span class="badge b-teal">${r.cat}</span></td>
+            <td>${r.units}</td>
+            <td>${fmt(r.sales)}</td>
+            <td style="color:var(--red)">(${fmt(r.cogs)})</td>
+            <td style="color:${gp>=0?'var(--green)':'var(--red)'};font-weight:600">${fmt(gp)}</td>
+            <td style="color:${mg>=40?'var(--green)':mg>=20?'var(--amber)':'var(--red)'}">${mg}%</td>
+          </tr>`;}).join('')}
+          <tr style="border-top:2px solid var(--border);background:var(--gray-50)">
+            <td colspan="3"><strong>TOTAL</strong></td>
+            <td><strong>${totalUnits}</strong></td>
+            <td><strong>${fmt(totalSales)}</strong></td>
+            <td style="color:var(--red)"><strong>(${fmt(totalCOGS)})</strong></td>
+            <td style="color:${grossProfit>=0?'var(--green)':'var(--red)'};font-weight:700">${fmt(grossProfit)}</td>
+            <td><strong>${margin}%</strong></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function downloadBookkeeperCSV(){
+  if(!_bkData){toast('Run the report first','err');return;}
+  const {start,end,prodRows,catRows,totalSales,totalCOGS,totalUnits,grossProfit,margin,totalPurchases,totalInvValue,invByCat}=_bkData;
+  const lines=[];
+  lines.push('"Vendentory Bookkeeper Export"');
+  lines.push('"Period","'+start+' to '+end+'"');
+  lines.push('');
+  lines.push('"SUMMARY"');
+  lines.push('"Total Sales","'+totalSales.toFixed(2)+'"');
+  lines.push('"Total COGS","'+totalCOGS.toFixed(2)+'"');
+  lines.push('"Gross Profit","'+grossProfit.toFixed(2)+'"');
+  lines.push('"Gross Margin","'+margin+'%"');
+  lines.push('"Purchases Received","'+totalPurchases.toFixed(2)+'"');
+  lines.push('"Inventory Value (current)","'+totalInvValue.toFixed(2)+'"');
+  lines.push('');
+  lines.push('"BY CATEGORY"');
+  lines.push('"Category","Units Sold","Sales","COGS","Gross Profit","Margin","Inventory Value"');
+  catRows.forEach(r=>{
+    const gp=r.sales-r.cogs,mg=r.sales>0?((gp/r.sales)*100).toFixed(1):0;
+    lines.push(['"'+r.cat+'"',r.units,r.sales.toFixed(2),r.cogs.toFixed(2),gp.toFixed(2),mg+'%',(invByCat[r.cat]||0).toFixed(2)].join(','));
+  });
+  lines.push('');
+  lines.push('"PRODUCT DETAIL"');
+  lines.push('"#","Product","Category","Units Sold","Sales","COGS","Gross Profit","Margin"');
+  prodRows.forEach((r,i)=>{
+    const gp=r.sales-r.cogs,mg=r.sales>0?((gp/r.sales)*100).toFixed(1):0;
+    lines.push([(i+1),'"'+r.name.replace(/"/g,'""')+'"','"'+r.cat+'"',r.units,r.sales.toFixed(2),r.cogs.toFixed(2),gp.toFixed(2),mg+'%'].join(','));
+  });
+  const blob=new Blob([lines.join('\n')],{type:'text/csv'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download='Vendentory_Bookkeeper_'+start+'_'+end+'.csv';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+  toast('CSV downloaded','ok');
+}
+
+function downloadBookkeeperPDF(){
+  if(!_bkData){toast('Run the report first','err');return;}
+  const {start,end,prodRows,catRows,totalSales,totalCOGS,totalUnits,grossProfit,margin,totalPurchases,totalInvValue,invByCat}=_bkData;
+  const c=s=>`<td style="padding:6px 8px;border-bottom:1px solid #e5e5e5">${s}</td>`;
+  const ch=s=>`<th style="padding:6px 8px;background:#f5f5f2;font-size:11px;text-align:left;color:#666;border-bottom:2px solid #ddd;white-space:nowrap">${s}</th>`;
+  const fmtN=v=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(parseFloat(v)||0);
+
+  const catTable=`<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr>${['Category','Units','Sales','COGS','Gross Profit','Margin','Inv. Value'].map(ch).join('')}</tr></thead><tbody>
+    ${catRows.map(r=>{const gp=r.sales-r.cogs,mg=r.sales>0?((gp/r.sales)*100).toFixed(1):0;return`<tr>${[r.cat,r.units,fmtN(r.sales),'('+fmtN(r.cogs)+')',fmtN(gp),mg+'%',fmtN(invByCat[r.cat]||0)].map(c).join('')}</tr>`;}).join('')}
+    <tr style="font-weight:700;background:#f5f5f2">${['TOTAL',totalUnits,fmtN(totalSales),'('+fmtN(totalCOGS)+')',fmtN(grossProfit),margin+'%',fmtN(totalInvValue)].map(c).join('')}</tr>
+  </tbody></table>`;
+
+  const prodTable=`<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr>${['#','Product','Category','Units','Sales','COGS','Gross Profit','Margin'].map(ch).join('')}</tr></thead><tbody>
+    ${prodRows.map((r,i)=>{const gp=r.sales-r.cogs,mg=r.sales>0?((gp/r.sales)*100).toFixed(1):0;return`<tr style="background:${i%2===0?'#fff':'#fafaf8'}">${[i+1,'<strong>'+r.name+'</strong>',r.cat,r.units,fmtN(r.sales),'('+fmtN(r.cogs)+')',fmtN(gp),mg+'%'].map(c).join('')}</tr>`;}).join('')}
+    <tr style="font-weight:700;background:#f5f5f2">${['','TOTAL','',totalUnits,fmtN(totalSales),'('+fmtN(totalCOGS)+')',fmtN(grossProfit),margin+'%'].map(c).join('')}</tr>
+  </tbody></table>`;
+
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Bookkeeper Export ${start} to ${end}</title>
+  <style>
+    body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;color:#1a1a18;background:#fff;padding:32px;font-size:13px}
+    h1{font-size:20px;font-weight:700;margin:0 0 2px}
+    .sub{font-size:12px;color:#888;margin-bottom:24px}
+    .summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px}
+    .sbox{background:#f5f5f2;border-radius:8px;padding:12px 14px}
+    .slabel{font-size:10px;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px}
+    .sval{font-size:17px;font-weight:700}
+    .section{font-size:13px;font-weight:700;margin:20px 0 8px;padding-bottom:4px;border-bottom:2px solid #0F6E56;color:#0F6E56}
+    @media print{body{padding:16px}@page{size:landscape;margin:14mm}}
+  </style></head><body>
+  <h1>Vendentory &mdash; Bookkeeper Export</h1>
+  <div class="sub">Period: ${start} &mdash; ${end} &nbsp;&bull;&nbsp; Generated: ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</div>
+  <div class="summary">
+    <div class="sbox"><div class="slabel">Total Sales</div><div class="sval">${fmtN(totalSales)}</div></div>
+    <div class="sbox"><div class="slabel">Total COGS</div><div class="sval" style="color:#a32d2d">(${fmtN(totalCOGS)})</div></div>
+    <div class="sbox"><div class="slabel">Gross Profit</div><div class="sval" style="color:${grossProfit>=0?'#3B6D11':'#a32d2d'}">${fmtN(grossProfit)}</div></div>
+    <div class="sbox"><div class="slabel">Gross Margin</div><div class="sval">${margin}%</div></div>
+    <div class="sbox"><div class="slabel">Purchases Received</div><div class="sval">${fmtN(totalPurchases)}</div></div>
+    <div class="sbox"><div class="slabel">Inventory Value</div><div class="sval">${fmtN(totalInvValue)}</div></div>
+  </div>
+  <div class="section">By Category</div>
+  ${catTable}
+  <div class="section">Product Detail</div>
+  ${prodTable}
+  </body></html>`;
+
+  const w=window.open('','_blank','width=1100,height=800');
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(()=>{w.print();},400);
+}
 function openM(id){document.getElementById(id).style.display='flex';}
 function closeM(id){document.getElementById(id).style.display='none';}
 var hideTimer=null;
