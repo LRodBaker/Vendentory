@@ -2873,14 +2873,19 @@ async function runCogsRpt(){
   const bp=aggS(sl||[]);
   const sr=Object.values(bp).filter(r=>r.u>0).sort((a,b)=>b.c-a.c);
   const ts=sr.reduce((s,r)=>s+r.s,0),tc=sr.reduce((s,r)=>s+r.c,0),tu=sr.reduce((s,r)=>s+r.u,0);
-  const tableId='cogs-tbl-'+Date.now();
+  const gp=ts-tc, margin=ts>0?((gp/ts)*100).toFixed(1):0;
+  // Cache for PDF
+  window._cogsRptData={start,end,rows:sr,ts,tc,tu,gp,margin};
   document.getElementById('rc').innerHTML=
-    '<div style="font-size:12px;color:var(--g400);margin-bottom:10px;font-weight:500">COGS Report: '+start+' to '+end+'</div>'+
-    rHdr([['Total sales',fmt(ts)],['Total COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+
+    '<div style="font-size:12px;color:var(--gray-400);margin-bottom:10px;font-weight:500">COGS Report: '+start+' to '+end+'</div>'+
+    rHdr([['Total sales',fmt(ts)],['Total COGS',fmt(tc)],['Gross profit',fmt(gp)],['Margin',margin+'%']])+
     `<div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
       <div style="font-size:13px;font-weight:600">COGS by product</div>
-      <button class="btn btn-sm" onclick="downloadCSV('cogs-table','COGS_${start}_${end}.csv')">&#11015; Download CSV</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" onclick="downloadCSV('cogs-table','COGS_${start}_${end}.csv')">&#11015; CSV</button>
+        <button class="btn btn-sm btn-p" onclick="downloadCogsRptPDF()">&#128196; PDF</button>
+      </div>
     </div>
     <table class="tbl" id="cogs-table"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Avg cost/unit</th><th>Total COGS</th><th>% of COGS</th><th>Revenue</th><th>Margin</th></tr></thead><tbody>
     ${sr.map((r,i)=>{const mg=r.s>0?((r.s-r.c)/r.s*100).toFixed(1):0;return`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${r.u>0?fmt(r.c/r.u):'—'}</td><td>${fmt(r.c)}</td><td>${tc>0?(r.c/tc*100).toFixed(1)+'%':'—'}</td><td>${fmt(r.s)}</td><td>${mg}%</td></tr>`;}).join('')}
@@ -2929,11 +2934,16 @@ async function runPLRpt(){
   const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
   const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
   const gp=ts-tc,margin=ts>0?(gp/ts*100).toFixed(1):0;
+  // Cache for PDF
+  window._plRptData={start,end,rows:sr,ts,tu,tc,gp,margin};
   document.getElementById('rc').innerHTML=`
     <div class="card" style="margin-bottom:12px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">
         <div style="font-size:14px;font-weight:700;font-family:var(--fh)">Profit &amp; Loss: ${start} to ${end}</div>
-        <button class="btn btn-sm" onclick="downloadCSV('pl-table','PL_${start}_${end}.csv')">&#11015; Download CSV</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm" onclick="downloadCSV('pl-table','PL_${start}_${end}.csv')">&#11015; CSV</button>
+          <button class="btn btn-sm btn-p" onclick="downloadPLRptPDF()">&#128196; PDF</button>
+        </div>
       </div>
       <div class="ir"><div style="font-weight:600">Total Revenue</div><div style="font-weight:700;font-size:15px">${fmt(ts)}</div></div>
       <div class="ir"><div class="muted">Cost of Goods Sold (COGS)</div><div style="color:var(--red);font-weight:600">(${fmt(tc)})</div></div>
@@ -2947,7 +2957,70 @@ async function runPLRpt(){
     <div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Product P&amp;L breakdown</div>
     <table class="tbl" id="pl-table"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Revenue</th><th>COGS</th><th>Gross profit</th><th>Margin</th></tr></thead><tbody>
     ${sr.map((r,i)=>{const pr=r.s-r.c,mg=r.s>0?((pr/r.s)*100).toFixed(1):0;return`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${fmt(r.s)}</td><td>${fmt(r.c)}</td><td class="${pr>=0?'tg':'tr'}">${fmt(pr)}</td><td class="${mg>=40?'tg':mg>=20?'ta':'tr'}">${mg}%</td></tr>`;}).join('')}
+    <tr style="border-top:2px solid var(--border)"><td colspan="2"><strong>TOTAL</strong></td><td><strong>${tu}</strong></td><td><strong>${fmt(ts)}</strong></td><td><strong>${fmt(tc)}</strong></td><td style="color:${gp>=0?'var(--green)':'var(--red)'};font-weight:700">${fmt(gp)}</td><td><strong>${margin}%</strong></td></tr>
     </tbody></table></div>`;
+}
+
+function _buildRptPDF(title, summaryPairs, tableHeaders, tableBodyHTML, filename){
+  const ch=s=>`<th style="padding:6px 8px;background:#f5f5f2;font-size:11px;text-align:left;color:#666;border-bottom:2px solid #ddd;white-space:nowrap">${s}</th>`;
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title>
+  <style>
+    body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;color:#1a1a18;background:#fff;padding:28px;font-size:12px}
+    h1{font-size:18px;font-weight:700;margin:0 0 2px}
+    .sub{font-size:11px;color:#888;margin-bottom:20px}
+    .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}
+    .sbox{background:#f5f5f2;border-radius:8px;padding:10px 12px}
+    .slabel{font-size:10px;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px}
+    .sval{font-size:15px;font-weight:700}
+    table{width:100%;border-collapse:collapse;font-size:11px}
+    th{padding:6px 8px;background:#f5f5f2;font-size:10px;text-align:left;color:#666;border-bottom:2px solid #ddd;white-space:nowrap}
+    td{padding:6px 8px;border-bottom:1px solid #eee}
+    tr:nth-child(even) td{background:#fafaf8}
+    .tot td{font-weight:700;background:#f5f5f2;border-top:2px solid #ccc}
+    @media print{body{padding:12px}@page{size:landscape;margin:12mm}}
+  </style></head><body>
+  <h1>${title}</h1>
+  <div class="sub">Generated: ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</div>
+  <div class="summary">${summaryPairs.map(([l,v,c])=>`<div class="sbox"><div class="slabel">${l}</div><div class="sval"${c?` style="color:${c}"`:''}>${v}</div></div>`).join('')}</div>
+  <table><thead><tr>${tableHeaders.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${tableBodyHTML}</tbody></table>
+  </body></html>`;
+  const w=window.open('','_blank','width=1100,height=800');
+  w.document.write(html);w.document.close();w.focus();
+  setTimeout(()=>{w.print();},400);
+}
+
+function downloadCogsRptPDF(){
+  const d=window._cogsRptData;
+  if(!d){toast('Run the COGS report first','err');return;}
+  const {start,end,rows,ts,tc,tu,gp,margin}=d;
+  const fmtN=v=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(parseFloat(v)||0);
+  const body=rows.map((r,i)=>{
+    const mg=r.s>0?((r.s-r.c)/r.s*100).toFixed(1):0;
+    return`<tr><td>${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${r.u>0?fmtN(r.c/r.u):'—'}</td><td>${fmtN(r.c)}</td><td>${tc>0?(r.c/tc*100).toFixed(1)+'%':'—'}</td><td>${fmtN(r.s)}</td><td>${mg}%</td></tr>`;
+  }).join('')+`<tr class="tot"><td colspan="2">TOTAL</td><td>${tu}</td><td>—</td><td>${fmtN(tc)}</td><td>100%</td><td>${fmtN(ts)}</td><td>${margin}%</td></tr>`;
+  _buildRptPDF(
+    `COGS Report: ${start} to ${end}`,
+    [['Total Sales',fmtN(ts)],['Total COGS',fmtN(tc),'#a32d2d'],['Gross Profit',fmtN(gp),gp>=0?'#3B6D11':'#a32d2d'],['Gross Margin',margin+'%']],
+    ['#','Product','Units','Avg Cost/Unit','Total COGS','% of COGS','Revenue','Margin'],
+    body,`COGS_${start}_${end}.pdf`
+  );
+}
+
+function downloadPLRptPDF(){
+  const d=window._plRptData;
+  if(!d){toast('Run the P&L report first','err');return;}
+  const {start,end,rows,ts,tu,tc,gp,margin}=d;
+  const fmtN=v=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(parseFloat(v)||0);
+  const body=rows.map((r,i)=>{
+    const pr=r.s-r.c,mg=r.s>0?((pr/r.s)*100).toFixed(1):0;
+    return`<tr><td>${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${fmtN(r.s)}</td><td>${fmtN(r.c)}</td><td style="color:${pr>=0?'#3B6D11':'#a32d2d'}">${fmtN(pr)}</td><td>${mg}%</td></tr>`;
+  }).join('')+`<tr class="tot"><td colspan="2">TOTAL</td><td>${tu}</td><td>${fmtN(ts)}</td><td>${fmtN(tc)}</td><td style="color:${gp>=0?'#3B6D11':'#a32d2d'}">${fmtN(gp)}</td><td>${margin}%</td></tr>`;
+  _buildRptPDF(
+    `Profit & Loss: ${start} to ${end}`,
+    [['Total Revenue',fmtN(ts)],['Total COGS',fmtN(tc),'#a32d2d'],['Gross Profit',fmtN(gp),gp>=0?'#3B6D11':'#a32d2d'],['Gross Margin',margin+'%']],
+    ['#','Product','Units','Revenue','COGS','Gross Profit','Margin'],
+    body,`PL_${start}_${end}.pdf`
+  );
 }
 
 function aggS(rows){
