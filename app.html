@@ -605,17 +605,17 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
         <div class="fg"><label class="fl">Product code</label><input class="fi" id="pco" placeholder="e.g. 1003"></div>
         <div class="fg"><label class="fl">Category</label><select class="fs" id="pca"></select></div>
         <div class="fg"><label class="fl">Brand</label><input class="fi" id="pbr" placeholder="e.g. Monster"></div>
-        <div class="fg"><label class="fl">Supplier</label><select class="fs" id="psu"></select></div>
-        <div class="fg"><label class="fl">Size value</label><input class="fi" id="psz" placeholder="16"></div>
-        <div class="fg"><label class="fl">Size unit</label><input class="fi" id="psu2" placeholder="oz, ml, g"></div>
+        <div class="fg" id="fg-sup"><label class="fl">Supplier</label><select class="fs" id="psu"></select></div>
         <!-- Units per case — bulk & variety only -->
         <div class="fg" id="fg-upc" style="display:none"><label class="fl">Units per case</label><input class="fi" type="number" id="pupc" value="1" min="1"></div>
-        <!-- Reorder + order-up-to — individual only -->
-        <div class="fg" id="fg-rp" style="display:none"><label class="fl">Reorder point</label><input class="fi" type="number" id="prp" value="0" min="0"></div>
-        <div class="fg" id="fg-ou" style="display:none"><label class="fl">Order up to</label><input class="fi" type="number" id="pou" value="0" min="0"></div>
         <!-- Cost + price — individual only -->
         <div class="fg" id="fg-lc" style="display:none"><label class="fl">Last cost ($)</label><input class="fi" type="number" id="plc" value="0" step="0.01"></div>
         <div class="fg" id="fg-sp" style="display:none"><label class="fl">Selling price ($)</label><input class="fi" type="number" id="psp" value="0" step="0.01"></div>
+        <!-- Reorder + order-up-to — individual only -->
+        <div class="fg" id="fg-rp" style="display:none"><label class="fl">Reorder point</label><input class="fi" type="number" id="prp" value="0" min="0"></div>
+        <div class="fg" id="fg-ou" style="display:none"><label class="fl">Order up to</label><input class="fi" type="number" id="pou" value="0" min="0"></div>
+        <div class="fg"><label class="fl">Size value</label><input class="fi" id="psz" placeholder="16"></div>
+        <div class="fg"><label class="fl">Size unit</label><input class="fi" id="psu2" placeholder="oz, ml, g"></div>
         <div class="fg"><label class="fl">Active</label><select class="fs" id="pac"><option value="true">Yes</option><option value="false">No</option></select></div>
       </div>
       <input type="hidden" id="peid">
@@ -1347,6 +1347,7 @@ function setProdType(type) {
   document.getElementById('fg-ou').style.display     = type==='individual' ? '' : 'none';
   document.getElementById('fg-lc').style.display     = type==='individual' ? '' : 'none';
   document.getElementById('fg-sp').style.display     = type==='individual' ? '' : 'none';
+  document.getElementById('fg-sup').style.display    = (type==='bulk'||type==='variety') ? '' : 'none';
   // Show/hide sections
   document.getElementById('section-variety').style.display = type==='variety'    ? 'block' : 'none';
   document.getElementById('section-base').style.display    = type==='bulk'       ? 'block' : 'none';
