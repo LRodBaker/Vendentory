@@ -2412,7 +2412,7 @@ Return ONLY a JSON object in this exact format, no other text:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
+        max_tokens: 4000,
         messages: [{
           role: 'user',
           content: [
@@ -2456,17 +2456,32 @@ function openAIImportPreview(data) {
     }
   }
   // Clear existing lines and add AI-matched ones
+  // qty from the AI = number of cases ordered (as shown on receipt).
+  // We convert to individual units here (cases × units_per_case) so the
+  // purchase line matches the manual-entry format used everywhere else.
   PL = [];
   if(data.lines && data.lines.length > 0) {
     data.lines.forEach(line => {
+      const matchedProd = line.matched_product_id
+        ? AP.find(p => p.product_id === line.matched_product_id || p.id === line.matched_product_id)
+        : null;
+      const upc       = parseInt(matchedProd?.units_per_case) || 1;
+      const cases     = line.qty || 1;
+      const totalUnits = cases * upc;
+      const lineTotal  = line.line_total || (line.unit_cost * cases);
+      const unitCost   = totalUnits > 0 ? lineTotal / totalUnits : line.unit_cost;
+      const costPerCase = cases > 0 ? lineTotal / cases : lineTotal;
       PL.push({
-        product_id: line.matched_product_id || '',
-        product_name: line.matched_product_name || line.description,
-        units: line.qty,
-        unit_cost: line.unit_cost,
+        product_id:   line.matched_product_id || '',
+        name:         line.matched_product_name || line.description,
+        cases:        cases,
+        cost_per_case: costPerCase,
+        units:        totalUnits,
+        unit_cost:    unitCost,
+        total:        lineTotal,
         _aiDescription: line.description,
-        _confidence: line.confidence,
-        _unmatched: !line.matched_product_id
+        _confidence:  line.confidence,
+        _unmatched:   !line.matched_product_id
       });
     });
   }
