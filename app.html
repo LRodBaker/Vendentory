@@ -2897,32 +2897,85 @@ function renderSalesRpt(rows,label){
   const bp=aggS(rows);
   const sr=Object.values(bp).sort((a,b)=>b.s-a.s);
   const ts=sr.reduce((s,r)=>s+r.s,0),tu=sr.reduce((s,r)=>s+r.u,0),tc=sr.reduce((s,r)=>s+r.c,0);
+  const gp=ts-tc,margin=ts>0?((gp/ts)*100).toFixed(1):0;
+  window._salesRptData={label,rows:sr,ts,tu,tc,gp,margin};
+  const slug=label.replace(/[^a-zA-Z0-9]+/g,'_').replace(/^_|_$/g,'');
   document.getElementById('rc').innerHTML=
-    '<div style="font-size:12px;color:var(--g400);margin-bottom:10px;font-weight:500">'+label+'</div>'+
-    rHdr([['Sales',fmt(ts)],['Units',tu],['COGS',fmt(tc)],['Gross profit',fmt(ts-tc)],['Margin',ts>0?((ts-tc)/ts*100).toFixed(1)+'%':'—']])+
-    sTbl(sr);
+    '<div style="font-size:12px;color:var(--gray-400);margin-bottom:10px;font-weight:500">'+label+'</div>'+
+    rHdr([['Sales',fmt(ts)],['Units',tu],['COGS',fmt(tc)],['Gross profit',fmt(gp)],['Margin',margin+'%']])+
+    `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div style="font-size:13px;font-weight:600">Sales breakdown</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm" onclick="downloadCSV('sales-rpt-table','Sales_${slug}.csv')">&#11015; CSV</button>
+          <button class="btn btn-sm btn-p" onclick="downloadSalesRptPDF()">&#128196; PDF</button>
+        </div>
+      </div>
+      <table class="tbl" id="sales-rpt-table"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Sales</th><th>COGS</th><th>Profit</th><th>Margin</th></tr></thead><tbody>
+      ${sr.map((r,i)=>{const pr=r.s-r.c,mg=r.s>0?((pr/r.s)*100).toFixed(1):0;return`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${fmt(r.s)}</td><td>${fmt(r.c)}</td><td class="${pr>=0?'tg':'tr'}">${fmt(pr)}</td><td class="${mg>=40?'tg':mg>=20?'ta':'tr'}">${mg}%</td></tr>`;}).join('')}
+      <tr style="border-top:2px solid var(--border)"><td colspan="2"><strong>TOTAL</strong></td><td><strong>${tu}</strong></td><td><strong>${fmt(ts)}</strong></td><td><strong>${fmt(tc)}</strong></td><td style="color:${gp>=0?'var(--green)':'var(--red)'};font-weight:700">${fmt(gp)}</td><td><strong>${margin}%</strong></td></tr>
+      </tbody></table>
+    </div>`;
 }
 
 function loadInvRpt(){
   const tv=AP.reduce((s,p)=>s+(parseFloat(p.inventory_value)||0),0);
+  window._invRptData={products:AP,tv};
   document.getElementById('rc').innerHTML=rHdr([['Total value',fmt(tv)],['Products',AP.length],['Need reorder',AP.filter(p=>p.stock_status==='REORDER').length],['Active',AP.filter(p=>p.is_active).length]])+
-    `<div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:6px">Inventory valuation</div><div style="font-size:12px;color:var(--g400);margin-bottom:10px">${AP.length} products total</div><table class="tbl"><thead><tr><th>#</th><th>Product</th><th>On hand</th><th>Avg cost</th><th>Price</th><th>Value</th><th>Margin</th><th>Status</th></tr></thead><tbody>
-    ${AP.map((p,i)=>{const m=p.selling_price>0&&p.average_cost>0?(((p.selling_price-p.average_cost)/p.selling_price)*100).toFixed(1):0;return`<tr><td style="color:var(--g400);font-weight:600">${i+1}</td><td><strong>${p.name}</strong></td><td>${p.on_hand_qty}</td><td>${fmt(p.average_cost)}</td><td>${fmt(p.selling_price)}</td><td>${fmt(p.inventory_value)}</td><td class="${m>=40?'tg':m>=20?'ta':'tr'}">${m}%</td><td><span class="badge ${p.stock_status==='REORDER'?'b-red':'b-ok'}">${p.stock_status}</span></td></tr>`;}).join('')}
-    </tbody></table></div>`;
+    `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+        <div>
+          <div style="font-size:13px;font-weight:600">Inventory valuation</div>
+          <div style="font-size:12px;color:var(--gray-400)">${AP.length} products total</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm" onclick="downloadCSV('inv-rpt-table','Inventory_${new Date().toISOString().split('T')[0]}.csv')">&#11015; CSV</button>
+          <button class="btn btn-sm btn-p" onclick="downloadInvRptPDF()">&#128196; PDF</button>
+        </div>
+      </div>
+      <table class="tbl" id="inv-rpt-table"><thead><tr><th>#</th><th>Product</th><th>On hand</th><th>Avg cost</th><th>Price</th><th>Value</th><th>Margin</th><th>Status</th></tr></thead><tbody>
+      ${AP.map((p,i)=>{const m=p.selling_price>0&&p.average_cost>0?(((p.selling_price-p.average_cost)/p.selling_price)*100).toFixed(1):0;return`<tr><td style="color:var(--g400);font-weight:600">${i+1}</td><td><strong>${p.name}</strong></td><td>${p.on_hand_qty}</td><td>${fmt(p.average_cost)}</td><td>${fmt(p.selling_price)}</td><td>${fmt(p.inventory_value)}</td><td class="${m>=40?'tg':m>=20?'ta':'tr'}">${m}%</td><td><span class="badge ${p.stock_status==='REORDER'?'b-red':'b-ok'}">${p.stock_status}</span></td></tr>`;}).join('')}
+      </tbody></table>
+    </div>`;
 }
 
 async function loadTopRpt(){
   document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
   const {data:sl}=await dbFetch('sales_lines',{select:'units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)',filters:{'product_id':'not.is.null'}});
   const sr=Object.values(aggS(sl||[])).sort((a,b)=>b.s-a.s).slice(0,25);
-  document.getElementById('rc').innerHTML='<div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Top sellers — all time</div>'+sTbl(sr)+'</div>';
+  window._topRptData={rows:sr};
+  document.getElementById('rc').innerHTML=`<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+      <div style="font-size:13px;font-weight:600">Top sellers — all time</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" onclick="downloadCSV('top-rpt-table','Top_Sellers.csv')">&#11015; CSV</button>
+        <button class="btn btn-sm btn-p" onclick="downloadSellerRptPDF('top')">&#128196; PDF</button>
+      </div>
+    </div>
+    <table class="tbl" id="top-rpt-table"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Sales</th><th>COGS</th><th>Profit</th><th>Margin</th></tr></thead><tbody>
+    ${sr.map((r,i)=>{const pr=r.s-r.c,mg=r.s>0?((pr/r.s)*100).toFixed(1):0;return`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${fmt(r.s)}</td><td>${fmt(r.c)}</td><td class="${pr>=0?'tg':'tr'}">${fmt(pr)}</td><td class="${mg>=40?'tg':mg>=20?'ta':'tr'}">${mg}%</td></tr>`;}).join('')}
+    </tbody></table></div>`;
 }
 
 async function loadBotRpt(){
   document.getElementById('rc').innerHTML='<div class="muted">Loading...</div>';
   const {data:sl}=await dbFetch('sales_lines',{select:'units_sold,sales_amount,raw_product_name,product_id,products(name,average_cost)',filters:{'product_id':'not.is.null'}});
   const sr=Object.values(aggS(sl||[])).filter(r=>r.u>0).sort((a,b)=>a.s-b.s).slice(0,25);
-  document.getElementById('rc').innerHTML='<div style="background:var(--red2);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--red)">These products have the lowest sales — consider replacing or repricing.</div><div class="card"><div style="font-size:13px;font-weight:600;margin-bottom:10px">Bottom sellers — all time</div>'+sTbl(sr)+'</div>';
+  window._botRptData={rows:sr};
+  document.getElementById('rc').innerHTML=`
+    <div style="background:var(--red-light);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--red)">These products have the lowest sales — consider replacing or repricing.</div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div style="font-size:13px;font-weight:600">Bottom sellers — all time</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm" onclick="downloadCSV('bot-rpt-table','Bottom_Sellers.csv')">&#11015; CSV</button>
+          <button class="btn btn-sm btn-p" onclick="downloadSellerRptPDF('bottom')">&#128196; PDF</button>
+        </div>
+      </div>
+      <table class="tbl" id="bot-rpt-table"><thead><tr><th>#</th><th>Product</th><th>Units</th><th>Sales</th><th>COGS</th><th>Profit</th><th>Margin</th></tr></thead><tbody>
+      ${sr.map((r,i)=>{const pr=r.s-r.c,mg=r.s>0?((pr/r.s)*100).toFixed(1):0;return`<tr><td style="color:var(--g400)">${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${fmt(r.s)}</td><td>${fmt(r.c)}</td><td class="${pr>=0?'tg':'tr'}">${fmt(pr)}</td><td class="${mg>=40?'tg':mg>=20?'ta':'tr'}">${mg}%</td></tr>`;}).join('')}
+      </tbody></table>
+    </div>`;
 }
 
 async function runPLRpt(){
@@ -2987,6 +3040,60 @@ function _buildRptPDF(title, summaryPairs, tableHeaders, tableBodyHTML, filename
   const w=window.open('','_blank','width=1100,height=800');
   w.document.write(html);w.document.close();w.focus();
   setTimeout(()=>{w.print();},400);
+}
+
+function downloadSalesRptPDF(){
+  const d=window._salesRptData;
+  if(!d){toast('Run the report first','err');return;}
+  const {label,rows,ts,tu,tc,gp,margin}=d;
+  const fmtN=v=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(parseFloat(v)||0);
+  const body=rows.map((r,i)=>{
+    const pr=r.s-r.c,mg=r.s>0?((pr/r.s)*100).toFixed(1):0;
+    return`<tr><td>${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${fmtN(r.s)}</td><td>${fmtN(r.c)}</td><td style="color:${pr>=0?'#3B6D11':'#a32d2d'}">${fmtN(pr)}</td><td>${mg}%</td></tr>`;
+  }).join('')+`<tr class="tot"><td colspan="2">TOTAL</td><td>${tu}</td><td>${fmtN(ts)}</td><td>${fmtN(tc)}</td><td style="color:${gp>=0?'#3B6D11':'#a32d2d'}">${fmtN(gp)}</td><td>${margin}%</td></tr>`;
+  _buildRptPDF(
+    'Sales Report \u2014 '+label,
+    [['Total Sales',fmtN(ts)],['Total COGS',fmtN(tc),'#a32d2d'],['Gross Profit',fmtN(gp),gp>=0?'#3B6D11':'#a32d2d'],['Gross Margin',margin+'%'],['Units Sold',String(tu)]],
+    ['#','Product','Units','Sales','COGS','Gross Profit','Margin'],
+    body,'Sales_Report.pdf'
+  );
+}
+
+function downloadInvRptPDF(){
+  const d=window._invRptData;
+  if(!d){toast('Run the report first','err');return;}
+  const {products,tv}=d;
+  const fmtN=v=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(parseFloat(v)||0);
+  const body=products.map((p,i)=>{
+    const m=p.selling_price>0&&p.average_cost>0?(((p.selling_price-p.average_cost)/p.selling_price)*100).toFixed(1):0;
+    return`<tr><td>${i+1}</td><td><strong>${p.name}</strong></td><td>${p.on_hand_qty}</td><td>${fmtN(p.average_cost)}</td><td>${fmtN(p.selling_price)}</td><td>${fmtN(p.inventory_value)}</td><td>${m}%</td><td>${p.stock_status}</td></tr>`;
+  }).join('');
+  _buildRptPDF(
+    'Inventory Valuation \u2014 '+new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}),
+    [['Total Value',fmtN(tv)],['Products',String(products.length)],['Need Reorder',String(products.filter(p=>p.stock_status==='REORDER').length)],['Active',String(products.filter(p=>p.is_active).length)]],
+    ['#','Product','On Hand','Avg Cost','Price','Value','Margin','Status'],
+    body,'Inventory_Valuation.pdf'
+  );
+}
+
+function downloadSellerRptPDF(type){
+  const d=type==='top'?window._topRptData:window._botRptData;
+  if(!d){toast('Run the report first','err');return;}
+  const {rows}=d;
+  const fmtN=v=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(parseFloat(v)||0);
+  const ts=rows.reduce((s,r)=>s+r.s,0),tu=rows.reduce((s,r)=>s+r.u,0),tc=rows.reduce((s,r)=>s+r.c,0);
+  const gp=ts-tc,margin=ts>0?((gp/ts)*100).toFixed(1):0;
+  const body=rows.map((r,i)=>{
+    const pr=r.s-r.c,mg=r.s>0?((pr/r.s)*100).toFixed(1):0;
+    return`<tr><td>${i+1}</td><td><strong>${r.name}</strong></td><td>${r.u}</td><td>${fmtN(r.s)}</td><td>${fmtN(r.c)}</td><td style="color:${pr>=0?'#3B6D11':'#a32d2d'}">${fmtN(pr)}</td><td>${mg}%</td></tr>`;
+  }).join('')+`<tr class="tot"><td colspan="2">TOTAL</td><td>${tu}</td><td>${fmtN(ts)}</td><td>${fmtN(tc)}</td><td style="color:${gp>=0?'#3B6D11':'#a32d2d'}">${fmtN(gp)}</td><td>${margin}%</td></tr>`;
+  const title=(type==='top'?'Top':'Bottom')+' Sellers \u2014 All Time';
+  _buildRptPDF(
+    title,
+    [['Total Sales',fmtN(ts)],['Total COGS',fmtN(tc),'#a32d2d'],['Gross Profit',fmtN(gp),gp>=0?'#3B6D11':'#a32d2d'],['Gross Margin',margin+'%']],
+    ['#','Product','Units','Sales','COGS','Gross Profit','Margin'],
+    body,title.replace(/\s+/g,'_')+'.pdf'
+  );
 }
 
 function downloadCogsRptPDF(){
