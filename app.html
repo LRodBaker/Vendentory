@@ -343,7 +343,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
                   <button class="btn btn-p" onclick="savePur()">Save &amp; receive purchase</button>
                   <button class="btn" onclick="clrPur()">Clear</button>
                 </div>
-                <button id="ai-import-btn" class="btn" style="display:none;gap:6px;background:#6C47D8;color:#fff;border-color:#5535B8" onclick="openAIImport()">
+                <button id="ai-import-btn" class="btn" style="display:inline-flex;gap:6px;background:#6C47D8;color:#fff;border-color:#5535B8" onclick="openAIImport()">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
                   AI Import Receipt
                 </button>
@@ -933,8 +933,6 @@ function nav(pg) {
   }
   if(pg==='purchases') {
     loadPurHistory();
-    const aiBtn = document.getElementById('ai-import-btn');
-    if(aiBtn) aiBtn.style.display = hasFeature('ai_purchase_import') ? 'inline-flex' : 'none';
   }
   if(pg==='settings'){loadSets();loadProf();}
   if(pg==='imports') loadIH();
@@ -2431,7 +2429,6 @@ function clrPur(){PL=[];renderPL();['pui','pun'].forEach(id=>document.getElement
 
 // ── AI PURCHASE IMPORT ───────────────────────────────────────────────────────
 function openAIImport() {
-  if(!hasFeature('ai_purchase_import')) { toast('AI Import is not enabled for your account','err'); return; }
   document.getElementById('ai-import-file').click();
 }
 
