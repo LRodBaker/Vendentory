@@ -1078,6 +1078,8 @@ async function openPD(id) {
   _currentPDid = p.id; // store for Edit button
   const mg = p.selling_price>0&&p.average_cost>0
     ? (((p.selling_price-p.average_cost)/p.selling_price)*100).toFixed(1) : '—';
+
+  // Render static content immediately so modal opens fast
   document.getElementById('pdc').innerHTML=`
     <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap">
       <div style="width:90px;height:90px;border-radius:10px;background:var(--gray-50);display:flex;align-items:center;justify-content:center;font-size:40px;flex-shrink:0;overflow:hidden">
@@ -1088,7 +1090,6 @@ async function openPD(id) {
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
           <span class="badge ${p.stock_status==='REORDER'?'b-red':'b-ok'}">${p.stock_status==='REORDER'?'Reorder needed':'In stock'}</span>
           ${p.category_name?`<span class="badge b-gray">${p.category_name}</span>`:''}
-
         </div>
       </div>
     </div>
@@ -1102,18 +1103,85 @@ async function openPD(id) {
       </div>
       <div>
         <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);margin-bottom:7px">Cost &amp; price</div>
-        <div class="ir"><div style="color:var(--gray-400)">Average cost</div><div style="font-weight:500">${fmt(p.average_cost)}</div></div>
+        <div class="ir"><div style="color:var(--gray-400)">Current WAC</div><div style="font-weight:700;color:var(--teal-dark)">${fmt(p.average_cost)}</div></div>
+        <div class="ir"><div style="color:var(--gray-400)">Last cost</div><div style="font-weight:500">${p.last_cost>0?fmt(p.last_cost):'—'}</div></div>
         <div class="ir"><div style="color:var(--gray-400)">Selling price</div><div style="font-weight:500">${fmt(p.selling_price)}</div></div>
         <div class="ir"><div style="color:var(--gray-400)">Gross margin</div><div class="tg" style="font-weight:500">${mg}%</div></div>
         <div class="ir"><div style="color:var(--gray-400)">Inventory value</div><div style="font-weight:500">${fmt(p.inventory_value)}</div></div>
       </div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+
+    <!-- Purchase cost history — loaded async below -->
+    <div style="margin-top:16px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);margin-bottom:8px">Purchase cost history &amp; WAC</div>
+      <div id="pd-cost-history"><div class="tm" style="font-size:12px">Loading...</div></div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       <button class="btn btn-p btn-sm" onclick="closeM('mpd');nav('purchases')">Receive inventory</button>
       <button class="btn btn-sm" onclick="closeM('mpd');nav('adjustments')">Adjust quantity</button>
       <button class="btn btn-sm" onclick="pdEditClicked()">&#9998; Edit</button>
     </div>`;
   openM('mpd');
+
+  // Load purchase receipt history async and inject into the modal
+  try {
+    const txnResp = await fetch(
+      SURL+'/rest/v1/inventory_transactions?product_id=eq.'+p.id
+        +'&transaction_type=eq.purchase_receipt'
+        +'&select=created_at,quantity_change,unit_cost,notes'
+        +'&order=created_at.asc'
+        +'&limit=20',
+      { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
+    );
+    const txns = txnResp.ok ? await txnResp.json() : [];
+    const el = document.getElementById('pd-cost-history');
+    if(!el) return; // modal closed before load finished
+
+    if(!txns.length) {
+      el.innerHTML='<div class="tm" style="font-size:12px">No purchase receipts recorded yet.</div>';
+      return;
+    }
+
+    // Compute running WAC across receipts
+    let runQty = 0, runCost = 0;
+    const rows = txns.map(t => {
+      const units = parseInt(t.quantity_change) || 0;
+      const uc    = parseFloat(t.unit_cost) || 0;
+      const prevValue = runQty * runCost;
+      runQty  += units;
+      runCost  = runQty > 0 ? (prevValue + units * uc) / runQty : uc;
+      return { date: t.created_at, units, uc, wac: runCost, notes: t.notes||'' };
+    });
+
+    el.innerHTML=`
+      <div style="overflow-x:auto">
+        <table class="tbl" style="font-size:12px">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th style="text-align:right">Units in</th>
+              <th style="text-align:right">Unit cost</th>
+              <th style="text-align:right">WAC after</th>
+              <th style="color:var(--gray-400);font-weight:400">Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((r,i)=>`
+              <tr style="${i===rows.length-1?'background:var(--teal-light);font-weight:600':''}">
+                <td>${fmtD(r.date)}</td>
+                <td style="text-align:right">+${r.units}</td>
+                <td style="text-align:right">${fmt(r.uc)}</td>
+                <td style="text-align:right;color:var(--teal-dark)">${fmt(r.wac)}</td>
+                <td style="color:var(--gray-400);font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.notes}">${r.notes}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    const el = document.getElementById('pd-cost-history');
+    if(el) el.innerHTML='<div class="tm" style="font-size:12px;color:var(--red)">Could not load cost history.</div>';
+  }
 }
 
 // Called by the Edit button inside product detail — uses _currentPDid (never stale)
@@ -3280,10 +3348,11 @@ async function runBookkeeperRpt(){
   if(!start||!end){toast('Please select start and end dates','err');return;}
   document.getElementById('rc').innerHTML='<div class="muted">Loading bookkeeper data...</div>';
 
-  // 1. Sales lines with product + category
+  // 1. Sales lines with product + category — fetch ALL (matched and unmatched)
+  // Unmatched lines (no product_id) have no COGS but their revenue still counts
   const {data:sl,error:sErr}=await dbFetch('sales_lines',{
     select:'units_sold,sales_amount,product_id,raw_product_name,products(name,average_cost,categories(name))',
-    filters:{'period_start_date':'gte.'+start,'period_start_date2':'lte.'+end,'product_id':'not.is.null'}
+    filters:{'period_start_date':'gte.'+start,'period_start_date2':'lte.'+end}
   });
   if(sErr){document.getElementById('rc').innerHTML='<div style="color:var(--red)">Error loading sales: '+sErr.message+'</div>';return;}
 
@@ -3299,16 +3368,19 @@ async function runBookkeeperRpt(){
   const invMap={};(inv||[]).forEach(r=>{invMap[r.product_id]=r;});
 
   // ── Aggregate sales by product ──
+  // Unmatched rows (product_id=null) bucket by raw name; COGS = 0 since no WAC available
   const prodMap={};
+  let unmatchedSales=0, unmatchedUnits=0;
   (sl||[]).forEach(r=>{
-    const pid=r.product_id;
+    const pid=r.product_id||('__unmatched__'+r.raw_product_name);
     const name=r.products?.name||r.raw_product_name||'Unknown';
-    const cat=r.products?.categories?.name||'Uncategorized';
-    const wac=parseFloat(r.products?.average_cost||0);
-    if(!prodMap[pid])prodMap[pid]={pid,name,cat,sales:0,units:0,cogs:0};
+    const cat=r.products?.categories?.name||(r.product_id?'Uncategorized':'⚠ Unmatched');
+    const wac=r.product_id ? parseFloat(r.products?.average_cost||0) : 0;
+    if(!prodMap[pid])prodMap[pid]={pid,name,cat,sales:0,units:0,cogs:0,unmatched:!r.product_id};
     prodMap[pid].sales+=parseFloat(r.sales_amount||0);
     prodMap[pid].units+=parseInt(r.units_sold||0);
     prodMap[pid].cogs+=parseInt(r.units_sold||0)*wac;
+    if(!r.product_id){unmatchedSales+=parseFloat(r.sales_amount||0);unmatchedUnits+=parseInt(r.units_sold||0);}
   });
   const prodRows=Object.values(prodMap).sort((a,b)=>b.sales-a.sales);
 
@@ -3358,6 +3430,10 @@ async function runBookkeeperRpt(){
         </div>
       </div>
 
+      <!-- Summary stats -->
+      ${unmatchedSales>0?`<div style="background:var(--amber-light);border:1px solid var(--amber);border-radius:8px;padding:10px 13px;margin-bottom:14px;font-size:13px;color:var(--amber)">
+        <strong>⚠ ${fmt(unmatchedSales)} in sales (${unmatchedUnits} units) could not be matched to products</strong> — COGS for these lines is $0.00. Fix by assigning the ⚠ Unmatched rows in the product list below.
+      </div>`:''}
       <!-- Summary stats -->
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:18px">
         ${[
