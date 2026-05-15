@@ -43,22 +43,27 @@
   --gray-600:#5F5E5A;--gray-700:#444441;--gray-900:#2C2C2A;
   --white:#fff;--border:rgba(0,0,0,0.11);
   --font-head:'Syne',sans-serif;--font-body:'DM Sans',sans-serif;
-  /* Theme accent variables — overridden by JS */
   --p:#0F6E56;--p-light:#E1F5EE;--p-mid:#1D9E75;--p-dark:#085041;--p-sidebar:#2C2C2A;
 }
-/* Theme-aware overrides */
 .sidebar{background:var(--p-sidebar)!important}
-.nav-item.active{border-left-color:var(--p-mid)!important;background:rgba(var(--p-rgb),0.11)!important}
+.nav-item.active{border-left-color:var(--p-mid)!important;background:rgba(0,0,0,0.15)!important}
 .btn-p{background:var(--p)!important;border-color:var(--p)!important}
 .btn-p:hover{background:var(--p-mid)!important}
 .b-teal{background:var(--p-light)!important;color:var(--p-dark)!important}
 .fi:focus,.fs:focus,.ft:focus{border-color:var(--p-mid)!important}
-.sb-logo-name{color:#fff}
-.lbf{background:var(--p)!important}
-/* Theme swatch button */
-.tswatch{width:22px;height:22px;border-radius:50%;border:2.5px solid transparent;cursor:pointer;transition:transform .12s,border-color .12s;flex-shrink:0}
-.tswatch:hover{transform:scale(1.18)}
-.tswatch.active{border-color:rgba(255,255,255,0.9)!important;transform:scale(1.12)}
+/* Theme popover */
+.theme-popover{position:absolute;bottom:calc(100% + 8px);left:0;right:0;background:var(--white);border-radius:14px;padding:14px;box-shadow:0 8px 32px rgba(0,0,0,0.22);z-index:500;display:none}
+.theme-popover.open{display:block}
+.theme-popover-title{font-size:12px;font-weight:700;color:var(--gray-700);margin-bottom:10px;letter-spacing:.3px}
+.theme-popover-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.tswatch{display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;padding:4px;border-radius:8px;border:none;background:transparent;font-family:var(--font-body)}
+.tswatch:hover{background:var(--gray-50)}
+.tswatch .tc{width:30px;height:30px;border-radius:50%;border:2.5px solid transparent;transition:transform .12s,border-color .12s}
+.tswatch:hover .tc{transform:scale(1.1)}
+.tswatch.active .tc{border-color:var(--gray-900);transform:scale(1.08)}
+.tswatch .tn{font-size:9px;color:var(--gray-600);text-align:center;line-height:1.2;white-space:nowrap}
+.theme-nav-item{display:flex;align-items:center;gap:9px;padding:9px 18px;cursor:pointer;color:rgba(255,255,255,0.5);font-size:13px;font-weight:500;border-left:3px solid transparent;transition:all .12s;position:relative}
+.theme-nav-item:hover{color:#fff;background:rgba(255,255,255,0.04)}
 body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-height:100vh}
 .app{display:flex;min-height:100vh}
 .sidebar{width:220px;background:var(--gray-900);display:flex;flex-direction:column;position:fixed;top:0;left:0;height:100vh;z-index:200;transition:transform .25s}
@@ -225,7 +230,6 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
         <div class="nav-item" data-page="products">&#9634; Products</div>
         <div class="nav-item" data-page="purchases">&#9684; Purchases</div>
         <div class="nav-item" data-page="adjustments">&#9650; Adjustments</div>
-        <div class="nav-item" data-page="count">&#9635; Inventory Count</div>
         <div class="sb-section">Reporting</div>
         <div class="nav-item" data-page="imports">&#9776; Import Sales</div>
         <div class="nav-item" data-page="reports">&#9641; Reports</div>
@@ -233,11 +237,17 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
         <div class="nav-item" data-page="machines">&#9671; Machines</div>
         <div class="nav-item" data-page="settings">&#9881; Settings</div>
       </div>
-      <!-- Color Theme picker in sidebar -->
-      <div style="padding:10px 14px 8px;border-top:1px solid rgba(255,255,255,0.07)">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.22);font-weight:600;margin-bottom:8px">Color Theme</div>
-        <div style="display:flex;flex-wrap:wrap;gap:7px" id="theme-swatches"></div>
-        <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:6px" id="theme-name-label">Forest</div>
+      <!-- Color Theme nav item with popover -->
+      <div style="position:relative;padding:0 0 2px">
+        <div class="theme-nav-item" onclick="toggleThemePopover(event)" id="theme-nav">
+          <span style="font-size:15px">&#127912;</span>
+          <span>Color Theme</span>
+          <span style="margin-left:auto;font-size:10px;opacity:.5" id="theme-nav-caret">▲</span>
+        </div>
+        <div class="theme-popover" id="theme-popover">
+          <div class="theme-popover-title">Choose a theme</div>
+          <div class="theme-popover-grid" id="theme-popover-grid"></div>
+        </div>
       </div>
       <div class="sb-user">
         <div class="sb-avatar" id="ava">?</div>
@@ -296,6 +306,8 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
             </div>
           </div>
         </div>
+
+        <!-- SCAN -->
         <div class="page" id="page-scan">
           <div style="max-width:520px;margin:0 auto">
             <div class="scan-box">
@@ -424,47 +436,6 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
             <div class="card" style="margin-top:13px">
               <div class="card-title">Recent adjustments</div>
               <div id="raj"><div class="tm">Loading...</div></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- INVENTORY COUNT -->
-        <div class="page" id="page-count">
-          <div style="max-width:900px">
-            <div class="card" style="margin-bottom:14px">
-              <div class="card-header">
-                <div class="card-title" style="margin:0">Inventory Count Sheet</div>
-                <div style="display:flex;gap:8px;flex-wrap:wrap">
-                  <button class="btn btn-sm" onclick="dlCountCSV()">&#8659; CSV</button>
-                  <button class="btn btn-sm" onclick="dlCountPDF()">&#8659; PDF</button>
-                  <button class="btn btn-sm btn-p" onclick="openCountScan()">&#128247; Scan to Count</button>
-                </div>
-              </div>
-              <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
-                <div class="sw" style="max-width:260px"><input placeholder="Filter products..." id="count-search" oninput="renderCountSheet()"></div>
-                <select class="fs" style="width:auto" id="count-cat-filter" onchange="renderCountSheet()"><option value="">All Categories</option></select>
-                <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
-                  <input type="checkbox" id="count-active-only" checked onchange="renderCountSheet()"> Active only
-                </label>
-              </div>
-              <div style="overflow-x:auto">
-                <table class="tbl" id="count-tbl">
-                  <thead>
-                    <tr>
-                      <th style="min-width:220px">Product</th>
-                      <th style="min-width:90px">Category</th>
-                      <th style="min-width:80px;text-align:center">On Hand</th>
-                      <th style="min-width:100px;text-align:center">In Machines</th>
-                      <th style="min-width:100px;text-align:center">In Warehouse</th>
-                      <th style="min-width:140px">Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody id="count-tbody">
-                    <tr><td colspan="6" class="tm" style="padding:20px;text-align:center">Loading...</td></tr>
-                  </tbody>
-                </table>
-              </div>
-              <div style="margin-top:10px;font-size:12px;color:var(--gray-400)" id="count-footer"></div>
             </div>
           </div>
         </div>
@@ -616,66 +587,6 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
         </div>
 
       </div>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Scan to Count -->
-<div class="modal-bg" id="m-count-scan" style="display:none">
-  <div class="modal" style="max-width:520px">
-    <div class="modal-title">&#128247; Scan to Count</div>
-    <button class="mc" onclick="closeCountScan()">&#10005;</button>
-    <div style="font-size:13px;color:var(--gray-600);margin-bottom:14px">Scan any product barcode. Enter the quantity you physically counted, then scan the next item.</div>
-    <div style="background:var(--gray-900);border-radius:12px;padding:16px;margin-bottom:14px;display:flex;gap:10px;align-items:center">
-      <input id="count-scan-input" class="fi" style="flex:1;background:rgba(255,255,255,0.1);border-color:rgba(255,255,255,0.2);color:#fff" placeholder="Scan barcode or type..." autocomplete="off" onkeydown="if(event.key==='Enter')doCountScan()">
-      <button class="btn btn-p" onclick="startCamForCount()">&#128247;</button>
-      <button class="btn btn-p" onclick="doCountScan()">Look up</button>
-    </div>
-    <div id="count-scan-result" style="display:none;background:var(--teal-light);border-radius:10px;padding:14px;margin-bottom:14px">
-      <div style="font-weight:600;font-size:14px;margin-bottom:8px" id="count-scan-name">—</div>
-      <div style="font-size:12px;color:var(--gray-600);margin-bottom:10px">Current on-hand: <strong id="count-scan-onhand">—</strong></div>
-      <div class="g2">
-        <div class="fg"><label class="fl">In Machines</label><input class="fi" type="number" id="count-scan-machines" min="0" placeholder="0"></div>
-        <div class="fg"><label class="fl">In Warehouse</label><input class="fi" type="number" id="count-scan-warehouse" min="0" placeholder="0"></div>
-      </div>
-      <div class="fg"><label class="fl">Notes (optional)</label><input class="fi" id="count-scan-notes" placeholder="e.g. 2 damaged"></div>
-      <div style="display:flex;gap:8px;margin-top:4px">
-        <button class="btn btn-p" onclick="saveCountEntry()">&#10003; Save &amp; next</button>
-        <button class="btn" onclick="clearCountScanResult()">Clear</button>
-      </div>
-    </div>
-    <!-- Running count list -->
-    <div id="count-session-wrap" style="display:none">
-      <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-400);margin-bottom:8px">This session</div>
-      <div id="count-session-list" style="max-height:220px;overflow-y:auto"></div>
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <button class="btn btn-p" onclick="applyCountSession()">Apply all as adjustments</button>
-        <button class="btn btn-d" onclick="clearCountSession()">Clear session</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL: Receive Order (scan-per-case) -->
-<div class="modal-bg" id="m-receive-order" style="display:none">
-  <div class="modal" style="max-width:640px">
-    <div class="modal-title">&#128230; Receive Order</div>
-    <button class="mc" onclick="closeReceiveOrder()">&#10005;</button>
-    <div style="font-size:13px;color:var(--gray-600);margin-bottom:4px" id="ro-header-info"></div>
-    <div style="font-size:13px;color:var(--gray-600);margin-bottom:14px">Scan each case barcode as you unload it. Each scan checks off one case.</div>
-    <!-- Scan input -->
-    <div style="background:var(--gray-900);border-radius:12px;padding:14px;margin-bottom:14px;display:flex;gap:10px;align-items:center">
-      <input id="ro-scan-input" class="fi" style="flex:1;background:rgba(255,255,255,0.1);border-color:rgba(255,255,255,0.2);color:#fff" placeholder="Scan case barcode..." autocomplete="off" onkeydown="if(event.key==='Enter')doROScan()">
-      <button class="btn btn-p" onclick="startCamForRO()">&#128247;</button>
-    </div>
-    <div id="ro-scan-feedback" style="min-height:28px;font-size:13px;font-weight:500;margin-bottom:10px;color:var(--teal-dark)"></div>
-    <!-- Line items -->
-    <div id="ro-lines" style="margin-bottom:14px"></div>
-    <!-- Footer -->
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <button class="btn btn-p" id="ro-complete-btn" onclick="completeReceiveOrder()">&#10003; Complete receiving</button>
-      <button class="btn" onclick="closeReceiveOrder()">Cancel</button>
-      <span id="ro-progress-txt" style="font-size:12px;color:var(--gray-400);margin-left:4px"></span>
     </div>
   </div>
 </div>
@@ -1038,7 +949,7 @@ function hasFeature(feature) {
   return FF[feature] === true;
 }
 
-const PTITLES={dashboard:'Dashboard',scan:'Scan Product',products:'Products',purchases:'Purchases',adjustments:'Adjustments',count:'Inventory Count',imports:'Import Sales',reports:'Reports',machines:'Machines',settings:'Settings'};
+const PTITLES={dashboard:'Dashboard',scan:'Scan Product',products:'Products',purchases:'Purchases',adjustments:'Adjustments',imports:'Import Sales',reports:'Reports',machines:'Machines',settings:'Settings'};
 
 function nav(pg) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
@@ -1064,7 +975,6 @@ function nav(pg) {
   }
   if(pg==='settings'){loadSets();loadProf();}
   if(pg==='imports') loadIH();
-  if(pg==='count') initCountPage();
 }
 
 document.querySelectorAll('.nav-item').forEach(it=>it.addEventListener('click',()=>nav(it.dataset.page)));
@@ -1074,7 +984,7 @@ function closeSB(){document.getElementById('sb').classList.remove('open');docume
 async function loadAll() {
   showL('Loading your data...');
   await Promise.all([loadCats(),loadSups(),loadProds2()]);
-  hideL(); loadDash(); renderThemeSwatches();
+  hideL(); loadDash();
 }
 
 async function loadCats() {
@@ -2301,12 +2211,8 @@ async function startCam(){
       (decodedText)=>{
         // Got a barcode!
         stopCam();
-        if(_roScanCallback) {
-          _countOrROHandleScan(decodedText);
-        } else {
-          document.getElementById('si').value=decodedText;
-          lookupBC();
-        }
+        document.getElementById('si').value=decodedText;
+        lookupBC();
       },
       ()=>{} // scan failure per frame — ignore
     );
@@ -2644,7 +2550,7 @@ async function checkOverdueOrders(){
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:0.5px solid #FCA5A5;flex-wrap:wrap">
         <span><strong>${p.suppliers?.name||'Unknown'}</strong> ordered ${fmtD(p.purchase_date)} &mdash; <strong style="color:#991B1B">${days(p.purchase_date)} days ago</strong></span>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-sm btn-p" onclick="openReceiveOrder('${p.id}')">Receive order</button>
+          <button class="btn btn-sm btn-p" onclick="markPurReceived('${p.id}')">Mark received</button>
           <button class="btn btn-sm btn-d" onclick="deletePurchase('${p.id}','${p.suppliers?.name||'this order'}')">Delete</button>
         </div>
       </div>`).join('');
@@ -2870,7 +2776,7 @@ async function loadPurHistory(){
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div style="font-size:16px;font-weight:700;font-family:var(--font-head)">${fmt(p.total_amount)}</div>
-          ${isOrdered?`<button class="btn btn-sm btn-p" onclick="openReceiveOrder('${p.id}')">&#10003; Receive order</button>`:''}
+          ${isOrdered?`<button class="btn btn-sm btn-p" onclick="markPurReceived('${p.id}')">&#10003; Mark received</button>`:''}
           <button class="btn btn-sm" onclick="togglePurLines('${p.id}',this)">▸ Details</button>
           <button class="btn btn-sm btn-d" onclick="deletePurchase('${p.id}','${(p.suppliers?.name||'this purchase').replace(/'/g,"\'")}')" title="Delete">&#128465;</button>
         </div>
@@ -3898,479 +3804,79 @@ function downloadBookkeeperPDF(){
   w.focus();
   setTimeout(()=>{w.print();},400);
 }
-
-// ── INVENTORY COUNT ──────────────────────────────────────────────────────────
-var _countSession = []; // [{product_id, name, machines, warehouse, notes}]
-var _countScanProd = null; // product currently shown in scan modal
-var _roOrderId = null;   // current receive-order purchase id
-var _roLines = [];       // [{product_id, name, cases_ordered, cases_scanned, barcodes[]}]
-var _roScanCallback = null; // which modal is using the camera
-
-function initCountPage() {
-  // Populate category filter
-  const sel = document.getElementById('count-cat-filter');
-  if(sel && AC.length) {
-    const existing = Array.from(sel.options).map(o=>o.value);
-    AC.filter(c=>c.is_active).forEach(c=>{
-      if(!existing.includes(c.id)) {
-        const o = document.createElement('option');
-        o.value = c.id; o.textContent = c.name;
-        sel.appendChild(o);
-      }
-    });
-  }
-  renderCountSheet();
-}
-
-function renderCountSheet() {
-  const tbody = document.getElementById('count-tbody');
-  const footer = document.getElementById('count-footer');
-  if(!tbody) return;
-  const q = (document.getElementById('count-search')?.value||'').toLowerCase();
-  const catF = document.getElementById('count-cat-filter')?.value||'';
-  const activeOnly = document.getElementById('count-active-only')?.checked !== false;
-  // Only individual products for physical count
-  let prods = AP.filter(p => {
-    if(p.product_type && p.product_type !== 'individual') return false;
-    if(activeOnly && p.is_active === false) return false;
-    if(catF && p.category_id !== catF) return false;
-    if(q && !p.name.toLowerCase().includes(q) && !(p.barcode||'').includes(q)) return false;
-    return true;
-  });
-  prods.sort((a,b)=>{
-    const ca=(a.category_name||'').localeCompare(b.category_name||'');
-    if(ca!==0) return ca;
-    return a.name.localeCompare(b.name);
-  });
-  if(!prods.length) {
-    tbody.innerHTML='<tr><td colspan="6" class="tm" style="padding:20px;text-align:center">No products found</td></tr>';
-    if(footer) footer.textContent='';
-    return;
-  }
-  // Get session data for pre-fill
-  const sessionMap = {};
-  _countSession.forEach(e=>sessionMap[e.product_id]=e);
-  tbody.innerHTML = prods.map(p=>{
-    const se = sessionMap[p.product_id]||{};
-    const mVal = se.machines !== undefined ? se.machines : '';
-    const wVal = se.warehouse !== undefined ? se.warehouse : '';
-    const nVal = se.notes || '';
-    const onHand = parseFloat(p.on_hand_qty)||0;
-    const hasEntry = se.machines !== undefined;
-    return `<tr style="${hasEntry?'background:var(--teal-light)':''}">
-      <td style="font-weight:500">${p.name}</td>
-      <td style="font-size:12px;color:var(--gray-400)">${p.category_name||'—'}</td>
-      <td style="text-align:center;font-weight:600">${onHand}</td>
-      <td style="text-align:center"><input type="number" min="0" style="width:70px;text-align:center;border:0.5px solid var(--border);border-radius:6px;padding:4px;font-size:12px;font-family:var(--font-body)" value="${mVal}" placeholder="—" oninput="updateCountCell('${p.product_id}','machines',this.value,'${p.name.replace(/'/g,"\\'")}')" data-count-pid="${p.product_id}" data-count-field="machines"></td>
-      <td style="text-align:center"><input type="number" min="0" style="width:70px;text-align:center;border:0.5px solid var(--border);border-radius:6px;padding:4px;font-size:12px;font-family:var(--font-body)" value="${wVal}" placeholder="—" oninput="updateCountCell('${p.product_id}','warehouse',this.value,'${p.name.replace(/'/g,"\\'")}')" data-count-pid="${p.product_id}" data-count-field="warehouse"></td>
-      <td><input type="text" style="width:100%;border:0.5px solid var(--border);border-radius:6px;padding:4px 7px;font-size:12px;font-family:var(--font-body)" value="${nVal}" placeholder="Notes..." oninput="updateCountCell('${p.product_id}','notes',this.value,'${p.name.replace(/'/g,"\\'")}')" data-count-pid="${p.product_id}" data-count-field="notes"></td>
-    </tr>`;
-  }).join('');
-  if(footer) footer.textContent = prods.length + ' products shown · Enter counts directly in the table above, or use Scan to Count';
-}
-
-function updateCountCell(pid, field, val, name) {
-  let entry = _countSession.find(e=>e.product_id===pid);
-  if(!entry) { entry={product_id:pid,name:name,machines:undefined,warehouse:undefined,notes:''}; _countSession.push(entry); }
-  if(field==='machines'||field==='warehouse') entry[field] = val===''?undefined:parseInt(val)||0;
-  else entry[field] = val;
-}
-
-function openCountScan() {
-  _countScanProd = null;
-  document.getElementById('count-scan-input').value='';
-  document.getElementById('count-scan-result').style.display='none';
-  renderCountSessionList();
-  openM('m-count-scan');
-  setTimeout(()=>document.getElementById('count-scan-input').focus(),100);
-}
-
-function closeCountScan() {
-  closeM('m-count-scan');
-  renderCountSheet();
-}
-
-async function doCountScan() {
-  const bc = document.getElementById('count-scan-input').value.trim();
-  if(!bc){toast('Enter a barcode','err');return;}
-  // Search AP by barcode
-  let prod = AP.find(p=>p.barcode===bc && p.product_type==='individual');
-  if(!prod) {
-    // Try product_barcodes (alternate barcodes) — search in AP.barcodes if loaded
-    prod = AP.find(p=>Array.isArray(p._barcodes)&&p._barcodes.includes(bc)&&p.product_type==='individual');
-  }
-  if(!prod) {
-    // Fallback DB lookup
-    const {data}=await dbFetch('product_barcodes',{select:'product_id',filters:{barcode:'eq.'+bc},limit:1});
-    if(data&&data[0]) prod=AP.find(p=>p.id===data[0].product_id||p.product_id===data[0].product_id);
-  }
-  if(!prod){toast('No individual product found for barcode: '+bc,'err');return;}
-  _countScanProd = prod;
-  document.getElementById('count-scan-name').textContent = prod.name;
-  document.getElementById('count-scan-onhand').textContent = (parseFloat(prod.on_hand_qty)||0)+' units';
-  // Pre-fill from session
-  const se = _countSession.find(e=>e.product_id===(prod.id||prod.product_id));
-  document.getElementById('count-scan-machines').value = se?.machines !== undefined ? se.machines : '';
-  document.getElementById('count-scan-warehouse').value = se?.warehouse !== undefined ? se.warehouse : '';
-  document.getElementById('count-scan-notes').value = se?.notes||'';
-  document.getElementById('count-scan-result').style.display='block';
-  document.getElementById('count-scan-machines').focus();
-}
-
-function clearCountScanResult() {
-  _countScanProd=null;
-  document.getElementById('count-scan-result').style.display='none';
-  document.getElementById('count-scan-input').value='';
-  document.getElementById('count-scan-input').focus();
-}
-
-function saveCountEntry() {
-  if(!_countScanProd){toast('No product selected','err');return;}
-  const pid = _countScanProd.id || _countScanProd.product_id;
-  const m = document.getElementById('count-scan-machines').value;
-  const w = document.getElementById('count-scan-warehouse').value;
-  const n = document.getElementById('count-scan-notes').value;
-  let entry = _countSession.find(e=>e.product_id===pid);
-  if(!entry){entry={product_id:pid,name:_countScanProd.name,machines:undefined,warehouse:undefined,notes:''};_countSession.push(entry);}
-  entry.machines = m===''?undefined:parseInt(m)||0;
-  entry.warehouse = w===''?undefined:parseInt(w)||0;
-  entry.notes = n;
-  toast(_countScanProd.name+' count saved','ok');
-  clearCountScanResult();
-  renderCountSessionList();
-}
-
-function renderCountSessionList() {
-  const wrap = document.getElementById('count-session-wrap');
-  const list = document.getElementById('count-session-list');
-  if(!wrap||!list) return;
-  const active = _countSession.filter(e=>e.machines!==undefined||e.warehouse!==undefined);
-  if(!active.length){wrap.style.display='none';return;}
-  wrap.style.display='block';
-  list.innerHTML = active.map(e=>`
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:0.5px solid var(--border);font-size:13px">
-      <div style="font-weight:500">${e.name}</div>
-      <div style="color:var(--gray-400);font-size:12px">Machines: <strong style="color:var(--gray-900)">${e.machines??'—'}</strong> · Warehouse: <strong style="color:var(--gray-900)">${e.warehouse??'—'}</strong>${e.notes?' · '+e.notes:''}</div>
-    </div>`).join('');
-}
-
-function clearCountSession() {
-  if(!confirm('Clear all count entries from this session?')) return;
-  _countSession=[];
-  renderCountSessionList();
-  renderCountSheet();
-}
-
-async function applyCountSession() {
-  const entries = _countSession.filter(e=>e.machines!==undefined||e.warehouse!==undefined);
-  if(!entries.length){toast('No count entries to apply','err');return;}
-  if(!confirm('This will save '+entries.length+' count entries as inventory records. Continue?')) return;
-  toast('Count session saved. Use Adjustments page to correct discrepancies from your count.','ok');
-  // Store session results so they persist visually on the count sheet
-  renderCountSheet();
-  closeCountScan();
-}
-
-function startCamForCount() {
-  _roScanCallback = 'count';
-  startCam();
-}
-
-// ── INVENTORY COUNT — PDF & CSV ───────────────────────────────────────────────
-function getCountProds() {
-  return AP.filter(p=>(!p.product_type||p.product_type==='individual')&&p.is_active!==false)
-    .sort((a,b)=>{
-      const ca=(a.category_name||'').localeCompare(b.category_name||'');
-      return ca!==0?ca:a.name.localeCompare(b.name);
-    });
-}
-
-function dlCountCSV() {
-  const prods = getCountProds();
-  const sm = {};
-  _countSession.forEach(e=>sm[e.product_id]=e);
-  const lines = ['"Product","Category","On Hand","In Machines","In Warehouse","Notes"'];
-  prods.forEach(p=>{
-    const se=sm[p.id||p.product_id]||{};
-    lines.push([
-      '"'+p.name.replace(/"/g,'""')+'"',
-      '"'+(p.category_name||'').replace(/"/g,'""')+'"',
-      parseFloat(p.on_hand_qty)||0,
-      se.machines!==undefined?se.machines:'',
-      se.warehouse!==undefined?se.warehouse:'',
-      '"'+(se.notes||'').replace(/"/g,'""')+'"'
-    ].join(','));
-  });
-  const blob=new Blob([lines.join('\n')],{type:'text/csv'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url;a.download='Vendentory_InventoryCount_'+new Date().toISOString().split('T')[0]+'.csv';
-  document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
-  toast('Count sheet CSV downloaded','ok');
-}
-
-function dlCountPDF() {
-  const prods = getCountProds();
-  const sm = {};
-  _countSession.forEach(e=>sm[e.product_id]=e);
-  const rows = prods.map(p=>{
-    const se=sm[p.id||p.product_id]||{};
-    return `<tr>
-      <td style="padding:7px 8px;border-bottom:1px solid #e5e5e0;font-size:12px">${p.name}</td>
-      <td style="padding:7px 8px;border-bottom:1px solid #e5e5e0;font-size:11px;color:#888">${p.category_name||'—'}</td>
-      <td style="padding:7px 8px;border-bottom:1px solid #e5e5e0;text-align:center;font-weight:600;font-size:12px">${parseFloat(p.on_hand_qty)||0}</td>
-      <td style="padding:7px 8px;border-bottom:1px solid #e5e5e0;text-align:center;min-width:80px">${se.machines!==undefined?`<strong>${se.machines}</strong>`:''}</td>
-      <td style="padding:7px 8px;border-bottom:1px solid #e5e5e0;text-align:center;min-width:80px">${se.warehouse!==undefined?`<strong>${se.warehouse}</strong>`:''}</td>
-      <td style="padding:7px 8px;border-bottom:1px solid #e5e5e0;font-size:11px;color:#666">${se.notes||''}</td>
-    </tr>`;
-  }).join('');
-  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Inventory Count Sheet</title>
-  <style>
-    body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;color:#1a1a18;background:#fff;padding:28px;font-size:13px}
-    h1{font-size:18px;font-weight:700;margin:0 0 2px}
-    .sub{font-size:12px;color:#888;margin-bottom:20px}
-    table{width:100%;border-collapse:collapse}
-    th{background:#f5f5f2;padding:7px 8px;font-size:11px;text-align:left;color:#666;border-bottom:2px solid #ddd;white-space:nowrap}
-    th.center{text-align:center}
-    @media print{body{padding:14px}@page{size:portrait;margin:12mm}}
-  </style></head><body>
-  <h1>TR Vending NC — Inventory Count Sheet</h1>
-  <div class="sub">Generated: ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})} &nbsp;&bull;&nbsp; ${prods.length} products</div>
-  <table>
-    <thead><tr>
-      <th style="min-width:200px">Product</th>
-      <th style="min-width:90px">Category</th>
-      <th class="center" style="min-width:70px">On Hand</th>
-      <th class="center" style="min-width:90px">In Machines</th>
-      <th class="center" style="min-width:90px">In Warehouse</th>
-      <th style="min-width:130px">Notes</th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table>
-  </body></html>`;
-  const w=window.open('','_blank','width=900,height=700');
-  w.document.write(html);w.document.close();w.focus();
-  setTimeout(()=>{w.print();},400);
-}
-
-// ── RECEIVE ORDER (scan-per-case) ─────────────────────────────────────────────
-async function openReceiveOrder(id) {
-  _roOrderId = id;
-  _roLines = [];
-  showL('Loading order...');
-  try {
-    // Load purchase header (non-fatal if fails)
-    let pur = null;
-    try {
-      const {data:purs} = await dbFetch('purchases',{select:'id,purchase_date,invoice_number,suppliers(name)',filters:{id:'eq.'+id},limit:1});
-      pur = purs&&purs[0]?purs[0]:null;
-    } catch(e) {}
-
-    // Load purchase lines — try with product join first, fallback without
-    let lines = null;
-    try {
-      const r = await dbFetch('purchase_lines',{select:'id,purchase_id,product_id,cases,units_received,unit_cost,line_total,products(name,barcode)',filters:{purchase_id:'eq.'+id},order:'id'});
-      lines = r.data;
-    } catch(e) {
-      try {
-        const r2 = await dbFetch('purchase_lines',{select:'id,purchase_id,product_id,cases,units_received,unit_cost,line_total',filters:{purchase_id:'eq.'+id},order:'id'});
-        lines = r2.data;
-      } catch(e2) {
-        hideL(); toast('Error loading order lines: '+e2.message,'err'); return;
-      }
-    }
-
-    if(!lines||!lines.length){hideL();toast('No line items found on this order','err');return;}
-
-    for(const l of lines) {
-      const cached = AP.find(p=>(p.id||p.product_id)===l.product_id);
-      const prodName = l.products?.name || cached?.name || 'Unknown product';
-      const prodBarcode = l.products?.barcode || cached?.barcode || null;
-      let skuBarcodes = [];
-      try {
-        const {data:skus} = await dbFetch('supplier_skus',{select:'bulk_barcode',filters:{product_id:'eq.'+l.product_id}});
-        skuBarcodes = (skus||[]).map(s=>s.bulk_barcode).filter(Boolean);
-      } catch(e) {}
-      _roLines.push({
-        purchase_line_id: l.id,
-        product_id: l.product_id,
-        name: prodName,
-        cases_ordered: parseInt(l.cases)||1,
-        cases_scanned: 0,
-        unit_cost: l.unit_cost,
-        units_received: l.units_received,
-        barcodes: [...(prodBarcode?[prodBarcode]:[]), ...skuBarcodes]
-      });
-    }
-
-    hideL();
-    document.getElementById('ro-header-info').textContent =
-      pur ? (pur.suppliers?.name||'Unknown supplier') + (pur.purchase_date?' · '+fmtD(pur.purchase_date):'') + (pur.invoice_number?' · Invoice: '+pur.invoice_number:'')
-          : 'Order: '+id.slice(0,8)+'...';
-    document.getElementById('ro-scan-input').value='';
-    document.getElementById('ro-scan-feedback').textContent='';
-    renderROLines();
-    openM('m-receive-order');
-    setTimeout(()=>document.getElementById('ro-scan-input').focus(),150);
-
-  } catch(e) {
-    hideL();
-    toast('Error opening order: '+e.message,'err');
-  }
-}
-
-function closeReceiveOrder() {
-  _roOrderId=null;_roLines=[];
-  closeM('m-receive-order');
-}
-
-function renderROLines() {
-  const el = document.getElementById('ro-lines');
-  if(!el) return;
-  const total = _roLines.reduce((s,l)=>s+l.cases_ordered,0);
-  const scanned = _roLines.reduce((s,l)=>s+l.cases_scanned,0);
-  document.getElementById('ro-progress-txt').textContent = scanned+' / '+total+' cases scanned';
-  el.innerHTML = _roLines.map((l,i)=>{
-    const done = l.cases_scanned >= l.cases_ordered;
-    const partial = l.cases_scanned > 0 && !done;
-    const bg = done ? 'var(--green-light)' : partial ? 'var(--amber-light)' : 'var(--white)';
-    const border = done ? '#97C459' : partial ? '#D97706' : 'var(--border)';
-    const icon = done ? '&#10003;' : partial ? '&#9654;' : '&#9675;';
-    const iconColor = done ? 'var(--green)' : partial ? 'var(--amber)' : 'var(--gray-400)';
-    return `<div style="display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:center;background:${bg};border:0.5px solid ${border};border-radius:9px;padding:10px 12px;margin-bottom:6px">
-      <div style="font-size:18px;color:${iconColor};text-align:center">${icon}</div>
-      <div>
-        <div style="font-weight:600;font-size:13px">${l.name}</div>
-        <div style="font-size:12px;color:var(--gray-400);margin-top:1px">${l.barcodes.length?'Barcodes: '+l.barcodes.join(', '):'No barcode on file'}</div>
-      </div>
-      <div style="text-align:right">
-        <div style="font-size:16px;font-weight:700;font-family:var(--font-head);color:${done?'var(--green)':partial?'var(--amber)':'var(--gray-700)'}">${l.cases_scanned} / ${l.cases_ordered}</div>
-        <div style="font-size:11px;color:var(--gray-400)">cases</div>
-        <button class="btn btn-sm" style="font-size:11px;padding:3px 8px;margin-top:4px" onclick="roManualCheck(${i})">+1 manual</button>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function doROScan() {
-  const bc = document.getElementById('ro-scan-input').value.trim();
-  if(!bc) return;
-  document.getElementById('ro-scan-input').value='';
-  // Find matching line
-  const idx = _roLines.findIndex(l=>l.barcodes.includes(bc));
-  if(idx<0){
-    document.getElementById('ro-scan-feedback').innerHTML='<span style="color:var(--red)">&#10007; Barcode not found in this order: '+bc+'</span>';
-    return;
-  }
-  const l = _roLines[idx];
-  if(l.cases_scanned >= l.cases_ordered) {
-    document.getElementById('ro-scan-feedback').innerHTML='<span style="color:var(--amber)">&#9888; '+l.name+' already fully scanned ('+l.cases_ordered+' / '+l.cases_ordered+')</span>';
-    return;
-  }
-  l.cases_scanned++;
-  const remaining = l.cases_ordered - l.cases_scanned;
-  if(remaining===0) {
-    document.getElementById('ro-scan-feedback').innerHTML='<span style="color:var(--green)">&#10003; '+l.name+' — all '+l.cases_ordered+' cases received!</span>';
-  } else {
-    document.getElementById('ro-scan-feedback').innerHTML='<span style="color:var(--teal-dark)">&#43; '+l.name+' — '+l.cases_scanned+' of '+l.cases_ordered+' ('+remaining+' remaining)</span>';
-  }
-  renderROLines();
-  document.getElementById('ro-scan-input').focus();
-}
-
-function roManualCheck(idx) {
-  const l = _roLines[idx];
-  if(l.cases_scanned >= l.cases_ordered) return;
-  l.cases_scanned++;
-  document.getElementById('ro-scan-feedback').innerHTML='<span style="color:var(--teal-dark)">&#43; '+l.name+' — '+l.cases_scanned+' of '+l.cases_ordered+'</span>';
-  renderROLines();
-}
-
-function startCamForRO() {
-  _roScanCallback = 'receive';
-  startCam();
-}
-
-async function completeReceiveOrder() {
-  if(!_roOrderId){toast('No order loaded','err');return;}
-  const unfinished = _roLines.filter(l=>l.cases_scanned < l.cases_ordered);
-  if(unfinished.length) {
-    const names = unfinished.map(l=>'• '+l.name+' ('+l.cases_scanned+'/'+l.cases_ordered+' cases)').join('\n');
-    if(!confirm('Warning: the following items have not been fully scanned:\n\n'+names+'\n\nContinue anyway and mark the order received?')) return;
-  }
-  closeM('m-receive-order');
-  await markPurReceived(_roOrderId);
-  _roOrderId=null;_roLines=[];
-}
-
-// Hook camera scan result into whichever modal is active
-var _origHandleScan = null;
-function _countOrROHandleScan(barcode) {
-  if(_roScanCallback==='count') {
-    document.getElementById('count-scan-input').value=barcode;
-    doCountScan();
-  } else if(_roScanCallback==='receive') {
-    document.getElementById('ro-scan-input').value=barcode;
-    doROScan();
-  }
-  _roScanCallback=null;
-}
-// end inventory count / receive order JS
-
-
 // ── THEMES ───────────────────────────────────────────────────────────────────
 const THEMES = [
-  {id:'forest',  name:'Forest',   p:'#0F6E56', pMid:'#1D9E75', pDark:'#085041', pLight:'#E1F5EE', sidebar:'#2C2C2A', rgb:'15,110,86'},
-  {id:'ocean',   name:'Ocean',    p:'#1565C0', pMid:'#1E88E5', pDark:'#0D47A1', pLight:'#E3F2FD', sidebar:'#0d2137', rgb:'21,101,192'},
-  {id:'slate',   name:'Slate',    p:'#378ADD', pMid:'#5BA3E8', pDark:'#185FA5', pLight:'#E6F1FB', sidebar:'#1e2a35', rgb:'55,138,221'},
-  {id:'rose',    name:'Rose',     p:'#E82090', pMid:'#F040A8', pDark:'#A8126A', pLight:'#FCEEF8', sidebar:'#220a1e', rgb:'232,32,144'},
-  {id:'amber',   name:'Amber',    p:'#BA7517', pMid:'#D4881E', pDark:'#854F0B', pLight:'#FAEEDA', sidebar:'#2a1f0d', rgb:'186,117,23'},
-  {id:'midnight',name:'Midnight', p:'#4A6FD4', pMid:'#6487DE', pDark:'#2D4DAA', pLight:'#EEF2FF', sidebar:'#0f1729', rgb:'74,111,212'},
-  {id:'crimson', name:'Crimson',  p:'#A32D2D', pMid:'#C03535', pDark:'#791F1F', pLight:'#FCEBEB', sidebar:'#2a0d0d', rgb:'163,45,45'},
-  {id:'violet',  name:'Violet',   p:'#6C47D8', pMid:'#8060E8', pDark:'#3C3489', pLight:'#EEEDFE', sidebar:'#1e1535', rgb:'108,71,216'},
-  {id:'sage',    name:'Sage',     p:'#4A7A3A', pMid:'#5E9A4C', pDark:'#27500A', pLight:'#EAF3DE', sidebar:'#1e251a', rgb:'74,122,58'},
-  {id:'copper',  name:'Copper',   p:'#B05A2A', pMid:'#CC6E38', pDark:'#712B13', pLight:'#FAECE7', sidebar:'#271810', rgb:'176,90,42'},
+  {id:'forest',    name:'Forest',    p:'#0F6E56', pMid:'#1D9E75', pDark:'#085041', pLight:'#E1F5EE', sidebar:'#1a2e2a'},
+  {id:'electric',  name:'Electric',  p:'#0EA5E9', pMid:'#38BDF8', pDark:'#0369A1', pLight:'#E0F2FE', sidebar:'#0c2233'},
+  {id:'grape',     name:'Grape',     p:'#7C3AED', pMid:'#8B5CF6', pDark:'#5B21B6', pLight:'#EDE9FE', sidebar:'#1e1535'},
+  {id:'hotpink',   name:'Hot Pink',  p:'#E82090', pMid:'#F040A8', pDark:'#A8126A', pLight:'#FCEEF8', sidebar:'#220a1e'},
+  {id:'fire',      name:'Fire',      p:'#EA580C', pMid:'#F97316', pDark:'#9A3412', pLight:'#FFEDD5', sidebar:'#2a1005'},
+  {id:'blush',     name:'Blush',     p:'#E879A0', pMid:'#F4A7C0', pDark:'#BE185D', pLight:'#FCE7F3', sidebar:'#2a1020'},
+  {id:'lime',      name:'Lime',      p:'#65A30D', pMid:'#84CC16', pDark:'#3F6212', pLight:'#ECFCCB', sidebar:'#1a2608'},
+  {id:'cobalt',    name:'Cobalt',    p:'#1D4ED8', pMid:'#3B82F6', pDark:'#1E3A8A', pLight:'#DBEAFE', sidebar:'#0f1f3d'},
+  {id:'sunflower', name:'Sunflower', p:'#CA8A04', pMid:'#EAB308', pDark:'#854D0E', pLight:'#FEF9C3', sidebar:'#272008'},
+  {id:'crimson',   name:'Crimson',   p:'#B91C1C', pMid:'#DC2626', pDark:'#7F1D1D', pLight:'#FEE2E2', sidebar:'#2a0808'},
 ];
 
-function applyTheme(id) {
+var _currentTheme = localStorage.getItem('vend_theme') || 'forest';
+
+function applyTheme(id, save=true) {
   const t = THEMES.find(x=>x.id===id) || THEMES[0];
+  _currentTheme = t.id;
   const r = document.documentElement.style;
   r.setProperty('--p', t.p);
   r.setProperty('--p-mid', t.pMid);
   r.setProperty('--p-dark', t.pDark);
   r.setProperty('--p-light', t.pLight);
   r.setProperty('--p-sidebar', t.sidebar);
-  r.setProperty('--p-rgb', t.rgb);
-  // Also keep legacy --teal vars in sync so existing hardcoded references work
+  // Keep legacy --teal vars in sync
   r.setProperty('--teal', t.p);
   r.setProperty('--teal-mid', t.pMid);
   r.setProperty('--teal-dark', t.pDark);
   r.setProperty('--teal-light', t.pLight);
-  // Update active swatch
+  // Update swatches
   document.querySelectorAll('.tswatch').forEach(s=>s.classList.toggle('active', s.dataset.tid===id));
-  const lbl = document.getElementById('theme-name-label');
-  if(lbl) lbl.textContent = t.name;
-  localStorage.setItem('vend_theme', id);
-  _currentTheme = id;
+  if(save) localStorage.setItem('vend_theme', id);
 }
 
-function renderThemeSwatches() {
-  const el = document.getElementById('theme-swatches');
-  if(!el) return;
-  const cur = localStorage.getItem('vend_theme') || 'forest';
-  el.innerHTML = THEMES.map(t=>`
-    <button class="tswatch${t.id===cur?' active':''}" data-tid="${t.id}" onclick="applyTheme('${t.id}')" title="${t.name}"
-      style="background:${t.p}"></button>`).join('');
+function renderThemePopover() {
+  const grid = document.getElementById('theme-popover-grid');
+  if(!grid) return;
+  grid.innerHTML = THEMES.map(t=>`
+    <button class="tswatch${t.id===_currentTheme?' active':''}" data-tid="${t.id}" onclick="applyTheme('${t.id}');closeThemePopover()" title="${t.name}">
+      <div class="tc" style="background:${t.p}"></div>
+      <div class="tn">${t.name}</div>
+    </button>`).join('');
 }
 
-var _currentTheme = localStorage.getItem('vend_theme') || 'forest';
-// Apply saved theme immediately on load
-(function(){
-  const saved = localStorage.getItem('vend_theme');
-  if(saved && saved !== 'forest') applyTheme(saved);
-})();
+function toggleThemePopover(e) {
+  e.stopPropagation();
+  const pop = document.getElementById('theme-popover');
+  const caret = document.getElementById('theme-nav-caret');
+  const isOpen = pop.classList.contains('open');
+  if(!isOpen) renderThemePopover();
+  pop.classList.toggle('open', !isOpen);
+  if(caret) caret.textContent = isOpen ? '▲' : '▼';
+}
+
+function closeThemePopover() {
+  const pop = document.getElementById('theme-popover');
+  const caret = document.getElementById('theme-nav-caret');
+  if(pop) pop.classList.remove('open');
+  if(caret) caret.textContent = '▲';
+}
+
+// Close popover when clicking outside
+document.addEventListener('click', function(e) {
+  if(!document.getElementById('theme-nav')?.contains(e.target)) closeThemePopover();
+});
+
+// Apply saved theme on load
+(function(){ applyTheme(_currentTheme, false); })();
 // ─────────────────────────────────────────────────────────────────────────────
 
+function openM(id){const el=document.getElementById(id);if(el)el.style.display='flex';}
+function closeM(id){const el=document.getElementById(id);if(el)el.style.display='none';}
 var hideTimer=null;
 function showL(m){document.getElementById('ldm').textContent=m||'Loading...';document.getElementById('ldo').style.display='flex';if(hideTimer)clearTimeout(hideTimer);hideTimer=setTimeout(()=>{hideL();toast('Operation timed out - please try again','err');},90000);}
 function hideL(){document.getElementById('ldo').style.display='none';if(hideTimer){clearTimeout(hideTimer);hideTimer=null;}}
