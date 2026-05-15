@@ -1194,11 +1194,24 @@ async function openAP() {
   document.getElementById('mpt').textContent='Add product';
   document.getElementById('del-prod-btn').style.display='none';
   document.getElementById('peid').value='';
-  // Reset type selector
+  // Reset type selector — restore each button's original color scheme (not white, which hides white text/icons)
   _prodType='';
+  const _ptReset = {
+    individual: {bg:'#EAF3DE',border:'#97C459',icon:'#3B6D11',text:'#27500A',sub:'#3B6D11'},
+    bulk:       {bg:'#E6F1FB',border:'#85B7EB',icon:'#185FA5',text:'#0C447C',sub:'#185FA5'},
+    variety:    {bg:'#FBEAF0',border:'#ED93B1',icon:'#993556',text:'#72243E',sub:'#993556'}
+  };
   ['individual','bulk','variety'].forEach(t=>{
     const btn=document.getElementById('ptype-'+t);
-    if(btn){btn.style.background='var(--white)';btn.style.color='var(--gray-900)';btn.style.borderColor='var(--border)';}
+    if(!btn) return;
+    const c=_ptReset[t];
+    btn.style.background=c.bg;
+    btn.style.borderColor=c.border;
+    btn.style.borderWidth='0.5px';
+    btn.querySelectorAll('svg').forEach(svg=>svg.setAttribute('stroke',c.icon));
+    const spans=btn.querySelectorAll('span');
+    if(spans[0]) spans[0].style.color=c.text;
+    if(spans[1]) spans[1].style.color=c.sub;
   });
   document.getElementById('prod-fields').style.display='none';
   ['pb','pn','pco','pbr','psz','psu2'].forEach(id=>document.getElementById(id).value='');
@@ -2399,7 +2412,7 @@ function renderPL() {
       <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.cost_per_case.toFixed(2)}" min="0" step="0.01" onchange="updPL(${i},'cost_per_case',this.value)">
       <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.units}" min="0" onchange="updPL(${i},'units',this.value)">
       <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.unit_cost.toFixed(4)}" min="0" step="0.0001" onchange="updPL(${i},'unit_cost',this.value)">
-      <div style="font-size:13px;font-weight:600">${fmt(l.total)}</div>
+      <div style="font-size:13px;font-weight:600" data-total>${fmt(l.total)}</div>
       <button style="background:var(--red-light);border:none;border-radius:6px;width:26px;height:26px;cursor:pointer;color:var(--red-mid);font-size:13px" onclick="rmPL(${i})">&#10005;</button>
     </div>`).join('');
   updPT();
@@ -2418,9 +2431,34 @@ function selPP(i,pid){
 
 function updPL(i,f,v){
   PL[i][f]=parseFloat(v)||0;
-  if(f==='cost_per_case'&&PL[i].units>0)PL[i].unit_cost=PL[i].cost_per_case/Math.max(1,PL[i].units);
-  if(f==='unit_cost')PL[i].cost_per_case=PL[i].unit_cost*PL[i].units;
-  PL[i].total=PL[i].units*PL[i].unit_cost;
+  if(f==='cases'){
+    const prod=AP.find(x=>x.product_id===PL[i].product_id);
+    const upc=parseInt(prod?.units_per_case)||1;
+    PL[i].units=PL[i].cases*upc;
+    PL[i].total=PL[i].cost_per_case*PL[i].cases;
+    PL[i].unit_cost=PL[i].units>0?PL[i].total/PL[i].units:0;
+  } else if(f==='cost_per_case'){
+    PL[i].total=PL[i].cost_per_case*PL[i].cases;
+    PL[i].unit_cost=PL[i].units>0?PL[i].total/PL[i].units:0;
+  } else if(f==='unit_cost'){
+    PL[i].total=PL[i].unit_cost*PL[i].units;
+    PL[i].cost_per_case=PL[i].cases>0?PL[i].total/PL[i].cases:PL[i].total;
+  } else if(f==='units'){
+    PL[i].unit_cost=PL[i].units>0?PL[i].total/PL[i].units:0;
+  }
+  // Update derived fields and total display without full re-render (preserves focus)
+  const lineEls=document.getElementById('plines').children;
+  if(lineEls[i]){
+    const totalDiv=lineEls[i].querySelector('[data-total]');
+    if(totalDiv) totalDiv.textContent=fmt(PL[i].total);
+    const inputs=lineEls[i].querySelectorAll('input');
+    // inputs order: cases(0), cost_per_case(1), units(2), unit_cost(3)
+    if(f==='cases'||f==='cost_per_case'){
+      if(inputs[2]) inputs[2].value=PL[i].units;
+      if(inputs[3]) inputs[3].value=PL[i].unit_cost.toFixed(4);
+    }
+    if(f==='unit_cost') if(inputs[1]) inputs[1].value=PL[i].cost_per_case.toFixed(2);
+  }
   updPT();
 }
 
