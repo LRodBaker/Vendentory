@@ -4139,45 +4139,65 @@ async function openReceiveOrder(id) {
   _roOrderId = id;
   _roLines = [];
   showL('Loading order...');
-  const tok = await getAuthToken();
-  const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
-  // Load purchase header
-  const {data:purs} = await dbFetch('purchases',{select:'id,purchase_date,invoice_number,suppliers(name)',filters:{id:'eq.'+id},limit:1});
-  const pur = purs&&purs[0]?purs[0]:null;
-  // Load purchase lines
-  const {data:lines} = await dbFetch('purchase_lines',{select:'*,products(name,barcode,units_per_case)',filters:{purchase_id:'eq.'+id},order:'id'});
-  if(!lines||!lines.length){hideL();toast('No lines found on this order','err');return;}
-  // Load supplier SKUs for each product (bulk barcodes)
-  for(const l of lines) {
-    const {data:skus} = await dbFetch('supplier_skus',{select:'bulk_barcode,units_per_case',filters:{product_id:'eq.'+l.product_id}});
-    const cases = parseInt(l.cases)||1;
-    _roLines.push({
-      purchase_line_id: l.id,
-      product_id: l.product_id,
-      name: l.products?.name||'Unknown',
-      cases_ordered: cases,
-      cases_scanned: 0,
-      unit_cost: l.unit_cost,
-      units_received: l.units_received,
-      barcodes: [
-        ...(l.products?.barcode?[l.products.barcode]:[]),
-        ...((skus||[]).map(s=>s.bulk_barcode).filter(Boolean))
-      ]
-    });
-  }
-  hideL();
-  // Populate modal
-  if(pur) {
+  try {
+    // Load purchase header (non-fatal if fails)
+    let pur = null;
+    try {
+      const {data:purs} = await dbFetch('purchases',{select:'id,purchase_date,invoice_number,suppliers(name)',filters:{id:'eq.'+id},limit:1});
+      pur = purs&&purs[0]?purs[0]:null;
+    } catch(e) {}
+
+    // Load purchase lines — try with product join first, fallback without
+    let lines = null;
+    try {
+      const r = await dbFetch('purchase_lines',{select:'id,purchase_id,product_id,cases,units_received,unit_cost,line_total,products(name,barcode)',filters:{purchase_id:'eq.'+id},order:'id'});
+      lines = r.data;
+    } catch(e) {
+      try {
+        const r2 = await dbFetch('purchase_lines',{select:'id,purchase_id,product_id,cases,units_received,unit_cost,line_total',filters:{purchase_id:'eq.'+id},order:'id'});
+        lines = r2.data;
+      } catch(e2) {
+        hideL(); toast('Error loading order lines: '+e2.message,'err'); return;
+      }
+    }
+
+    if(!lines||!lines.length){hideL();toast('No line items found on this order','err');return;}
+
+    for(const l of lines) {
+      const cached = AP.find(p=>(p.id||p.product_id)===l.product_id);
+      const prodName = l.products?.name || cached?.name || 'Unknown product';
+      const prodBarcode = l.products?.barcode || cached?.barcode || null;
+      let skuBarcodes = [];
+      try {
+        const {data:skus} = await dbFetch('supplier_skus',{select:'bulk_barcode',filters:{product_id:'eq.'+l.product_id}});
+        skuBarcodes = (skus||[]).map(s=>s.bulk_barcode).filter(Boolean);
+      } catch(e) {}
+      _roLines.push({
+        purchase_line_id: l.id,
+        product_id: l.product_id,
+        name: prodName,
+        cases_ordered: parseInt(l.cases)||1,
+        cases_scanned: 0,
+        unit_cost: l.unit_cost,
+        units_received: l.units_received,
+        barcodes: [...(prodBarcode?[prodBarcode]:[]), ...skuBarcodes]
+      });
+    }
+
+    hideL();
     document.getElementById('ro-header-info').textContent =
-      (pur.suppliers?.name||'Unknown supplier') +
-      (pur.purchase_date?' · '+fmtD(pur.purchase_date):'') +
-      (pur.invoice_number?' · Invoice: '+pur.invoice_number:'');
+      pur ? (pur.suppliers?.name||'Unknown supplier') + (pur.purchase_date?' · '+fmtD(pur.purchase_date):'') + (pur.invoice_number?' · Invoice: '+pur.invoice_number:'')
+          : 'Order: '+id.slice(0,8)+'...';
+    document.getElementById('ro-scan-input').value='';
+    document.getElementById('ro-scan-feedback').textContent='';
+    renderROLines();
+    openM('m-receive-order');
+    setTimeout(()=>document.getElementById('ro-scan-input').focus(),150);
+
+  } catch(e) {
+    hideL();
+    toast('Error opening order: '+e.message,'err');
   }
-  document.getElementById('ro-scan-input').value='';
-  document.getElementById('ro-scan-feedback').textContent='';
-  renderROLines();
-  openM('m-receive-order');
-  setTimeout(()=>document.getElementById('ro-scan-input').focus(),150);
 }
 
 function closeReceiveOrder() {
