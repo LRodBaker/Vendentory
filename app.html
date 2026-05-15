@@ -4299,6 +4299,8 @@ function _countOrROHandleScan(barcode) {
 // end inventory count / receive order JS
 
 
+function openM(id){const el=document.getElementById(id);if(el)el.style.display='flex';}
+function closeM(id){const el=document.getElementById(id);if(el)el.style.display='none';}
 var hideTimer=null;
 function showL(m){document.getElementById('ldm').textContent=m||'Loading...';document.getElementById('ldo').style.display='flex';if(hideTimer)clearTimeout(hideTimer);hideTimer=setTimeout(()=>{hideL();toast('Operation timed out - please try again','err');},90000);}
 function hideL(){document.getElementById('ldo').style.display='none';if(hideTimer){clearTimeout(hideTimer);hideTimer=null;}}
