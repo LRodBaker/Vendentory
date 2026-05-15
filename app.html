@@ -322,7 +322,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
                 <div class="fg"><label class="fl">Supplier</label><select class="fs" id="pus"></select></div>
                 <div class="fg"><label class="fl">Invoice number</label><input class="fi" id="pui" placeholder="Optional"></div>
                 <div class="fg"><label class="fl">Date</label><input class="fi" type="date" id="pud"></div>
-                <div class="fg"><label class="fl">Status</label><select class="fs" id="pustat"><option value="received">Received</option><option value="draft">Draft</option></select></div>
+                <div class="fg"><label class="fl">Status</label><select class="fs" id="pustat" onchange="updPurSaveBtn()"><option value="ordered">Ordered</option><option value="received">Received</option></select></div>
                 <div class="fg"><label class="fl">Shipping ($)</label><input class="fi" type="number" id="push" value="0" step="0.01" oninput="updPT()"></div>
                 <div class="fg"><label class="fl">Tax ($)</label><input class="fi" type="number" id="putx" value="0" step="0.01" oninput="updPT()"></div>
                 <div class="fg"><label class="fl">Extra costs ($)</label><input class="fi" type="number" id="puex" value="0" step="0.01" oninput="updPT()" placeholder="Tips, fees, etc."></div>
@@ -340,7 +340,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
               </div>
               <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;justify-content:space-between;align-items:center">
                 <div style="display:flex;gap:8px;flex-wrap:wrap">
-                  <button class="btn btn-p" onclick="savePur()">Save &amp; receive purchase</button>
+                  <button class="btn btn-p" id="savePurBtn" onclick="savePur()">Save purchase</button>
                   <button class="btn" onclick="clrPur()">Clear</button>
                 </div>
                 <button id="ai-import-btn" class="btn" style="display:inline-flex;gap:6px;background:#6C47D8;color:#fff;border-color:#5535B8" onclick="openAIImport()">
@@ -348,6 +348,11 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
                   AI Import Receipt
                 </button>
               </div>
+            </div>
+            <!-- OVERDUE ALERT BANNER -->
+            <div id="pur-overdue-banner" style="display:none;background:#FEF2F2;border:1px solid #FCA5A5;border-radius:10px;padding:14px 16px;margin-top:14px">
+              <div style="font-weight:600;color:#991B1B;margin-bottom:6px;font-size:14px">&#9888; Overdue orders — action required</div>
+              <div id="pur-overdue-list" style="font-size:13px;color:#7F1D1D"></div>
             </div>
             <!-- PURCHASE HISTORY -->
             <div class="card" style="margin-top:14px">
@@ -933,6 +938,8 @@ function nav(pg) {
   }
   if(pg==='purchases') {
     loadPurHistory();
+    checkOverdueOrders();
+    updPurSaveBtn();
   }
   if(pg==='settings'){loadSets();loadProf();}
   if(pg==='imports') loadIH();
@@ -2255,10 +2262,31 @@ async function lookupBC() {
           <div style="background:var(--teal-light);border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">
             Scanning this case will add <strong>${skuMatch.units_per_case} units</strong> to <strong>${sp?.name||'this product'}</strong>.
           </div>
-          <button class="btn btn-p" onclick="nav('purchases')">Go to Receive Inventory</button>
+          <div id="scan-open-order" style="margin-bottom:10px"></div>
+          <button class="btn btn-p" onclick="nav('purchases')">Go to Purchases</button>
         </div>`;
       // Pre-select this product on the purchases page for convenience
       window._pendingReceive = { product_id: sp?.id, name: sp?.name, units: skuMatch.units_per_case };
+      // Check for open ordered purchase matching this product
+      if(sp?.id) {
+        const oResp = await fetch(SURL+'/rest/v1/purchases?status=eq.ordered&select=id,purchase_date,suppliers(name)',{headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY}});
+        if(oResp.ok) {
+          const opens = await oResp.json();
+          // Find any open purchase that has a line for this product
+          let matchedPur = null;
+          for(const op of opens) {
+            const lResp = await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+op.id+'&product_id=eq.'+sp.id+'&select=id',{headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY}});
+            if(lResp.ok){const ls=await lResp.json();if(ls.length){matchedPur=op;break;}}
+          }
+          const oDiv=document.getElementById('scan-open-order');
+          if(oDiv&&matchedPur){
+            oDiv.innerHTML=`<div style="background:var(--amber-light);border-radius:8px;padding:10px;font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+              <span>&#128230; Open order from <strong>${matchedPur.suppliers?.name||'supplier'}</strong> (${fmtD(matchedPur.purchase_date)})</span>
+              <button class="btn btn-sm btn-p" onclick="markPurReceived('${matchedPur.id}')">&#10003; Mark received</button>
+            </div>`;
+          } else if(oDiv) oDiv.innerHTML='';
+        }
+      }
       rScans.unshift({barcode:bc, name:sp?.name||bc, status:sp?.stock_status||'OK'});
       if(rScans.length>10) rScans.pop();
       renderRsc();
@@ -2408,7 +2436,7 @@ function renderPL() {
         <option value="">Select product...</option>
         ${AP.map(p=>`<option value="${p.product_id}" ${p.product_id===l.product_id?'selected':''}>${p.name}</option>`).join('')}
       </select>
-      <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.cases}" min="0" step="0.5" oninput="updPL(${i},'cases',this.value)">
+      <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.cases}" min="0" step="1" oninput="updPL(${i},'cases',this.value)">
       <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.cost_per_case.toFixed(2)}" min="0" step="0.01" oninput="updPL(${i},'cost_per_case',this.value)">
       <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.units}" min="0" oninput="updPL(${i},'units',this.value)">
       <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.unit_cost.toFixed(4)}" min="0" step="0.0001" oninput="updPL(${i},'unit_cost',this.value)">
@@ -2469,7 +2497,74 @@ function updPL(i,f,v){
 }
 
 function rmPL(i){PL.splice(i,1);renderPL();}
-function clrPur(){PL=[];renderPL();['pui','pun'].forEach(id=>document.getElementById(id).value='');['push','putx','puex'].forEach(id=>document.getElementById(id).value='0');}
+function clrPur(){PL=[];renderPL();['pui','pun'].forEach(id=>document.getElementById(id).value='');['push','putx','puex'].forEach(id=>document.getElementById(id).value='0');document.getElementById('pustat').value='ordered';updPurSaveBtn();}
+
+function updPurSaveBtn(){
+  const s=document.getElementById('pustat').value;
+  const btn=document.getElementById('savePurBtn');
+  if(btn) btn.textContent=s==='ordered'?'Save order':'Save & receive purchase';
+}
+
+async function checkOverdueOrders(){
+  const banner=document.getElementById('pur-overdue-banner');
+  const list=document.getElementById('pur-overdue-list');
+  if(!banner||!list) return;
+  try {
+    const cutoff=new Date(Date.now()-14*24*60*60*1000).toISOString().split('T')[0];
+    const {data}=await dbFetch('purchases',{select:'id,purchase_date,suppliers(name)',filters:{'status':'eq.ordered','purchase_date':'lte.'+cutoff},order:'purchase_date.asc',limit:20});
+    if(!data||!data.length){banner.style.display='none';return;}
+    const days=d=>Math.floor((Date.now()-new Date(d+'T12:00:00'))/(86400000));
+    list.innerHTML=data.map(p=>`
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:0.5px solid #FCA5A5;flex-wrap:wrap">
+        <span><strong>${p.suppliers?.name||'Unknown'}</strong> ordered ${fmtD(p.purchase_date)} &mdash; <strong style="color:#991B1B">${days(p.purchase_date)} days ago</strong></span>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm btn-p" onclick="markPurReceived('${p.id}')">Mark received</button>
+          <button class="btn btn-sm btn-d" onclick="deletePurchase('${p.id}','${p.suppliers?.name||'this order'}')">Delete</button>
+        </div>
+      </div>`).join('');
+    banner.style.display='block';
+  } catch(e){}
+}
+
+async function markPurReceived(id){
+  showL('Processing receipt...');
+  const tok=await getAuthToken();
+  const wh={'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+  // Load the purchase lines
+  const {data:lines}=await dbFetch('purchase_lines',{select:'*',filters:{'purchase_id':'eq.'+id}});
+  if(!lines||!lines.length){hideL();toast('No lines found on this purchase','err');return;}
+  const invNote='Received order '+id.slice(0,8);
+  const invTxns=[];const wacUpdates=[];
+  for(const l of lines){
+    const compResp=await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
+    const comps=compResp.ok?await compResp.json():[];
+    if(comps.length){
+      const tip=comps.reduce((s,x)=>s+x.qty_per_pack,0);
+      for(const c of comps){
+        const tu=l.units_received*c.qty_per_pack;
+        const uc=tip>0?l.unit_cost/tip:0;
+        invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',quantity_change:tu,warehouse_quantity_change:tu,unit_cost:uc,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
+        wacUpdates.push({product_id:c.component_product_id,units:tu,unit_cost:uc});
+      }
+    } else {
+      invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units_received,warehouse_quantity_change:l.units_received,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
+      wacUpdates.push({product_id:l.product_id,units:l.units_received,unit_cost:l.unit_cost});
+    }
+  }
+  if(invTxns.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
+  for(const u of wacUpdates){
+    const prod=AP.find(p=>p.id===u.product_id||p.product_id===u.product_id);
+    const cq=parseFloat(prod?.on_hand_qty)||0,cc=parseFloat(prod?.average_cost)||0;
+    const nq=cq+u.units,na=nq>0?((cq*cc)+(u.units*u.unit_cost))/nq:u.unit_cost;
+    await fetch(SURL+'/rest/v1/products?id=eq.'+u.product_id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({average_cost:na,last_cost:u.unit_cost,updated_at:new Date().toISOString()})});
+  }
+  await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString()})});
+  hideL();
+  toast('Order marked received! Inventory updated.','ok');
+  await loadProds2();
+  loadPurHistory();
+  checkOverdueOrders();
+}
 
 // ── AI PURCHASE IMPORT ───────────────────────────────────────────────────────
 function openAIImport() {
@@ -2626,24 +2721,33 @@ async function loadPurHistory(){
   const {data:purs,error}=await dbFetch('purchases',{select:'id,purchase_date,invoice_number,status,subtotal_amount,shipping_cost,tax_amount,extra_costs,total_amount,notes,suppliers(name)',filters:purFilters,order:'purchase_date.desc',limit:200});
   if(error){el.innerHTML='<div class="tm">Error loading history</div>';return;}
   if(!purs||!purs.length){el.innerHTML='<div class="tm">No purchases found</div>';return;}
-  el.innerHTML=purs.map(p=>`
-    <div style="border-bottom:0.5px solid var(--border);padding:11px 0">
+  const now=Date.now();
+  el.innerHTML=purs.map(p=>{
+    const isOrdered=p.status==='ordered';
+    const daysOld=Math.floor((now-new Date(p.purchase_date+'T12:00:00'))/86400000);
+    const overdue=isOrdered&&daysOld>=14;
+    const statusBadge=isOrdered
+      ?`<span class="badge" style="background:${overdue?'var(--red-light)':'var(--amber-light)'};color:${overdue?'var(--red)':'var(--amber)'};margin-left:4px">${overdue?'&#9888; OVERDUE':'Ordered'}</span>`
+      :`<span class="badge b-ok" style="margin-left:4px">Received</span>`;
+    return`
+    <div style="border-bottom:0.5px solid var(--border);padding:11px 0${overdue?';background:#FFF8F8;border-radius:8px;padding:10px;margin-bottom:4px':''}">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
         <div>
-          <div style="font-weight:600;font-size:13px">${p.suppliers?.name||'Unknown supplier'} <span class="badge b-gray" style="margin-left:4px">${p.status}</span></div>
+          <div style="font-weight:600;font-size:13px">${p.suppliers?.name||'Unknown supplier'} ${statusBadge}</div>
           <div style="font-size:12px;color:var(--gray-400);margin-top:2px">${fmtD(p.purchase_date)}${p.invoice_number?' · Invoice: '+p.invoice_number:''}${p.notes?' · '+p.notes:''}</div>
           <div style="font-size:11px;color:var(--gray-400);margin-top:1px">
             Sub: ${fmt(p.subtotal_amount)}${p.shipping_cost>0?' · Ship: '+fmt(p.shipping_cost):''}${p.tax_amount>0?' · Tax: '+fmt(p.tax_amount):''}${p.extra_costs>0?' · Extra: '+fmt(p.extra_costs):''}
           </div>
         </div>
-        <div style="display:flex;align-items:center;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div style="font-size:16px;font-weight:700;font-family:var(--font-head)">${fmt(p.total_amount)}</div>
+          ${isOrdered?`<button class="btn btn-sm btn-p" onclick="markPurReceived('${p.id}')">&#10003; Mark received</button>`:''}
           <button class="btn btn-sm" onclick="togglePurLines('${p.id}',this)">▸ Details</button>
-          <button class="btn btn-sm btn-d" onclick="deletePurchase('${p.id}','${(p.suppliers?.name||'this purchase').replace(/'/g,'\'')}')" title="Delete this purchase">&#128465;</button>
+          <button class="btn btn-sm btn-d" onclick="deletePurchase('${p.id}','${(p.suppliers?.name||'this purchase').replace(/'/g,"\'")}')" title="Delete">&#128465;</button>
         </div>
       </div>
       <div id="phl-${p.id}" style="display:none;margin-top:10px"></div>
-    </div>`).join('');
+    </div>`;}).join('');
 }
 
 async function deletePurchase(id, label) {
@@ -2700,8 +2804,9 @@ function updPT(){
 }
 
 async function savePur() {
+  const status = document.getElementById('pustat').value;
   const vl=PL.filter(l=>l.product_id&&l.units>0);
-  if(!vl.length){toast('Add at least one product with units received','err');return;}
+  if(!vl.length){toast('Add at least one product line','err');return;}
   showL('Saving purchase...');
   const sub=vl.reduce((s,l)=>s+l.total,0);
   const sh=parseFloat(document.getElementById('push').value)||0;
@@ -2731,7 +2836,8 @@ async function savePur() {
   const invTxns = [];
   const wacUpdates = [];
 
-  for(const l of vl) {
+  // Only update inventory if status is 'received' — not for ordered-only records
+  if(status === 'received') for(const l of vl) {
     const prod = AP.find(p => p.id === l.product_id || p.product_id === l.product_id);
     // Check for base product links (works for variety packs AND regular bulk products)
     const compResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
@@ -2748,8 +2854,7 @@ async function savePur() {
       invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units,warehouse_quantity_change:l.units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:pur.id,notes:invNote,created_by:CU?.id});
       wacUpdates.push({product_id:l.product_id,units:l.units,unit_cost:l.unit_cost});
     }
-  }
-
+  } // end if(status==='received')
   // Insert all inventory transactions in one batch
   if(invTxns.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
 
@@ -2762,7 +2867,7 @@ async function savePur() {
     await fetch(SURL+'/rest/v1/products?id=eq.'+u.product_id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({average_cost:na,last_cost:u.unit_cost,updated_at:new Date().toISOString()})});
   }
   hideL();
-  toast('Purchase received! Inventory updated.','ok');
+  toast(status==='ordered'?'Order saved! Inventory will update when marked received.':'Purchase received! Inventory updated.','ok');
   clrPur(); await loadProds2(); renderProds(); loadPurHistory();
 }
 
