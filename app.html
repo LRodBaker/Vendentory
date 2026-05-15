@@ -2511,7 +2511,7 @@ async function checkOverdueOrders(){
   if(!banner||!list) return;
   try {
     const cutoff=new Date(Date.now()-14*24*60*60*1000).toISOString().split('T')[0];
-    const {data}=await dbFetch('purchases',{select:'id,purchase_date,suppliers(name)',filters:{'status':'eq.ordered','purchase_date':'lte.'+cutoff},order:'purchase_date.asc',limit:20});
+    const {data}=await dbFetch('purchases',{select:'id,purchase_date,suppliers(name)',filters:{'status':'in.(ordered,draft)','purchase_date':'lte.'+cutoff},order:'purchase_date.asc',limit:20});
     if(!data||!data.length){banner.style.display='none';return;}
     const days=d=>Math.floor((Date.now()-new Date(d+'T12:00:00'))/(86400000));
     list.innerHTML=data.map(p=>`
@@ -2591,6 +2591,7 @@ async function handleAIImportFile(input) {
     const prompt = `You are a purchase receipt parser for a vending machine business inventory app.
 
 Extract all line items from this receipt PDF and match them to the product list below.
+Also extract any tips, driver fees, or extra charges into the extra_costs field.
 
 PRODUCT LIST:
 ${prodContext}
@@ -2603,6 +2604,7 @@ Return ONLY a JSON object in this exact format, no other text:
   "subtotal": 0.00,
   "tax": 0.00,
   "shipping": 0.00,
+  "extra_costs": 0.00,
   "lines": [
     {
       "description": "exact item name from receipt",
@@ -2653,8 +2655,9 @@ function openAIImportPreview(data) {
   // Invoice number
   if(data.invoice_number) document.getElementById('pui').value = data.invoice_number;
   // Tax / shipping
-  if(data.tax)      document.getElementById('putx').value = data.tax.toFixed(2);
-  if(data.shipping) document.getElementById('push').value = data.shipping.toFixed(2);
+  if(data.tax)        document.getElementById('putx').value = data.tax.toFixed(2);
+  if(data.shipping)   document.getElementById('push').value = data.shipping.toFixed(2);
+  if(data.extra_costs) document.getElementById('puex').value = data.extra_costs.toFixed(2);
   // Supplier — try to match by name
   if(data.supplier) {
     const supEl = document.getElementById('pus');
@@ -2723,7 +2726,7 @@ async function loadPurHistory(){
   if(!purs||!purs.length){el.innerHTML='<div class="tm">No purchases found</div>';return;}
   const now=Date.now();
   el.innerHTML=purs.map(p=>{
-    const isOrdered=p.status==='ordered';
+    const isOrdered=p.status==='ordered'||p.status==='draft';
     const daysOld=Math.floor((now-new Date(p.purchase_date+'T12:00:00'))/86400000);
     const overdue=isOrdered&&daysOld>=14;
     const statusBadge=isOrdered
@@ -2818,7 +2821,7 @@ async function savePur() {
   const purResp = await fetch(SURL+'/rest/v1/purchases', {
     method:'POST',
     headers:{...wh,'Prefer':'return=representation'},
-    body:JSON.stringify({supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,status:document.getElementById('pustat').value,notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex,created_by:CU?.id})
+    body:JSON.stringify({supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,status:document.getElementById('pustat').value==='ordered'?'draft':'received',notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex,created_by:CU?.id})
   });
   if(!purResp.ok){hideL();toast('Error saving purchase','err');return;}
   const purArr = await purResp.json();
