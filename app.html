@@ -43,7 +43,22 @@
   --gray-600:#5F5E5A;--gray-700:#444441;--gray-900:#2C2C2A;
   --white:#fff;--border:rgba(0,0,0,0.11);
   --font-head:'Syne',sans-serif;--font-body:'DM Sans',sans-serif;
+  /* Theme accent variables — overridden by JS */
+  --p:#0F6E56;--p-light:#E1F5EE;--p-mid:#1D9E75;--p-dark:#085041;--p-sidebar:#2C2C2A;
 }
+/* Theme-aware overrides */
+.sidebar{background:var(--p-sidebar)!important}
+.nav-item.active{border-left-color:var(--p-mid)!important;background:rgba(var(--p-rgb),0.11)!important}
+.btn-p{background:var(--p)!important;border-color:var(--p)!important}
+.btn-p:hover{background:var(--p-mid)!important}
+.b-teal{background:var(--p-light)!important;color:var(--p-dark)!important}
+.fi:focus,.fs:focus,.ft:focus{border-color:var(--p-mid)!important}
+.sb-logo-name{color:#fff}
+.lbf{background:var(--p)!important}
+/* Theme swatch button */
+.tswatch{width:28px;height:28px;border-radius:50%;border:2.5px solid transparent;cursor:pointer;transition:transform .12s,border-color .12s;flex-shrink:0}
+.tswatch:hover{transform:scale(1.15)}
+.tswatch.active{border-color:var(--gray-900)!important;transform:scale(1.1)}
 body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-height:100vh}
 .app{display:flex;min-height:100vh}
 .sidebar{width:220px;background:var(--gray-900);display:flex;flex-direction:column;position:fixed;top:0;left:0;height:100vh;z-index:200;transition:transform .25s}
@@ -274,9 +289,15 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
               <div id="dra"><div class="tm">Loading...</div></div>
             </div>
           </div>
+          <!-- THEME PICKER -->
+          <div class="card" style="margin-top:16px">
+            <div class="card-header" style="margin-bottom:10px">
+              <div class="card-title" style="margin:0">&#127912; App theme</div>
+              <span style="font-size:12px;color:var(--gray-400)" id="theme-name-label">Forest</span>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center" id="theme-swatches"></div>
+          </div>
         </div>
-
-        <!-- SCAN -->
         <div class="page" id="page-scan">
           <div style="max-width:520px;margin:0 auto">
             <div class="scan-box">
@@ -1030,7 +1051,7 @@ function nav(pg) {
   if(ni) ni.classList.add('active');
   document.getElementById('pt').textContent=PTITLES[pg]||pg;
   closeSB();
-  if(pg==='dashboard') loadDash();
+  if(pg==='dashboard') { loadDash(); renderThemeSwatches(); }
   if(pg==='products'){ loadProds2().then(()=>renderProds()).catch(()=>renderProds()); }
   if(pg==='adjustments'){loadRAJ();setDates();}
   if(pg==='reports'){
@@ -1055,7 +1076,7 @@ function closeSB(){document.getElementById('sb').classList.remove('open');docume
 async function loadAll() {
   showL('Loading your data...');
   await Promise.all([loadCats(),loadSups(),loadProds2()]);
-  hideL(); loadDash();
+  hideL(); loadDash(); renderThemeSwatches();
 }
 
 async function loadCats() {
@@ -4299,8 +4320,60 @@ function _countOrROHandleScan(barcode) {
 // end inventory count / receive order JS
 
 
-function openM(id){const el=document.getElementById(id);if(el)el.style.display='flex';}
-function closeM(id){const el=document.getElementById(id);if(el)el.style.display='none';}
+// ── THEMES ───────────────────────────────────────────────────────────────────
+const THEMES = [
+  {id:'forest',  name:'Forest',   p:'#0F6E56', pMid:'#1D9E75', pDark:'#085041', pLight:'#E1F5EE', sidebar:'#2C2C2A', rgb:'15,110,86'},
+  {id:'ocean',   name:'Ocean',    p:'#1565C0', pMid:'#1E88E5', pDark:'#0D47A1', pLight:'#E3F2FD', sidebar:'#0d2137', rgb:'21,101,192'},
+  {id:'slate',   name:'Slate',    p:'#378ADD', pMid:'#5BA3E8', pDark:'#185FA5', pLight:'#E6F1FB', sidebar:'#1e2a35', rgb:'55,138,221'},
+  {id:'rose',    name:'Rose',     p:'#E82090', pMid:'#F040A8', pDark:'#A8126A', pLight:'#FCEEF8', sidebar:'#220a1e', rgb:'232,32,144'},
+  {id:'amber',   name:'Amber',    p:'#BA7517', pMid:'#D4881E', pDark:'#854F0B', pLight:'#FAEEDA', sidebar:'#2a1f0d', rgb:'186,117,23'},
+  {id:'midnight',name:'Midnight', p:'#4A6FD4', pMid:'#6487DE', pDark:'#2D4DAA', pLight:'#EEF2FF', sidebar:'#0f1729', rgb:'74,111,212'},
+  {id:'crimson', name:'Crimson',  p:'#A32D2D', pMid:'#C03535', pDark:'#791F1F', pLight:'#FCEBEB', sidebar:'#2a0d0d', rgb:'163,45,45'},
+  {id:'violet',  name:'Violet',   p:'#6C47D8', pMid:'#8060E8', pDark:'#3C3489', pLight:'#EEEDFE', sidebar:'#1e1535', rgb:'108,71,216'},
+  {id:'sage',    name:'Sage',     p:'#4A7A3A', pMid:'#5E9A4C', pDark:'#27500A', pLight:'#EAF3DE', sidebar:'#1e251a', rgb:'74,122,58'},
+  {id:'copper',  name:'Copper',   p:'#B05A2A', pMid:'#CC6E38', pDark:'#712B13', pLight:'#FAECE7', sidebar:'#271810', rgb:'176,90,42'},
+];
+
+function applyTheme(id) {
+  const t = THEMES.find(x=>x.id===id) || THEMES[0];
+  const r = document.documentElement.style;
+  r.setProperty('--p', t.p);
+  r.setProperty('--p-mid', t.pMid);
+  r.setProperty('--p-dark', t.pDark);
+  r.setProperty('--p-light', t.pLight);
+  r.setProperty('--p-sidebar', t.sidebar);
+  r.setProperty('--p-rgb', t.rgb);
+  // Also keep legacy --teal vars in sync so existing hardcoded references work
+  r.setProperty('--teal', t.p);
+  r.setProperty('--teal-mid', t.pMid);
+  r.setProperty('--teal-dark', t.pDark);
+  r.setProperty('--teal-light', t.pLight);
+  // Update active swatch
+  document.querySelectorAll('.tswatch').forEach(s=>s.classList.toggle('active', s.dataset.tid===id));
+  const lbl = document.getElementById('theme-name-label');
+  if(lbl) lbl.textContent = t.name;
+  localStorage.setItem('vend_theme', id);
+}
+
+function renderThemeSwatches() {
+  const el = document.getElementById('theme-swatches');
+  if(!el) return;
+  el.innerHTML = THEMES.map(t=>`
+    <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+      <button class="tswatch" data-tid="${t.id}" onclick="applyTheme('${t.id}')" title="${t.name}"
+        style="background:${t.p};border-color:${t.id===_currentTheme?'var(--gray-900)':'transparent'}"></button>
+      <span style="font-size:10px;color:var(--gray-400);white-space:nowrap">${t.name}</span>
+    </div>`).join('');
+}
+
+var _currentTheme = localStorage.getItem('vend_theme') || 'forest';
+// Apply saved theme immediately on load
+(function(){
+  const saved = localStorage.getItem('vend_theme');
+  if(saved && saved !== 'forest') applyTheme(saved);
+})();
+// ─────────────────────────────────────────────────────────────────────────────
+
 var hideTimer=null;
 function showL(m){document.getElementById('ldm').textContent=m||'Loading...';document.getElementById('ldo').style.display='flex';if(hideTimer)clearTimeout(hideTimer);hideTimer=setTimeout(()=>{hideL();toast('Operation timed out - please try again','err');},90000);}
 function hideL(){document.getElementById('ldo').style.display='none';if(hideTimer){clearTimeout(hideTimer);hideTimer=null;}}
