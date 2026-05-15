@@ -3772,7 +3772,7 @@ function downloadBookkeeperPDF(){
 function openM(id){document.getElementById(id).style.display='flex';}
 function closeM(id){document.getElementById(id).style.display='none';}
 var hideTimer=null;
-function showL(m){document.getElementById('ldm').textContent=m||'Loading...';document.getElementById('ldo').style.display='flex';if(hideTimer)clearTimeout(hideTimer);hideTimer=setTimeout(()=>{hideL();toast('Operation timed out - please try again','err');},8000);}
+function showL(m){document.getElementById('ldm').textContent=m||'Loading...';document.getElementById('ldo').style.display='flex';if(hideTimer)clearTimeout(hideTimer);hideTimer=setTimeout(()=>{hideL();toast('Operation timed out - please try again','err');},90000);}
 function hideL(){document.getElementById('ldo').style.display='none';if(hideTimer){clearTimeout(hideTimer);hideTimer=null;}}
 function toast(msg,type=''){
   const w=document.getElementById('tw'),el=document.createElement('div');
