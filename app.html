@@ -2616,7 +2616,7 @@ Return ONLY a JSON object in this exact format, no other text:
   ]
 }`;
 
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const resp = await fetch('https://vendentoryproxy.l-rod-baker.workers.dev/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
