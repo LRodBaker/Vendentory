@@ -2408,10 +2408,10 @@ function renderPL() {
         <option value="">Select product...</option>
         ${AP.map(p=>`<option value="${p.product_id}" ${p.product_id===l.product_id?'selected':''}>${p.name}</option>`).join('')}
       </select>
-      <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.cases}" min="0" step="0.5" onchange="updPL(${i},'cases',this.value)">
-      <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.cost_per_case.toFixed(2)}" min="0" step="0.01" onchange="updPL(${i},'cost_per_case',this.value)">
-      <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.units}" min="0" onchange="updPL(${i},'units',this.value)">
-      <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.unit_cost.toFixed(4)}" min="0" step="0.0001" onchange="updPL(${i},'unit_cost',this.value)">
+      <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.cases}" min="0" step="0.5" oninput="updPL(${i},'cases',this.value)">
+      <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.cost_per_case.toFixed(2)}" min="0" step="0.01" oninput="updPL(${i},'cost_per_case',this.value)">
+      <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.units}" min="0" oninput="updPL(${i},'units',this.value)">
+      <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.unit_cost.toFixed(4)}" min="0" step="0.0001" oninput="updPL(${i},'unit_cost',this.value)">
       <div style="font-size:13px;font-weight:600" data-total>${fmt(l.total)}</div>
       <button style="background:var(--red-light);border:none;border-radius:6px;width:26px;height:26px;cursor:pointer;color:var(--red-mid);font-size:13px" onclick="rmPL(${i})">&#10005;</button>
     </div>`).join('');
@@ -2420,33 +2420,39 @@ function renderPL() {
 
 function selPP(i,pid){
   const p=AP.find(x=>x.product_id===pid);if(!p)return;
-  PL[i].product_id=pid;PL[i].name=p.name;
-  PL[i].unit_cost=parseFloat(p.average_cost)||0;
-  PL[i].units=parseInt(p.units_per_case)||1;
-  PL[i].cases=1;
-  PL[i].cost_per_case=(parseFloat(p.average_cost)||0)*(parseInt(p.units_per_case)||1);
-  PL[i].total=PL[i].units*PL[i].unit_cost;
+  const upc=parseInt(p.units_per_case)||1;
+  PL[i].product_id=pid;
+  PL[i].name=p.name;
+  PL[i].units=PL[i].cases*upc;
+  // Don't pre-fill cost — user enters actual receipt cost
+  PL[i].cost_per_case=PL[i].cost_per_case||0;
+  PL[i].total=PL[i].cost_per_case*PL[i].cases;
+  PL[i].unit_cost=PL[i].units>0?PL[i].total/PL[i].units:0;
   renderPL();
 }
 
 function updPL(i,f,v){
-  PL[i][f]=parseFloat(v)||0;
+  const val=parseFloat(v)||0;
+  PL[i][f]=val;
+  const prod=AP.find(x=>x.product_id===PL[i].product_id);
+  const upc=parseInt(prod?.units_per_case)||1;
   if(f==='cases'){
-    const prod=AP.find(x=>x.product_id===PL[i].product_id);
-    const upc=parseInt(prod?.units_per_case)||1;
     PL[i].units=PL[i].cases*upc;
     PL[i].total=PL[i].cost_per_case*PL[i].cases;
     PL[i].unit_cost=PL[i].units>0?PL[i].total/PL[i].units:0;
   } else if(f==='cost_per_case'){
+    // If units not set yet, derive from cases × upc
+    if(!PL[i].units&&PL[i].cases) PL[i].units=PL[i].cases*upc;
     PL[i].total=PL[i].cost_per_case*PL[i].cases;
     PL[i].unit_cost=PL[i].units>0?PL[i].total/PL[i].units:0;
   } else if(f==='unit_cost'){
+    if(!PL[i].units&&PL[i].cases) PL[i].units=PL[i].cases*upc;
     PL[i].total=PL[i].unit_cost*PL[i].units;
     PL[i].cost_per_case=PL[i].cases>0?PL[i].total/PL[i].cases:PL[i].total;
   } else if(f==='units'){
     PL[i].unit_cost=PL[i].units>0?PL[i].total/PL[i].units:0;
   }
-  // Update derived fields and total display without full re-render (preserves focus)
+  // Update DOM without full re-render (preserves focus while typing)
   const lineEls=document.getElementById('plines').children;
   if(lineEls[i]){
     const totalDiv=lineEls[i].querySelector('[data-total]');
@@ -2454,10 +2460,10 @@ function updPL(i,f,v){
     const inputs=lineEls[i].querySelectorAll('input');
     // inputs order: cases(0), cost_per_case(1), units(2), unit_cost(3)
     if(f==='cases'||f==='cost_per_case'){
-      if(inputs[2]) inputs[2].value=PL[i].units;
-      if(inputs[3]) inputs[3].value=PL[i].unit_cost.toFixed(4);
+      if(inputs[2]&&document.activeElement!==inputs[2]) inputs[2].value=PL[i].units;
+      if(inputs[3]&&document.activeElement!==inputs[3]) inputs[3].value=PL[i].unit_cost.toFixed(4);
     }
-    if(f==='unit_cost') if(inputs[1]) inputs[1].value=PL[i].cost_per_case.toFixed(2);
+    if(f==='unit_cost'&&inputs[1]&&document.activeElement!==inputs[1]) inputs[1].value=PL[i].cost_per_case.toFixed(2);
   }
   updPT();
 }
@@ -2633,10 +2639,29 @@ async function loadPurHistory(){
         <div style="display:flex;align-items:center;gap:10px">
           <div style="font-size:16px;font-weight:700;font-family:var(--font-head)">${fmt(p.total_amount)}</div>
           <button class="btn btn-sm" onclick="togglePurLines('${p.id}',this)">▸ Details</button>
+          <button class="btn btn-sm btn-d" onclick="deletePurchase('${p.id}','${(p.suppliers?.name||'this purchase').replace(/'/g,'\'')}')" title="Delete this purchase">&#128465;</button>
         </div>
       </div>
       <div id="phl-${p.id}" style="display:none;margin-top:10px"></div>
     </div>`).join('');
+}
+
+async function deletePurchase(id, label) {
+  if(!confirm('Delete purchase from ' + label + '?\n\nThis will also reverse the inventory transactions (purchase receipts) linked to this purchase. This cannot be undone.')) return;
+  showL('Deleting purchase...');
+  const tok = await getAuthToken();
+  const h = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+  // Delete inventory transactions linked to this purchase
+  await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+id, {method:'DELETE',headers:h});
+  // Delete purchase lines
+  await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+id, {method:'DELETE',headers:h});
+  // Delete purchase header
+  const delResp = await fetch(SURL+'/rest/v1/purchases?id=eq.'+id, {method:'DELETE',headers:h});
+  hideL();
+  if(!delResp.ok){ toast('Delete failed — check DB permissions','err'); return; }
+  toast('Purchase deleted','ok');
+  await loadProds2();
+  loadPurHistory();
 }
 
 async function togglePurLines(id,btn){
