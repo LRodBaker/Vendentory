@@ -56,9 +56,9 @@
 .sb-logo-name{color:#fff}
 .lbf{background:var(--p)!important}
 /* Theme swatch button */
-.tswatch{width:28px;height:28px;border-radius:50%;border:2.5px solid transparent;cursor:pointer;transition:transform .12s,border-color .12s;flex-shrink:0}
-.tswatch:hover{transform:scale(1.15)}
-.tswatch.active{border-color:var(--gray-900)!important;transform:scale(1.1)}
+.tswatch{width:22px;height:22px;border-radius:50%;border:2.5px solid transparent;cursor:pointer;transition:transform .12s,border-color .12s;flex-shrink:0}
+.tswatch:hover{transform:scale(1.18)}
+.tswatch.active{border-color:rgba(255,255,255,0.9)!important;transform:scale(1.12)}
 body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-height:100vh}
 .app{display:flex;min-height:100vh}
 .sidebar{width:220px;background:var(--gray-900);display:flex;flex-direction:column;position:fixed;top:0;left:0;height:100vh;z-index:200;transition:transform .25s}
@@ -233,6 +233,12 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
         <div class="nav-item" data-page="machines">&#9671; Machines</div>
         <div class="nav-item" data-page="settings">&#9881; Settings</div>
       </div>
+      <!-- Color Theme picker in sidebar -->
+      <div style="padding:10px 14px 8px;border-top:1px solid rgba(255,255,255,0.07)">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.22);font-weight:600;margin-bottom:8px">Color Theme</div>
+        <div style="display:flex;flex-wrap:wrap;gap:7px" id="theme-swatches"></div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:6px" id="theme-name-label">Forest</div>
+      </div>
       <div class="sb-user">
         <div class="sb-avatar" id="ava">?</div>
         <div style="flex:1;min-width:0">
@@ -288,14 +294,6 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
               <div class="card-header"><div class="card-title" style="margin:0">Recent activity</div></div>
               <div id="dra"><div class="tm">Loading...</div></div>
             </div>
-          </div>
-          <!-- THEME PICKER -->
-          <div class="card" style="margin-top:16px">
-            <div class="card-header" style="margin-bottom:10px">
-              <div class="card-title" style="margin:0">&#127912; App theme</div>
-              <span style="font-size:12px;color:var(--gray-400)" id="theme-name-label">Forest</span>
-            </div>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center" id="theme-swatches"></div>
           </div>
         </div>
         <div class="page" id="page-scan">
@@ -1051,7 +1049,7 @@ function nav(pg) {
   if(ni) ni.classList.add('active');
   document.getElementById('pt').textContent=PTITLES[pg]||pg;
   closeSB();
-  if(pg==='dashboard') { loadDash(); renderThemeSwatches(); }
+  if(pg==='dashboard') loadDash();
   if(pg==='products'){ loadProds2().then(()=>renderProds()).catch(()=>renderProds()); }
   if(pg==='adjustments'){loadRAJ();setDates();}
   if(pg==='reports'){
@@ -4353,17 +4351,16 @@ function applyTheme(id) {
   const lbl = document.getElementById('theme-name-label');
   if(lbl) lbl.textContent = t.name;
   localStorage.setItem('vend_theme', id);
+  _currentTheme = id;
 }
 
 function renderThemeSwatches() {
   const el = document.getElementById('theme-swatches');
   if(!el) return;
+  const cur = localStorage.getItem('vend_theme') || 'forest';
   el.innerHTML = THEMES.map(t=>`
-    <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
-      <button class="tswatch" data-tid="${t.id}" onclick="applyTheme('${t.id}')" title="${t.name}"
-        style="background:${t.p};border-color:${t.id===_currentTheme?'var(--gray-900)':'transparent'}"></button>
-      <span style="font-size:10px;color:var(--gray-400);white-space:nowrap">${t.name}</span>
-    </div>`).join('');
+    <button class="tswatch${t.id===cur?' active':''}" data-tid="${t.id}" onclick="applyTheme('${t.id}')" title="${t.name}"
+      style="background:${t.p}"></button>`).join('');
 }
 
 var _currentTheme = localStorage.getItem('vend_theme') || 'forest';
