@@ -244,9 +244,10 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
           <span>Color Theme</span>
           <span style="margin-left:auto;font-size:10px;opacity:.5" id="theme-nav-caret">▲</span>
         </div>
-        <div class="theme-popover" id="theme-popover">
+        <div class="theme-popover" id="theme-popover" onclick="event.stopPropagation()">
           <div class="theme-popover-title">Choose a theme</div>
           <div class="theme-popover-grid" id="theme-popover-grid"></div>
+          <button onclick="event.stopPropagation();saveThemeAndClose()" style="margin-top:10px;width:100%;padding:7px;background:var(--p);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font-body)">Save theme</button>
         </div>
       </div>
       <div class="sb-user">
@@ -3819,31 +3820,42 @@ const THEMES = [
 ];
 
 var _currentTheme = localStorage.getItem('vend_theme') || 'forest';
+var _previewTheme = _currentTheme; // tracks what's previewed but not yet saved
 
-function applyTheme(id, save=true) {
+function applyTheme(id, save) {
   const t = THEMES.find(x=>x.id===id) || THEMES[0];
-  _currentTheme = t.id;
   const r = document.documentElement.style;
   r.setProperty('--p', t.p);
   r.setProperty('--p-mid', t.pMid);
   r.setProperty('--p-dark', t.pDark);
   r.setProperty('--p-light', t.pLight);
   r.setProperty('--p-sidebar', t.sidebar);
-  // Keep legacy --teal vars in sync
   r.setProperty('--teal', t.p);
   r.setProperty('--teal-mid', t.pMid);
   r.setProperty('--teal-dark', t.pDark);
   r.setProperty('--teal-light', t.pLight);
-  // Update swatches
   document.querySelectorAll('.tswatch').forEach(s=>s.classList.toggle('active', s.dataset.tid===id));
-  if(save) localStorage.setItem('vend_theme', id);
+  if(save) { _currentTheme = id; localStorage.setItem('vend_theme', id); }
+  else { _previewTheme = id; }
+}
+
+function previewTheme(id) {
+  applyTheme(id, false);
+  _previewTheme = id;
+  document.querySelectorAll('.tswatch').forEach(s=>s.classList.toggle('active', s.dataset.tid===id));
+}
+
+function saveThemeAndClose() {
+  applyTheme(_previewTheme, true);
+  closeThemePopover();
+  toast('Theme saved: '+( THEMES.find(x=>x.id===_previewTheme)?.name||''),'ok');
 }
 
 function renderThemePopover() {
   const grid = document.getElementById('theme-popover-grid');
   if(!grid) return;
   grid.innerHTML = THEMES.map(t=>`
-    <button class="tswatch${t.id===_currentTheme?' active':''}" data-tid="${t.id}" onclick="applyTheme('${t.id}');closeThemePopover()" title="${t.name}">
+    <button class="tswatch${t.id===_currentTheme?' active':''}" data-tid="${t.id}" onclick="event.stopPropagation();previewTheme('${t.id}')" title="${t.name}">
       <div class="tc" style="background:${t.p}"></div>
       <div class="tn">${t.name}</div>
     </button>`).join('');
@@ -3854,7 +3866,13 @@ function toggleThemePopover(e) {
   const pop = document.getElementById('theme-popover');
   const caret = document.getElementById('theme-nav-caret');
   const isOpen = pop.classList.contains('open');
-  if(!isOpen) renderThemePopover();
+  if(!isOpen) {
+    _previewTheme = _currentTheme; // reset preview to saved on open
+    renderThemePopover();
+  } else {
+    // Cancelled — revert any unsaved preview back to saved theme
+    if(_previewTheme !== _currentTheme) applyTheme(_currentTheme, false);
+  }
   pop.classList.toggle('open', !isOpen);
   if(caret) caret.textContent = isOpen ? '▲' : '▼';
 }
@@ -3866,9 +3884,16 @@ function closeThemePopover() {
   if(caret) caret.textContent = '▲';
 }
 
-// Close popover when clicking outside
+// Click outside — revert unsaved preview and close
 document.addEventListener('click', function(e) {
-  if(!document.getElementById('theme-nav')?.contains(e.target)) closeThemePopover();
+  const nav = document.getElementById('theme-nav');
+  if(nav && !nav.contains(e.target)) {
+    const pop = document.getElementById('theme-popover');
+    if(pop && pop.classList.contains('open')) {
+      if(_previewTheme !== _currentTheme) applyTheme(_currentTheme, false);
+      closeThemePopover();
+    }
+  }
 });
 
 // Apply saved theme on load
