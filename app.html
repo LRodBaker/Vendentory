@@ -278,7 +278,6 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
         <div class="page active" id="page-dashboard">
           <div style="margin-bottom:16px;font-size:13px" class="tm" id="greet">Good morning</div>
           <div class="g4" style="margin-bottom:16px">
-            <div class="stat-card"><div class="stat-label">This week sales</div><div class="stat-val" id="sw">—</div></div>
             <div class="stat-card"><div class="stat-label">This month sales</div><div class="stat-val" id="sm">—</div></div>
             <div class="stat-card"><div class="stat-label">Inventory value</div><div class="stat-val" id="siv">—</div></div>
             <div class="stat-card"><div class="stat-label">Need reorder</div><div class="stat-val tr" id="sr">—</div></div>
@@ -296,10 +295,6 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
             <div class="card">
               <div class="card-header"><div class="card-title" style="margin:0">Low stock alerts</div><span style="font-size:12px;color:var(--teal-mid);cursor:pointer" onclick="nav('reports')">View all</span></div>
               <div id="dls"><div class="tm">Loading...</div></div>
-            </div>
-            <div class="card">
-              <div class="card-header"><div class="card-title" style="margin:0">Top sellers this week</div><span style="font-size:12px;color:var(--teal-mid);cursor:pointer" onclick="nav('reports')">Full report</span></div>
-              <div id="dts"><div class="tm">Loading...</div></div>
             </div>
             <div class="card">
               <div class="card-header"><div class="card-title" style="margin:0">Recent activity</div></div>
@@ -1040,13 +1035,7 @@ async function loadDash() {
   const mStart=new Date(now.getFullYear(),now.getMonth(),1).toISOString().split('T')[0];
   const todayStr=now.toISOString().split('T')[0];
   // Week ago for top sellers query
-  const waDate=new Date(now);waDate.setDate(now.getDate()-7);
-  const wa=waDate.toISOString().split('T')[0];
-  const [{data:ws},{data:ms}]=await Promise.all([
-    dbFetch('sales_lines',{select:'sales_amount',filters:{'period_start_date':'gte.'+monStr,'period_start_date2':'lte.'+todayStr}}),
-    dbFetch('sales_lines',{select:'sales_amount',filters:{'period_start_date':'gte.'+mStart,'period_start_date2':'lte.'+todayStr}})
-  ]);
-  document.getElementById('sw').textContent=fmt((ws||[]).reduce((s,r)=>s+parseFloat(r.sales_amount||0),0));
+  const {data:ms}=await dbFetch('sales_lines',{select:'sales_amount',filters:{'period_start_date':'gte.'+mStart,'period_start_date2':'lte.'+todayStr}});
   document.getElementById('sm').textContent=fmt((ms||[]).reduce((s,r)=>s+parseFloat(r.sales_amount||0),0));
   const low=AP.filter(p=>p.stock_status==='REORDER'||p.on_hand_qty<=p.reorder_point).slice(0,5);
   document.getElementById('dls').innerHTML=low.length?low.map(p=>`
@@ -1055,15 +1044,7 @@ async function loadDash() {
     <div class="lbg"><div class="lbf" style="width:${Math.min(100,Math.max(5,(p.on_hand_qty/Math.max(1,p.reorder_point))*100))}%;background:${p.on_hand_qty<=0?'var(--red-mid)':'var(--amber)'}"></div></div></div>
     <div style="font-size:12px;font-weight:700;color:${p.on_hand_qty<=0?'var(--red-mid)':'var(--amber)'}">${p.on_hand_qty}</div></div>`).join('')
     :'<div class="tm">All products well stocked ✓</div>';
-  const {data:td}=await dbFetch('sales_lines',{select:'product_id,raw_product_name,sales_amount,units_sold',filters:{'created_at':'gte.'+wa,'product_id':'not.is.null'}});
-  const byP={};
-  (td||[]).forEach(r=>{if(!byP[r.product_id])byP[r.product_id]={name:r.raw_product_name,s:0,u:0};byP[r.product_id].s+=parseFloat(r.sales_amount||0);byP[r.product_id].u+=parseInt(r.units_sold||0);});
-  const srt=Object.values(byP).sort((a,b)=>b.s-a.s).slice(0,5);
-  document.getElementById('dts').innerHTML=srt.length?srt.map((p,i)=>`
-    <div class="lr-row"><div style="font-size:11px;font-weight:700;color:var(--gray-400);min-width:16px">#${i+1}</div>
-    <div style="flex:1;font-size:13px;font-weight:500">${p.name}</div>
-    <div style="text-align:right"><div style="font-size:13px;font-weight:700">${fmt(p.s)}</div><div style="font-size:11px;color:var(--gray-400)">${p.u} units</div></div></div>`).join('')
-    :'<div class="tm">No sales imported yet</div>';
+
   const {data:rec}=await dbFetch('inventory_transactions',{select:'*,products(name)',order:'created_at.desc',limit:5});
   document.getElementById('dra').innerHTML=(rec||[]).length?(rec||[]).map(t=>`
     <div style="display:flex;gap:9px;padding:8px 0;border-bottom:0.5px solid var(--border);align-items:flex-start">
