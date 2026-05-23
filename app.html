@@ -2739,15 +2739,17 @@ async function loadPurHistory(){
   if(error){el.innerHTML='<div class="tm">Error loading history</div>';return;}
   if(!purs||!purs.length){el.innerHTML='<div class="tm">No purchases found</div>';return;}
   const now=Date.now();
-  el.innerHTML=purs.map(p=>{
+  const nowD=new Date();
+  const curMonKey=nowD.getFullYear()+'-'+(nowD.getMonth()+1).toString().padStart(2,'0');
+
+  function purRowHTML(p){
     const isOrdered=p.status==='ordered'||p.status==='draft';
     const daysOld=Math.floor((now-new Date(p.purchase_date+'T12:00:00'))/86400000);
     const overdue=isOrdered&&daysOld>=14;
     const statusBadge=isOrdered
       ?`<span class="badge" style="background:${overdue?'var(--red-light)':'var(--amber-light)'};color:${overdue?'var(--red)':'var(--amber)'};margin-left:4px">${overdue?'&#9888; OVERDUE':'Ordered'}</span>`
       :`<span class="badge b-ok" style="margin-left:4px">Received</span>`;
-    return`
-    <div style="border-bottom:0.5px solid var(--border);padding:11px 0${overdue?';background:#FFF8F8;border-radius:8px;padding:10px;margin-bottom:4px':''}">
+    return`<div style="border-bottom:0.5px solid var(--border);padding:11px 0${overdue?';background:#FFF8F8;border-radius:8px;padding:10px;margin-bottom:4px':''}">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
         <div>
           <div style="font-weight:600;font-size:13px">${p.suppliers?.name||'Unknown supplier'} ${statusBadge}</div>
@@ -2758,13 +2760,110 @@ async function loadPurHistory(){
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div style="font-size:16px;font-weight:700;font-family:var(--font-head)">${fmt(p.total_amount)}</div>
-          ${isOrdered?`<button class="btn btn-sm btn-p" onclick="markPurReceived('${p.id}')">&#10003; Mark received</button>`:''}
-          <button class="btn btn-sm" onclick="togglePurLines('${p.id}',this)">▸ Details</button>
+          ${isOrdered?`<button class="btn btn-sm btn-p" onclick="openReceiveOrder('${p.id}')">&#10003; Receive order</button>`:''}
+          <button class="btn btn-sm" onclick="togglePurLines('${p.id}',this)">&#9658; Details</button>
           <button class="btn btn-sm btn-d" onclick="deletePurchase('${p.id}','${(p.suppliers?.name||'this purchase').replace(/'/g,"\'")}')" title="Delete">&#128465;</button>
         </div>
       </div>
       <div id="phl-${p.id}" style="display:none;margin-top:10px"></div>
-    </div>`;}).join('');
+    </div>`;
+  }
+
+  // Group by YYYY-MM
+  const groups={};
+  purs.forEach(p=>{
+    const mk=p.purchase_date.substring(0,7);
+    if(!groups[mk])groups[mk]=[];
+    groups[mk].push(p);
+  });
+  const monthNames=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const curYr=nowD.getFullYear().toString();
+
+  function monthFolderHTML(mk, indented){
+    const [yr,mo]=mk.split('-');
+    const label=monthNames[parseInt(mo)-1]+(indented?'':' '+yr);
+    const monthPurs=groups[mk];
+    const monthTotal=monthPurs.reduce((s,p)=>s+parseFloat(p.total_amount||0),0);
+    const count=monthPurs.length;
+    const gid='phg-'+mk.replace('-','');
+    const pad=indented?'padding:0 0 0 0':'';
+    return`<div style="border:0.5px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden;${pad}">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;cursor:pointer;background:var(--gray-50)" onclick="togglePurGroup('${gid}',this)">
+        <div style="font-weight:600;font-size:13px">${label}</div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span style="font-size:12px;color:var(--gray-400)">${count} purchase${count!==1?'s':''} · ${fmt(monthTotal)}</span>
+          <span style="font-size:12px;color:var(--gray-400)" id="${gid}-arrow">&#9654;</span>
+        </div>
+      </div>
+      <div id="${gid}" style="display:none;padding:0 14px">
+        ${monthPurs.map(p=>purRowHTML(p)).join('')}
+      </div>
+    </div>`;
+  }
+
+  // Separate month keys into: current month, past months this year, prior years
+  const pastMonthsThisYear=[];
+  const byYear={};
+  Object.keys(groups).sort((a,b)=>b.localeCompare(a)).forEach(mk=>{
+    if(mk===curMonKey) return; // handled separately
+    const yr=mk.substring(0,4);
+    if(yr===curYr){
+      pastMonthsThisYear.push(mk);
+    } else {
+      if(!byYear[yr])byYear[yr]=[];
+      byYear[yr].push(mk);
+    }
+  });
+
+  let html='';
+
+  // 1. Current month — flat
+  if(groups[curMonKey]){
+    const mp=groups[curMonKey];
+    const mt=mp.reduce((s,p)=>s+parseFloat(p.total_amount||0),0);
+    html+=`<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-400);margin:4px 0 8px">${monthNames[nowD.getMonth()]} ${curYr} <span style="font-weight:400;color:var(--gray-300)">· ${mp.length} purchase${mp.length!==1?'s':''} · ${fmt(mt)}</span></div>`;
+    html+=mp.map(p=>purRowHTML(p)).join('');
+  }
+
+  // 2. Past months in current year — individual collapsed month folders
+  if(pastMonthsThisYear.length){
+    if(groups[curMonKey]) html+='<div style="margin-top:12px"></div>';
+    pastMonthsThisYear.forEach(mk=>{ html+=monthFolderHTML(mk, false); });
+  }
+
+  // 3. Prior years — one collapsed year folder, months nested inside
+  const priorYears=Object.keys(byYear).sort((a,b)=>b.localeCompare(a));
+  priorYears.forEach(yr=>{
+    const monthsInYear=byYear[yr]; // already sorted desc
+    const yearTotal=monthsInYear.reduce((s,mk)=>s+groups[mk].reduce((ss,p)=>ss+parseFloat(p.total_amount||0),0),0);
+    const yearCount=monthsInYear.reduce((s,mk)=>s+groups[mk].length,0);
+    const ygid='phgy-'+yr;
+    const monthsHTML=monthsInYear.map(mk=>monthFolderHTML(mk, true)).join('');
+    html+=`<div style="border:0.5px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;cursor:pointer;background:var(--gray-50)" onclick="togglePurGroup('${ygid}',this)">
+        <div style="font-weight:700;font-size:13px">${yr}</div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span style="font-size:12px;color:var(--gray-400)">${yearCount} purchase${yearCount!==1?'s':''} · ${fmt(yearTotal)}</span>
+          <span style="font-size:12px;color:var(--gray-400)" id="${ygid}-arrow">&#9654;</span>
+        </div>
+      </div>
+      <div id="${ygid}" style="display:none;padding:8px 14px">
+        ${monthsHTML}
+      </div>
+    </div>`;
+  });
+
+  el.innerHTML=html;
+}
+
+function togglePurGroup(gid, header){
+  const el=document.getElementById(gid);
+  const arrow=document.getElementById(gid+'-arrow');
+  if(!el)return;
+  const open=el.style.display==='none';
+  el.style.display=open?'block':'none';
+  if(arrow)arrow.innerHTML=open?'&#9660;':'&#9654;';
+  if(header)header.style.background=open?'var(--white)':'var(--gray-50)';
 }
 
 async function deletePurchase(id, label) {
