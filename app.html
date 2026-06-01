@@ -465,6 +465,17 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
                 <button class="btn" onclick="cancImport()">Cancel</button>
               </div>
             </div>
+            <div class="card" style="margin-top:13px" id="audit-card">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                <div class="card-title" style="margin:0">&#128203; Audit Snapshot</div>
+                <div style="display:flex;gap:8px">
+                  <button class="btn btn-sm btn-p" onclick="takeAuditSnapshot()" id="audit-snap-btn">&#128247; Take snapshot</button>
+                  <button class="btn btn-sm" onclick="openAuditCompare()" id="audit-compare-btn" style="display:none">&#9878; Compare</button>
+                  <button class="btn btn-sm btn-d" onclick="clearAuditSnapshot()" id="audit-clear-btn" style="display:none">Clear</button>
+                </div>
+              </div>
+              <div id="audit-status"><div class="tm">No snapshot taken. Take a snapshot before deleting imports to capture a baseline.</div></div>
+            </div>
             <div class="card" style="margin-top:13px">
               <div class="card-title">Import history</div>
               <div id="ih-gap"></div>
@@ -595,6 +606,15 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
     <div id="cam-reader" style="width:100%;border-radius:12px;overflow:hidden"></div>
     <div class="cam-status" id="cam-status" style="color:rgba(255,255,255,0.8);text-align:center;padding:12px 0;font-size:13px"></div>
     <div style="text-align:center;color:rgba(255,255,255,0.4);font-size:12px;padding-bottom:16px">Point camera at any barcode — it detects automatically</div>
+  </div>
+</div>
+
+<!-- MODAL: Audit Compare -->
+<div class="modal-bg" id="m-audit" style="display:none">
+  <div class="modal" style="max-width:720px;max-height:85vh;overflow-y:auto">
+    <div class="modal-title">&#128203; Audit Comparison</div>
+    <button class="mc" onclick="closeM('m-audit')">&#10005;</button>
+    <div id="audit-compare-body"><div class="tm">Loading...</div></div>
   </div>
 </div>
 
@@ -971,7 +991,7 @@ function nav(pg) {
     updPurSaveBtn();
   }
   if(pg==='settings'){loadSets();loadProf();}
-  if(pg==='imports') loadIH();
+  if(pg==='imports'){loadIH();loadAuditStatus();}
 }
 
 document.querySelectorAll('.nav-item').forEach(it=>it.addEventListener('click',()=>nav(it.dataset.page)));
@@ -3144,6 +3164,226 @@ async function deleteImport(id, sd, ed){
   toast('Import deleted and inventory reversed','ok');
   await loadProds2();
   loadIH();
+}
+
+
+// ── AUDIT SNAPSHOT ─────────────────────────────────────────────────────────
+
+async function takeAuditSnapshot(){
+  const btn=document.getElementById('audit-snap-btn');
+  const statusEl=document.getElementById('audit-status');
+  btn.disabled=true; btn.textContent='Capturing...';
+  statusEl.innerHTML='<div class="tm">Fetching data...</div>';
+
+  // Fetch all the data we want to snapshot in parallel
+  const [
+    {data:imports},
+    {data:invRaw},
+    {data:salesLines},
+    {data:txns}
+  ] = await Promise.all([
+    dbFetch('sales_imports',{order:'imported_at.desc'}),
+    dbFetch('inventory_on_hand',{select:'product_id,on_hand_qty,inventory_value,average_cost,product_name'}),
+    dbFetch('sales_lines',{select:'units_sold,sales_amount,product_id,period_start_date'}),
+    dbFetch('inventory_transactions',{select:'transaction_type,quantity_change',filters:{'transaction_type':'in.(sales_consumption,purchase_receipt,quantity_adjustment,write_off,opening_balance)'}})
+  ]);
+
+  // Build monthly sales summary
+  const monthlySales={};
+  (salesLines||[]).forEach(l=>{
+    const mk=(l.period_start_date||'').substring(0,7);
+    if(!mk)return;
+    if(!monthlySales[mk])monthlySales[mk]={sales:0,units:0};
+    monthlySales[mk].sales+=parseFloat(l.sales_amount||0);
+    monthlySales[mk].units+=parseInt(l.units_sold||0);
+  });
+
+  // Build txn type totals
+  const txnTotals={};
+  (txns||[]).forEach(t=>{
+    txnTotals[t.transaction_type]=(txnTotals[t.transaction_type]||0)+parseInt(t.quantity_change||0);
+  });
+
+  const snapshot={
+    takenAt: new Date().toISOString(),
+    importCount: (imports||[]).length,
+    importDateRange: imports&&imports.length ? {
+      earliest: [...imports].sort((a,b)=>a.report_start_date?.localeCompare(b.report_start_date)).find(r=>r.report_start_date)?.report_start_date,
+      latest: [...imports].sort((a,b)=>b.report_end_date?.localeCompare(a.report_end_date)).find(r=>r.report_end_date)?.report_end_date
+    } : null,
+    totalSales: (salesLines||[]).reduce((s,l)=>s+parseFloat(l.sales_amount||0),0),
+    totalUnits: (salesLines||[]).reduce((s,l)=>s+parseInt(l.units_sold||0),0),
+    monthlySales,
+    txnTotals,
+    inventory: (invRaw||[]).map(r=>({
+      product_id:r.product_id,
+      name:r.product_name,
+      qty:r.on_hand_qty,
+      value:r.inventory_value,
+      avg_cost:r.average_cost
+    })),
+    totalInventoryValue: (invRaw||[]).reduce((s,r)=>s+parseFloat(r.inventory_value||0),0)
+  };
+
+  localStorage.setItem('vendentory_audit_snapshot', JSON.stringify(snapshot));
+  btn.disabled=false; btn.textContent='&#128247; Retake snapshot';
+  document.getElementById('audit-compare-btn').style.display='';
+  document.getElementById('audit-clear-btn').style.display='';
+  renderAuditStatus(snapshot);
+}
+
+function renderAuditStatus(snapshot){
+  const el=document.getElementById('audit-status');
+  if(!snapshot){el.innerHTML='<div class="tm">No snapshot taken.</div>';return;}
+  const takenAt=new Date(snapshot.takenAt);
+  const months=Object.keys(snapshot.monthlySales).sort();
+  el.innerHTML=`
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">
+      <div style="background:var(--gray-50);border-radius:8px;padding:10px">
+        <div style="font-size:11px;color:var(--gray-400);font-weight:600;text-transform:uppercase;letter-spacing:.4px">Total Sales</div>
+        <div style="font-size:18px;font-weight:700;font-family:var(--font-head)">${fmt(snapshot.totalSales)}</div>
+        <div style="font-size:11px;color:var(--gray-400)">${snapshot.totalUnits} units · ${snapshot.importCount} imports</div>
+      </div>
+      <div style="background:var(--gray-50);border-radius:8px;padding:10px">
+        <div style="font-size:11px;color:var(--gray-400);font-weight:600;text-transform:uppercase;letter-spacing:.4px">Inventory Value</div>
+        <div style="font-size:18px;font-weight:700;font-family:var(--font-head)">${fmt(snapshot.totalInventoryValue)}</div>
+        <div style="font-size:11px;color:var(--gray-400)">${snapshot.inventory.length} products</div>
+      </div>
+      <div style="background:var(--gray-50);border-radius:8px;padding:10px">
+        <div style="font-size:11px;color:var(--gray-400);font-weight:600;text-transform:uppercase;letter-spacing:.4px">Snapshot Taken</div>
+        <div style="font-size:13px;font-weight:600;margin-top:4px">${fmtD(takenAt.toISOString().split('T')[0])}</div>
+        <div style="font-size:11px;color:var(--gray-400)">${takenAt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--gray-400)">Monthly sales covered: ${months.map(m=>{const[y,mo]=m.split('-');return['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo)-1]+' '+y;}).join(', ')||'None'}</div>`;
+}
+
+function loadAuditStatus(){
+  const raw=localStorage.getItem('vendentory_audit_snapshot');
+  if(!raw){return;}
+  const snapshot=JSON.parse(raw);
+  document.getElementById('audit-compare-btn').style.display='';
+  document.getElementById('audit-clear-btn').style.display='';
+  document.getElementById('audit-snap-btn').textContent='&#128247; Retake snapshot';
+  renderAuditStatus(snapshot);
+}
+
+function clearAuditSnapshot(){
+  if(!confirm('Clear the audit snapshot?'))return;
+  localStorage.removeItem('vendentory_audit_snapshot');
+  document.getElementById('audit-compare-btn').style.display='none';
+  document.getElementById('audit-clear-btn').style.display='none';
+  document.getElementById('audit-snap-btn').textContent='&#128247; Take snapshot';
+  document.getElementById('audit-status').innerHTML='<div class="tm">No snapshot taken. Take a snapshot before deleting imports to capture a baseline.</div>';
+}
+
+async function openAuditCompare(){
+  const raw=localStorage.getItem('vendentory_audit_snapshot');
+  if(!raw){toast('No snapshot found — take a snapshot first','err');return;}
+  const before=JSON.parse(raw);
+  openM('m-audit');
+  const body=document.getElementById('audit-compare-body');
+  body.innerHTML='<div class="tm">Fetching current data...</div>';
+
+  // Fetch current state
+  const [
+    {data:imports},
+    {data:invRaw},
+    {data:salesLines},
+  ] = await Promise.all([
+    dbFetch('sales_imports',{order:'imported_at.desc'}),
+    dbFetch('inventory_on_hand',{select:'product_id,on_hand_qty,inventory_value,average_cost,product_name'}),
+    dbFetch('sales_lines',{select:'units_sold,sales_amount,product_id,period_start_date'})
+  ]);
+
+  const nowTotalSales=(salesLines||[]).reduce((s,l)=>s+parseFloat(l.sales_amount||0),0);
+  const nowTotalUnits=(salesLines||[]).reduce((s,l)=>s+parseInt(l.units_sold||0),0);
+  const nowInvValue=(invRaw||[]).reduce((s,r)=>s+parseFloat(r.inventory_value||0),0);
+  const nowImportCount=(imports||[]).length;
+
+  const monthlySalesNow={};
+  (salesLines||[]).forEach(l=>{
+    const mk=(l.period_start_date||'').substring(0,7);
+    if(!mk)return;
+    if(!monthlySalesNow[mk])monthlySalesNow[mk]={sales:0,units:0};
+    monthlySalesNow[mk].sales+=parseFloat(l.sales_amount||0);
+    monthlySalesNow[mk].units+=parseInt(l.units_sold||0);
+  });
+
+  // Build inventory comparison
+  const invBefore={};
+  (before.inventory||[]).forEach(r=>{invBefore[r.product_id]=r;});
+  const invNow={};
+  (invRaw||[]).forEach(r=>{invNow[r.product_id]={product_id:r.product_id,name:r.product_name,qty:r.on_hand_qty,value:r.inventory_value};});
+
+  const allProdIds=[...new Set([...Object.keys(invBefore),...Object.keys(invNow)])];
+  const invDiffs=allProdIds.map(pid=>{
+    const b=invBefore[pid]||{qty:0,value:0,name:'—'};
+    const n=invNow[pid]||{qty:0,value:0,name:b.name};
+    const qtyDiff=parseFloat(n.qty||0)-parseFloat(b.qty||0);
+    const valDiff=parseFloat(n.value||0)-parseFloat(b.value||0);
+    return{pid,name:n.name||b.name,bQty:b.qty,nQty:n.qty,qtyDiff,bVal:b.value,nVal:n.value,valDiff};
+  }).filter(r=>Math.abs(r.qtyDiff)>0.001||Math.abs(r.valDiff)>0.01)
+    .sort((a,b)=>Math.abs(b.valDiff)-Math.abs(a.valDiff));
+
+  // Monthly comparison
+  const allMonths=[...new Set([...Object.keys(before.monthlySales||{}),...Object.keys(monthlySalesNow)])].sort();
+
+  function diffBadge(val){
+    if(Math.abs(val)<0.01)return`<span style="color:var(--gray-400)">—</span>`;
+    const c=val>=0?'var(--teal-mid)':'var(--red)';
+    return`<span style="color:${c};font-weight:600">${val>=0?'+':''}${val>=100||val<=-100?fmt(val):fmt(val)}</span>`;
+  }
+  function qtyBadge(val){
+    if(Math.abs(val)<0.001)return`<span style="color:var(--gray-400)">—</span>`;
+    const c=val>=0?'var(--teal-mid)':'var(--red)';
+    return`<span style="color:${c};font-weight:600">${val>=0?'+':''}${val}</span>`;
+  }
+
+  const salesMatch=Math.abs(nowTotalSales-before.totalSales)<0.01;
+  const unitsMatch=Math.abs(nowTotalUnits-before.totalUnits)<1;
+  const invMatch=Math.abs(nowInvValue-before.totalInventoryValue)<0.01;
+  const allMatch=salesMatch&&unitsMatch&&invMatch&&invDiffs.length===0;
+
+  body.innerHTML=`
+    <div style="background:${allMatch?'var(--green-light,#F0FDF4)':'var(--red-light,#FFF5F5)'};border:1px solid ${allMatch?'var(--green,#16A34A)':'var(--red,#DC2626)'};border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:13px;font-weight:600;color:${allMatch?'var(--green,#16A34A)':'var(--red,#DC2626)'}">
+      ${allMatch?'&#10003; All figures match — books are balanced':'&#9888; Differences detected — review below before closing the books'}
+    </div>
+
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px">Summary</div>
+    <table class="tbl" style="margin-bottom:16px">
+      <thead><tr><th>Metric</th><th style="text-align:right">Snapshot (Before)</th><th style="text-align:right">Current (After)</th><th style="text-align:right">Difference</th><th style="text-align:center">Match?</th></tr></thead>
+      <tbody>
+        <tr><td>Total Sales</td><td style="text-align:right">${fmt(before.totalSales)}</td><td style="text-align:right">${fmt(nowTotalSales)}</td><td style="text-align:right">${diffBadge(nowTotalSales-before.totalSales)}</td><td style="text-align:center">${salesMatch?'<span style="color:var(--teal-mid)">&#10003;</span>':'<span style="color:var(--red)">&#10007;</span>'}</td></tr>
+        <tr><td>Total Units Sold</td><td style="text-align:right">${before.totalUnits}</td><td style="text-align:right">${nowTotalUnits}</td><td style="text-align:right">${qtyBadge(nowTotalUnits-before.totalUnits)}</td><td style="text-align:center">${unitsMatch?'<span style="color:var(--teal-mid)">&#10003;</span>':'<span style="color:var(--red)">&#10007;</span>'}</td></tr>
+        <tr><td>Inventory Value</td><td style="text-align:right">${fmt(before.totalInventoryValue)}</td><td style="text-align:right">${fmt(nowInvValue)}</td><td style="text-align:right">${diffBadge(nowInvValue-before.totalInventoryValue)}</td><td style="text-align:center">${invMatch?'<span style="color:var(--teal-mid)">&#10003;</span>':'<span style="color:var(--red)">&#10007;</span>'}</td></tr>
+        <tr><td>Import Count</td><td style="text-align:right">${before.importCount}</td><td style="text-align:right">${nowImportCount}</td><td style="text-align:right">${qtyBadge(nowImportCount-before.importCount)}</td><td style="text-align:center">—</td></tr>
+      </tbody>
+    </table>
+
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px">Monthly Sales Breakdown</div>
+    <table class="tbl" style="margin-bottom:16px">
+      <thead><tr><th>Month</th><th style="text-align:right">Before Sales</th><th style="text-align:right">After Sales</th><th style="text-align:right">Diff</th><th style="text-align:right">Before Units</th><th style="text-align:right">After Units</th></tr></thead>
+      <tbody>${allMonths.map(mk=>{
+        const[y,mo]=mk.split('-');
+        const label=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo)-1]+' '+y;
+        const b=before.monthlySales?.[mk]||{sales:0,units:0};
+        const n=monthlySalesNow[mk]||{sales:0,units:0};
+        const diff=n.sales-b.sales;
+        const match=Math.abs(diff)<0.01;
+        return`<tr style="${match?'':'background:var(--red-light,#FFF5F5)'}"><td>${label}</td><td style="text-align:right">${fmt(b.sales)}</td><td style="text-align:right">${fmt(n.sales)}</td><td style="text-align:right">${diffBadge(diff)}</td><td style="text-align:right">${b.units}</td><td style="text-align:right">${n.units}</td></tr>`;
+      }).join('')}</tbody>
+    </table>
+
+    ${invDiffs.length?`
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px">Inventory Changes <span style="font-weight:400;color:var(--gray-400)">(products with quantity or value differences)</span></div>
+    <table class="tbl">
+      <thead><tr><th>Product</th><th style="text-align:right">Qty Before</th><th style="text-align:right">Qty After</th><th style="text-align:right">Qty Diff</th><th style="text-align:right">Value Before</th><th style="text-align:right">Value After</th><th style="text-align:right">Value Diff</th></tr></thead>
+      <tbody>${invDiffs.map(r=>`<tr><td style="font-size:12px">${r.name}</td><td style="text-align:right">${r.bQty}</td><td style="text-align:right">${r.nQty}</td><td style="text-align:right">${qtyBadge(r.qtyDiff)}</td><td style="text-align:right">${fmt(r.bVal)}</td><td style="text-align:right">${fmt(r.nVal)}</td><td style="text-align:right">${diffBadge(r.valDiff)}</td></tr>`).join('')}
+      </tbody>
+    </table>`:'<div style="font-size:13px;color:var(--gray-400);font-style:italic">No inventory quantity changes detected.</div>'}
+
+    <div style="margin-top:16px;font-size:11px;color:var(--gray-400)">Snapshot taken: ${new Date(before.takenAt).toLocaleString()}</div>`;
 }
 
 function checkImportGaps(imports){
