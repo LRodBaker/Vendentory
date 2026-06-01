@@ -467,6 +467,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
             </div>
             <div class="card" style="margin-top:13px">
               <div class="card-title">Import history</div>
+              <div id="ih-gap"></div>
               <div id="ih"><div class="tm">Loading...</div></div>
             </div>
           </div>
@@ -3105,7 +3106,7 @@ function cancImport(){impRows=[];document.getElementById('ipa').style.display='n
 async function loadIH(){
   const {data}=await dbFetch('sales_imports',{order:'imported_at.desc'});
   const el=document.getElementById('ih');
-  if(!data||!data.length){el.innerHTML='<div class="tm">No imports yet</div>';return;}
+  if(!data||!data.length){el.innerHTML='<div class="tm">No imports yet</div>';checkImportGaps([]);return;}
   el.innerHTML=data.map(r=>{
     const period=r.report_start_date&&r.report_end_date?`${fmtD(r.report_start_date)} → ${fmtD(r.report_end_date)}`:'Period unknown';
     return`<div style="border-bottom:0.5px solid var(--border);padding:11px 0">
@@ -3117,11 +3118,69 @@ async function loadIH(){
         <div style="display:flex;align-items:center;gap:8px">
           <span class="badge b-ok">${r.status}</span>
           <button class="btn btn-sm" onclick="toggleIHLines('${r.id}',this)">&#9658; View lines</button>
+          <button class="btn btn-sm btn-d" onclick="deleteImport('${r.id}','${r.report_start_date||''}','${r.report_end_date||''}')" title="Delete import">&#128465;</button>
         </div>
       </div>
       <div id="ihl-${r.id}" style="display:none;margin-top:10px"></div>
     </div>`;
   }).join('');
+  checkImportGaps(data);
+}
+
+async function deleteImport(id, sd, ed){
+  const label=sd&&ed?`${fmtD(sd)} → ${fmtD(ed)}`:'this import';
+  if(!confirm(`Delete import: ${label}?\n\nThis will remove all sales lines and reverse the inventory transactions from this import. This cannot be undone.`))return;
+  showL('Deleting import...');
+  const tok=await getAuthToken();
+  const h={'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+  // 1. Reverse inventory transactions (sales_consumption linked to this import)
+  await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.import&reference_id=eq.'+id,{method:'DELETE',headers:h});
+  // 2. Delete sales lines
+  await fetch(SURL+'/rest/v1/sales_lines?sales_import_id=eq.'+id,{method:'DELETE',headers:h});
+  // 3. Delete the import record
+  const resp=await fetch(SURL+'/rest/v1/sales_imports?id=eq.'+id,{method:'DELETE',headers:h});
+  hideL();
+  if(!resp.ok){toast('Delete failed — check DB permissions','err');return;}
+  toast('Import deleted and inventory reversed','ok');
+  await loadProds2();
+  loadIH();
+}
+
+function checkImportGaps(imports){
+  const gapEl=document.getElementById('ih-gap');
+  if(!gapEl)return;
+  // Filter to imports with valid date ranges
+  const valid=imports.filter(r=>r.report_start_date&&r.report_end_date).sort((a,b)=>a.report_start_date.localeCompare(b.report_start_date));
+  if(!valid.length){gapEl.innerHTML='';return;}
+  // Build a set of all covered dates
+  const covered=new Set();
+  valid.forEach(r=>{
+    let d=new Date(r.report_start_date+'T12:00:00');
+    const end=new Date(r.report_end_date+'T12:00:00');
+    while(d<=end){covered.add(d.toISOString().split('T')[0]);d.setDate(d.getDate()+1);}
+  });
+  // Check every day from earliest start through yesterday
+  const yesterday=new Date();yesterday.setDate(yesterday.getDate()-1);
+  const earliest=new Date(valid[0].report_start_date+'T12:00:00');
+  const gaps=[];
+  let gapStart=null;
+  let cur=new Date(earliest);
+  while(cur<=yesterday){
+    const ds=cur.toISOString().split('T')[0];
+    if(!covered.has(ds)){
+      if(!gapStart)gapStart=ds;
+    } else {
+      if(gapStart){gaps.push({start:gapStart,end:new Date(cur.getTime()-86400000).toISOString().split('T')[0]});gapStart=null;}
+    }
+    cur.setDate(cur.getDate()+1);
+  }
+  if(gapStart)gaps.push({start:gapStart,end:yesterday.toISOString().split('T')[0]});
+  if(!gaps.length){gapEl.innerHTML='<div style="background:var(--green-light,#F0FDF4);border:1px solid var(--green,#16A34A);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--green,#16A34A)">&#10003; All days accounted for — no gaps in coverage</div>';return;}
+  const gapList=gaps.map(g=>g.start===g.end?`<li>${fmtD(g.start)}</li>`:`<li>${fmtD(g.start)} → ${fmtD(g.end)}</li>`).join('');
+  gapEl.innerHTML=`<div style="background:var(--red-light,#FFF5F5);border:1px solid var(--red,#DC2626);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--red,#DC2626)">
+    <div style="font-weight:700;margin-bottom:4px">&#9888; Missing coverage — the following days have no import:</div>
+    <ul style="margin:0;padding-left:18px;line-height:1.8">${gapList}</ul>
+  </div>`;
 }
 
 async function toggleIHLines(id, btn){
