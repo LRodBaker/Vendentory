@@ -465,6 +465,11 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
                 <button class="btn" onclick="cancImport()">Cancel</button>
               </div>
             </div>
+            <div class="card" style="margin-top:13px">
+              <div class="card-title">Import history</div>
+              <div id="ih-gap"></div>
+              <div id="ih"><div class="tm">Loading...</div></div>
+            </div>
             <div class="card" style="margin-top:13px" id="audit-card">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
                 <div class="card-title" style="margin:0">&#128203; Audit Snapshot</div>
@@ -475,11 +480,6 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
                 </div>
               </div>
               <div id="audit-status"><div class="tm">No snapshot taken. Take a snapshot before deleting imports to capture a baseline.</div></div>
-            </div>
-            <div class="card" style="margin-top:13px">
-              <div class="card-title">Import history</div>
-              <div id="ih-gap"></div>
-              <div id="ih"><div class="tm">Loading...</div></div>
             </div>
           </div>
         </div>
@@ -739,6 +739,16 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
         </div>
       </div>
 
+      <!-- VMS ALIASES -->
+      <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border)">
+        <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:4px">VMS Aliases</div>
+        <div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">Alternate names this product goes by in your VMS (e.g. ParLevel, Cantaloupe, Nayax). When importing sales, these names are matched first — exact match, no guessing.</div>
+        <div style="background:var(--gray-50);border-radius:10px;padding:12px">
+          <div id="alias-lines"></div>
+          <button class="btn btn-sm" style="margin-top:8px" onclick="addAlias()">+ Add alias</button>
+        </div>
+      </div>
+
       <div id="mprod-err" style="display:none;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px;margin-top:10px;font-size:13px;color:#991b1b"></div>
       <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;justify-content:space-between;align-items:center">
         <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -790,6 +800,7 @@ let VP_LINES = []; // variety pack component lines for the product edit modal
 let SKU_LINES = []; // bulk barcode lines for the product edit modal
 let BASE_LINES = []; // base product links for bulk products
 let ALT_BARCODES = []; // alternate individual barcodes for a product
+let ALIASES = []; // VMS alias names for import matching
 
 // ── Get current auth token (session token if logged in, anon key as fallback) ──
 let _cachedToken = null;
@@ -1038,7 +1049,20 @@ async function loadProds2() {
     on_hand_qty: invMap[p.id]?.on_hand_qty ?? 0,
     stock_status: invMap[p.id]?.stock_status ?? 'OK',
     inventory_value: invMap[p.id]?.inventory_value ?? 0,
+    _aliases: [],
   }));
+  // Load VMS aliases and attach to AP products
+  try {
+    const {data:allAliases} = await dbFetch('product_aliases',{select:'product_id,alias'});
+    if(allAliases) {
+      const aliasMap={};
+      allAliases.forEach(a=>{
+        if(!aliasMap[a.product_id])aliasMap[a.product_id]=[];
+        aliasMap[a.product_id].push(a.alias.toLowerCase());
+      });
+      AP.forEach(p=>{ if(aliasMap[p.id]) p._aliases=aliasMap[p.id]; });
+    }
+  } catch(e) { /* aliases table may not exist yet — graceful fallback */ }
 }
 
 async function loadDash() {
@@ -1393,6 +1417,8 @@ async function openEP(id) {
   // Load alternate barcodes for this product
   ALT_BARCODES = [];
   document.getElementById('alt-barcode-lines').innerHTML='';
+  ALIASES = [];
+  document.getElementById('alias-lines').innerHTML='';
   if(p.id) {
     const altResp = await fetch(
       SURL+'/rest/v1/product_barcodes?product_id=eq.'+p.id+'&select=id,barcode&order=created_at',
@@ -1402,6 +1428,16 @@ async function openEP(id) {
       const altRows = await altResp.json();
       ALT_BARCODES = altRows.map(r=>({ db_id:r.id, barcode:r.barcode||'' }));
       renderAltBarcodes();
+    }
+    // Load VMS aliases
+    const aliasResp = await fetch(
+      SURL+'/rest/v1/product_aliases?product_id=eq.'+p.id+'&select=id,alias&order=created_at',
+      { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
+    );
+    if(aliasResp.ok) {
+      const aliasRows = await aliasResp.json();
+      ALIASES = aliasRows.map(r=>({ db_id:r.id, alias:r.alias||'' }));
+      renderAliases();
     }
   }
   openM('mprod');
@@ -1770,6 +1806,40 @@ function renderAltBarcodes() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// VMS ALIASES
+
+function addAlias() {
+  ALIASES.push({ alias:'', db_id:null });
+  renderAliases();
+  // Focus the new input
+  setTimeout(()=>{
+    const inputs=document.querySelectorAll('.alias-input');
+    if(inputs.length) inputs[inputs.length-1].focus();
+  }, 50);
+}
+
+function removeAlias(i) {
+  ALIASES.splice(i,1);
+  renderAliases();
+}
+
+function renderAliases() {
+  const c = document.getElementById('alias-lines');
+  if(!c) return;
+  if(!ALIASES.length) {
+    c.innerHTML='<div class="tm" style="font-size:12px;padding:6px 0">No aliases yet. Add the exact name your VMS uses for this product.</div>';
+    return;
+  }
+  c.innerHTML = ALIASES.map((a,i) => `
+    <div style="display:grid;grid-template-columns:1fr 28px;gap:6px;align-items:center;margin-bottom:6px">
+      <input class="fi alias-input" style="font-size:12px;padding:6px 9px" placeholder="Exact VMS product name..."
+        value="${(a.alias||'').replace(/"/g,'&quot;')}"
+        oninput="ALIASES[${i}].alias=this.value">
+      <button style="background:var(--red-light);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;color:var(--red-mid);font-size:14px;display:flex;align-items:center;justify-content:center" onclick="removeAlias(${i})">&#10005;</button>
+    </div>`).join('');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function saveProd() {
   const nm=document.getElementById('pn').value.trim();
@@ -2007,6 +2077,24 @@ async function saveProd() {
       }
     }
 
+    // Save VMS aliases — delete existing then re-insert
+    if(savedId) {
+      const aliasTok = await getAuthToken();
+      const aliasH = {'apikey':SKEY,'Authorization':'Bearer '+aliasTok,'Content-Type':'application/json'};
+      await fetch(SURL+'/rest/v1/product_aliases?product_id=eq.'+savedId, {method:'DELETE',headers:aliasH});
+      const aliasRows = ALIASES
+        .filter(a => a.alias && a.alias.trim())
+        .map(a => ({ product_id:savedId, alias:a.alias.trim() }));
+      if(aliasRows.length) {
+        const aliasInsResp = await fetch(SURL+'/rest/v1/product_aliases',
+          {method:'POST',headers:{...aliasH,'Prefer':'return=minimal'},body:JSON.stringify(aliasRows)});
+        if(!aliasInsResp.ok){ const t=await aliasInsResp.text(); showSaveErr('Alias save failed: '+t); return; }
+      }
+      // Refresh AP aliases for this product in memory
+      const apProd = AP.find(p=>p.id===savedId||p.product_id===savedId);
+      if(apProd) apProd._aliases = aliasRows.map(a=>a.alias.toLowerCase());
+    }
+
     // Save base product links — delete existing then re-insert
     // Only for bulk products (not variety packs, not individual)
     if(savedId && _prodType === 'bulk') {
@@ -2155,6 +2243,7 @@ async function deleteProd() {
     await fetch(SURL+'/rest/v1/product_components?component_product_id=eq.'+eid, {method:'DELETE',headers:h});
     await fetch(SURL+'/rest/v1/supplier_skus?product_id=eq.'+eid, {method:'DELETE',headers:h});
     await fetch(SURL+'/rest/v1/product_barcodes?product_id=eq.'+eid, {method:'DELETE',headers:h});
+    await fetch(SURL+'/rest/v1/product_aliases?product_id=eq.'+eid, {method:'DELETE',headers:h});
     const delResp = await fetch(SURL+'/rest/v1/products?id=eq.'+eid, {method:'DELETE',headers:h});
     hideL();
     if(!delResp.ok){ toast('Delete failed','err'); return; }
@@ -3108,7 +3197,13 @@ async function confImport(){
     const u=parseFloat((row[uf]||'0').replace(/[^0-9.-]/g,''))||0;
     const s=parseFloat((row[sf2]||'0').replace(/[^0-9.-]/g,''))||0;
     const ap2=parseFloat((row[af]||'0').replace(/[^0-9.-]/g,''))||0;
-    const matched=AP.find(p=>p.name.toLowerCase()===rn.toLowerCase()||p.name.toLowerCase().includes(rn.toLowerCase())||rn.toLowerCase().includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+    const rnl=rn.toLowerCase();
+    // 1. Exact alias match (highest priority)
+    let matched=AP.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
+    // 2. Exact product name match
+    if(!matched) matched=AP.find(p=>p.name.toLowerCase()===rnl);
+    // 3. Fuzzy: product name contains import name or vice versa
+    if(!matched) matched=AP.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
     const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
     lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
     if(matched&&u>0)invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
@@ -3127,7 +3222,13 @@ async function loadIH(){
   const {data}=await dbFetch('sales_imports',{order:'imported_at.desc'});
   const el=document.getElementById('ih');
   if(!data||!data.length){el.innerHTML='<div class="tm">No imports yet</div>';checkImportGaps([]);return;}
-  el.innerHTML=data.map(r=>{
+
+  const nowD=new Date();
+  const curMonKey=nowD.getFullYear()+'-'+(nowD.getMonth()+1).toString().padStart(2,'0');
+  const curYr=nowD.getFullYear().toString();
+  const monthNames=['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+  function importRowHTML(r){
     const period=r.report_start_date&&r.report_end_date?`${fmtD(r.report_start_date)} → ${fmtD(r.report_end_date)}`:'Period unknown';
     return`<div style="border-bottom:0.5px solid var(--border);padding:11px 0">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
@@ -3143,7 +3244,87 @@ async function loadIH(){
       </div>
       <div id="ihl-${r.id}" style="display:none;margin-top:10px"></div>
     </div>`;
-  }).join('');
+  }
+
+  // Group by YYYY-MM using report_start_date, fall back to imported_at
+  const groups={};
+  data.forEach(r=>{
+    const mk=(r.report_start_date||r.imported_at||'').substring(0,7);
+    if(!groups[mk])groups[mk]=[];
+    groups[mk].push(r);
+  });
+
+  function monthFolderHTML(mk, indented){
+    const [yr,mo]=mk.split('-');
+    const label=monthNames[parseInt(mo)-1]+(indented?'':' '+yr);
+    const monthImports=groups[mk];
+    const count=monthImports.length;
+    const gid='ihg-'+mk.replace('-','');
+    return`<div style="border:0.5px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;cursor:pointer;background:var(--gray-50)" onclick="togglePurGroup('${gid}',this)">
+        <div style="font-weight:600;font-size:13px">${label}</div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span style="font-size:12px;color:var(--gray-400)">${count} import${count!==1?'s':''}</span>
+          <span style="font-size:12px;color:var(--gray-400)" id="${gid}-arrow">&#9654;</span>
+        </div>
+      </div>
+      <div id="${gid}" style="display:none;padding:0 14px">
+        ${monthImports.map(r=>importRowHTML(r)).join('')}
+      </div>
+    </div>`;
+  }
+
+  // Bucket the month keys
+  const pastMonthsThisYear=[];
+  const byYear={};
+  Object.keys(groups).sort((a,b)=>b.localeCompare(a)).forEach(mk=>{
+    if(mk===curMonKey)return;
+    const yr=mk.substring(0,4);
+    if(yr===curYr){
+      pastMonthsThisYear.push(mk);
+    } else {
+      if(!byYear[yr])byYear[yr]=[];
+      byYear[yr].push(mk);
+    }
+  });
+
+  let html='';
+
+  // 1. Current month — flat list
+  if(groups[curMonKey]){
+    const cm=groups[curMonKey];
+    html+=`<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-400);margin:4px 0 8px">${monthNames[nowD.getMonth()]} ${curYr} <span style="font-weight:400;color:var(--gray-300)">· ${cm.length} import${cm.length!==1?'s':''}</span></div>`;
+    html+=cm.map(r=>importRowHTML(r)).join('');
+  }
+
+  // 2. Past months in current year — collapsed month folders
+  if(pastMonthsThisYear.length){
+    if(groups[curMonKey])html+='<div style="margin-top:12px"></div>';
+    pastMonthsThisYear.forEach(mk=>{html+=monthFolderHTML(mk,false);});
+  }
+
+  // 3. Prior years — collapsed year folder with months inside
+  const priorYears=Object.keys(byYear).sort((a,b)=>b.localeCompare(a));
+  priorYears.forEach(yr=>{
+    const monthsInYear=byYear[yr];
+    const yearCount=monthsInYear.reduce((s,mk)=>s+groups[mk].length,0);
+    const ygid='ihgy-'+yr;
+    const monthsHTML=monthsInYear.map(mk=>monthFolderHTML(mk,true)).join('');
+    html+=`<div style="border:0.5px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;cursor:pointer;background:var(--gray-50)" onclick="togglePurGroup('${ygid}',this)">
+        <div style="font-weight:700;font-size:13px">${yr}</div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span style="font-size:12px;color:var(--gray-400)">${yearCount} import${yearCount!==1?'s':''}</span>
+          <span style="font-size:12px;color:var(--gray-400)" id="${ygid}-arrow">&#9654;</span>
+        </div>
+      </div>
+      <div id="${ygid}" style="display:none;padding:8px 14px">
+        ${monthsHTML}
+      </div>
+    </div>`;
+  });
+
+  el.innerHTML=html;
   checkImportGaps(data);
 }
 
