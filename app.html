@@ -618,6 +618,19 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
   </div>
 </div>
 
+<!-- MODAL: Unmatched Products -->
+<div class="modal-bg" id="m-unmatched" style="display:none">
+  <div class="modal" style="max-width:600px;max-height:80vh;overflow-y:auto">
+    <div class="modal-title">&#9888; Unmatched Products</div>
+    <button class="mc" onclick="closeM('m-unmatched')">&#10005;</button>
+    <div style="font-size:13px;color:var(--gray-400);margin-bottom:14px">The following products from your VMS report could not be matched to anything in Vendentory. Their sales were imported but <strong>inventory was not adjusted</strong>. Fix each one by adding an alias to the correct product.</div>
+    <div id="unmatched-list"></div>
+    <div style="margin-top:14px;display:flex;justify-content:flex-end">
+      <button class="btn btn-p" onclick="closeM('m-unmatched')">Done</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: Add/Edit Product -->
 <div class="modal-bg" id="mprod" style="display:none">
   <div class="modal" style="max-width:600px">
@@ -3212,8 +3225,78 @@ async function confImport(){
   if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
   if(invTxnsBatch.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(invTxnsBatch)});
   hideL();
-  toast('Import complete! '+lines.length+' products imported.','ok');
+  const unmatched=lines.filter(l=>!l.product_id);
+  toast('Import complete! '+lines.length+' products imported.'+(unmatched.length?' ('+unmatched.length+' unmatched)':''),'ok');
   cancImport(); await loadProds2(); loadIH();
+  if(unmatched.length) showUnmatchedModal(unmatched);
+}
+
+function showUnmatchedModal(unmatched) {
+  // Deduplicate by raw name
+  const seen=new Set();
+  const unique=unmatched.filter(l=>{
+    if(seen.has(l.raw_product_name))return false;
+    seen.add(l.raw_product_name);
+    return true;
+  });
+
+  // For each unmatched name, find the closest product in AP using word overlap scoring
+  function bestGuess(vmsName) {
+    const words=vmsName.toLowerCase().split(/\s+/).filter(w=>w.length>2);
+    let best=null, bestScore=0;
+    AP.forEach(p=>{
+      const pWords=p.name.toLowerCase().split(/\s+/);
+      const score=words.filter(w=>pWords.some(pw=>pw.includes(w)||w.includes(pw))).length;
+      if(score>bestScore){bestScore=score;best=p;}
+    });
+    return bestScore>=2?best:null;
+  }
+
+  const listEl=document.getElementById('unmatched-list');
+  listEl.innerHTML=unique.map((l,i)=>{
+    const guess=bestGuess(l.raw_product_name);
+    const guessHTML=guess
+      ?`<div style="font-size:12px;color:var(--gray-400);margin-top:3px">Best guess: <strong>${guess.name}</strong></div>
+        <button class="btn btn-sm btn-p" style="margin-top:6px" onclick="fixUnmatched('${guess.id}','${l.raw_product_name.replace(/'/g,"\\'").replace(/"/g,'&quot;')}',${i})">&#128295; Fix — add alias to "${guess.name}"</button>`
+      :`<div style="font-size:12px;color:var(--gray-400);margin-top:3px">No close match found — add this product first, then set alias.</div>
+        <button class="btn btn-sm" style="margin-top:6px" onclick="closeM('m-unmatched');openAP()">+ Add new product</button>`;
+    return`<div style="border:0.5px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px;${guess?'border-left:3px solid var(--amber)':'border-left:3px solid var(--red)'}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:13px">&#8220;${l.raw_product_name}&#8221;</div>
+          <div style="font-size:11px;color:var(--gray-400);margin-top:2px">${l.units_sold} units · ${fmt(l.sales_amount)} — sales recorded, inventory not adjusted</div>
+          ${guessHTML}
+        </div>
+        <span id="um-status-${i}" style="font-size:12px;color:var(--teal-mid);display:none">&#10003; Fixed</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  openM('m-unmatched');
+}
+
+async function fixUnmatched(productId, vmsName, rowIndex) {
+  // Load the product, pre-populate the alias, open edit modal
+  const prod=AP.find(p=>p.id===productId||p.product_id===productId);
+  if(!prod){toast('Product not found','err');return;}
+
+  // Open the product edit modal for this product
+  await openEP(productId);
+
+  // After modal opens, add the VMS name as a new alias if not already there
+  const alreadyExists=ALIASES.some(a=>a.alias.toLowerCase()===vmsName.toLowerCase());
+  if(!alreadyExists){
+    ALIASES.push({alias:vmsName, db_id:null});
+    renderAliases();
+  }
+
+  // Mark as fixed in the unmatched list
+  const statusEl=document.getElementById('um-status-'+rowIndex);
+  if(statusEl)statusEl.style.display='';
+
+  // Close unmatched modal so user can see the product edit modal
+  closeM('m-unmatched');
+  toast('Alias pre-filled — review and save the product','ok');
 }
 
 function cancImport(){impRows=[];document.getElementById('ipa').style.display='none';document.getElementById('ifl').value='';}
