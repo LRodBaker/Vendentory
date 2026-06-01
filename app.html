@@ -3103,8 +3103,55 @@ async function confImport(){
 function cancImport(){impRows=[];document.getElementById('ipa').style.display='none';document.getElementById('ifl').value='';}
 
 async function loadIH(){
-  const {data}=await dbFetch('sales_imports',{order:'imported_at.desc',limit:10});
-  document.getElementById('ih').innerHTML=(data||[]).length?`<table class="tbl"><thead><tr><th>Date</th><th>Source</th><th>Period</th><th>Status</th></tr></thead><tbody>${(data||[]).map(r=>`<tr><td>${fmtD(r.imported_at)}</td><td>${r.source_system}</td><td>${r.report_start_date||'—'} to ${r.report_end_date||'—'}</td><td><span class="badge b-ok">${r.status}</span></td></tr>`).join('')}</tbody></table>`:'<div class="tm">No imports yet</div>';
+  const {data}=await dbFetch('sales_imports',{order:'imported_at.desc'});
+  const el=document.getElementById('ih');
+  if(!data||!data.length){el.innerHTML='<div class="tm">No imports yet</div>';return;}
+  el.innerHTML=data.map(r=>{
+    const period=r.report_start_date&&r.report_end_date?`${fmtD(r.report_start_date)} → ${fmtD(r.report_end_date)}`:'Period unknown';
+    return`<div style="border-bottom:0.5px solid var(--border);padding:11px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <div>
+          <div style="font-weight:600;font-size:13px">${period}</div>
+          <div style="font-size:12px;color:var(--gray-400);margin-top:2px">Imported ${fmtD(r.imported_at)} · ${r.source_system}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="badge b-ok">${r.status}</span>
+          <button class="btn btn-sm" onclick="toggleIHLines('${r.id}',this)">&#9658; View lines</button>
+        </div>
+      </div>
+      <div id="ihl-${r.id}" style="display:none;margin-top:10px"></div>
+    </div>`;
+  }).join('');
+}
+
+async function toggleIHLines(id, btn){
+  const el=document.getElementById('ihl-'+id);
+  if(!el)return;
+  if(el.style.display!=='none'){
+    el.style.display='none';
+    btn.innerHTML='&#9658; View lines';
+    return;
+  }
+  btn.innerHTML='&#9660; Hide lines';
+  el.style.display='block';
+  if(el.dataset.loaded){return;}
+  el.innerHTML='<div class="tm">Loading...</div>';
+  const {data:lines}=await dbFetch('sales_lines',{select:'raw_product_name,units_sold,sales_amount,product_id',filters:{'sales_import_id':'eq.'+id},order:'sales_amount.desc'});
+  el.dataset.loaded='1';
+  if(!lines||!lines.length){el.innerHTML='<div class="tm">No lines found</div>';return;}
+  const totalAmt=lines.reduce((s,l)=>s+parseFloat(l.sales_amount||0),0);
+  const totalUnits=lines.reduce((s,l)=>s+parseInt(l.units_sold||0),0);
+  const unmatched=lines.filter(l=>!l.product_id).length;
+  el.innerHTML=`
+    <div style="display:flex;gap:16px;margin-bottom:8px;font-size:12px;color:var(--gray-400)">
+      <span>${lines.length} products</span>
+      <span>${totalUnits} units sold</span>
+      <span>${fmt(totalAmt)} total</span>
+      ${unmatched?`<span style="color:var(--amber)">&#9888; ${unmatched} unmatched</span>`:''}
+    </div>
+    <table class="tbl"><thead><tr><th>Product</th><th style="text-align:right">Units</th><th style="text-align:right">Sales</th></tr></thead>
+    <tbody>${lines.map(l=>`<tr${!l.product_id?' style="color:var(--amber)"':''}><td>${l.raw_product_name||'—'}</td><td style="text-align:right">${l.units_sold}</td><td style="text-align:right">${fmt(l.sales_amount)}</td></tr>`).join('')}</tbody>
+    </table>`;
 }
 
 function switchRT(tab,btn){
