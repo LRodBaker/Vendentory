@@ -3180,13 +3180,17 @@ async function takeAuditSnapshot(){
     {data:imports},
     {data:invRaw},
     {data:salesLines},
-    {data:txns}
+    {data:prods}
   ] = await Promise.all([
     dbFetch('sales_imports',{order:'imported_at.desc'}),
-    dbFetch('inventory_on_hand',{select:'product_id,on_hand_qty,inventory_value,average_cost,product_name'}),
+    dbFetch('inventory_on_hand',{select:'product_id,on_hand_qty,inventory_value,average_cost'}),
     dbFetch('sales_lines',{select:'units_sold,sales_amount,product_id,period_start_date'}),
-    dbFetch('inventory_transactions',{select:'transaction_type,quantity_change',filters:{'transaction_type':'in.(sales_consumption,purchase_receipt,quantity_adjustment,write_off,opening_balance)'}})
+    dbFetch('products',{select:'id,name',filters:{'is_active':'eq.true'}})
   ]);
+
+  // Product name lookup
+  const prodNames={};
+  (prods||[]).forEach(p=>{prodNames[p.id]=p.name;});
 
   // Build monthly sales summary
   const monthlySales={};
@@ -3198,29 +3202,18 @@ async function takeAuditSnapshot(){
     monthlySales[mk].units+=parseInt(l.units_sold||0);
   });
 
-  // Build txn type totals
-  const txnTotals={};
-  (txns||[]).forEach(t=>{
-    txnTotals[t.transaction_type]=(txnTotals[t.transaction_type]||0)+parseInt(t.quantity_change||0);
-  });
-
   const snapshot={
     takenAt: new Date().toISOString(),
     importCount: (imports||[]).length,
-    importDateRange: imports&&imports.length ? {
-      earliest: [...imports].sort((a,b)=>a.report_start_date?.localeCompare(b.report_start_date)).find(r=>r.report_start_date)?.report_start_date,
-      latest: [...imports].sort((a,b)=>b.report_end_date?.localeCompare(a.report_end_date)).find(r=>r.report_end_date)?.report_end_date
-    } : null,
     totalSales: (salesLines||[]).reduce((s,l)=>s+parseFloat(l.sales_amount||0),0),
     totalUnits: (salesLines||[]).reduce((s,l)=>s+parseInt(l.units_sold||0),0),
     monthlySales,
-    txnTotals,
     inventory: (invRaw||[]).map(r=>({
       product_id:r.product_id,
-      name:r.product_name,
-      qty:r.on_hand_qty,
-      value:r.inventory_value,
-      avg_cost:r.average_cost
+      name:prodNames[r.product_id]||'Unknown',
+      qty:parseFloat(r.on_hand_qty||0),
+      value:parseFloat(r.inventory_value||0),
+      avg_cost:parseFloat(r.average_cost||0)
     })),
     totalInventoryValue: (invRaw||[]).reduce((s,r)=>s+parseFloat(r.inventory_value||0),0)
   };
@@ -3290,11 +3283,16 @@ async function openAuditCompare(){
     {data:imports},
     {data:invRaw},
     {data:salesLines},
+    {data:prodsNow}
   ] = await Promise.all([
     dbFetch('sales_imports',{order:'imported_at.desc'}),
-    dbFetch('inventory_on_hand',{select:'product_id,on_hand_qty,inventory_value,average_cost,product_name'}),
-    dbFetch('sales_lines',{select:'units_sold,sales_amount,product_id,period_start_date'})
+    dbFetch('inventory_on_hand',{select:'product_id,on_hand_qty,inventory_value,average_cost'}),
+    dbFetch('sales_lines',{select:'units_sold,sales_amount,product_id,period_start_date'}),
+    dbFetch('products',{select:'id,name',filters:{'is_active':'eq.true'}})
   ]);
+
+  const nowProdNames={};
+  (prodsNow||[]).forEach(p=>{nowProdNames[p.id]=p.name;});
 
   const nowTotalSales=(salesLines||[]).reduce((s,l)=>s+parseFloat(l.sales_amount||0),0);
   const nowTotalUnits=(salesLines||[]).reduce((s,l)=>s+parseInt(l.units_sold||0),0);
@@ -3314,7 +3312,7 @@ async function openAuditCompare(){
   const invBefore={};
   (before.inventory||[]).forEach(r=>{invBefore[r.product_id]=r;});
   const invNow={};
-  (invRaw||[]).forEach(r=>{invNow[r.product_id]={product_id:r.product_id,name:r.product_name,qty:r.on_hand_qty,value:r.inventory_value};});
+  (invRaw||[]).forEach(r=>{invNow[r.product_id]={product_id:r.product_id,name:nowProdNames[r.product_id]||before.inventory?.find(b=>b.product_id===r.product_id)?.name||'Unknown',qty:parseFloat(r.on_hand_qty||0),value:parseFloat(r.inventory_value||0)};});
 
   const allProdIds=[...new Set([...Object.keys(invBefore),...Object.keys(invNow)])];
   const invDiffs=allProdIds.map(pid=>{
