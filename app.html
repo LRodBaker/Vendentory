@@ -4262,7 +4262,7 @@ function downloadCSV(tableId, filename) {
 }
 
 function fmt(v){return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(parseFloat(v)||0);}
-function fmtD(dt){if(!dt)return'—';const d=new Date(dt);return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});}
+function fmtD(dt){if(!dt)return'—';const s=String(dt);const d=/^\d{4}-\d{2}-\d{2}$/.test(s)?new Date(s+'T12:00:00'):new Date(s);return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});}
 
 // ── Bookkeeper Export ──────────────────────────────────────────────────────────
 let _bkData = null; // cache last run for CSV/PDF downloads
