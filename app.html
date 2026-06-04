@@ -2682,6 +2682,12 @@ async function checkOverdueOrders(){
   } catch(e){}
 }
 
+function openReceiveOrder(id) {
+  if(confirm('Mark this order as received?\n\nThis will update inventory and cost for all items on this order.')) {
+    markPurReceived(id);
+  }
+}
+
 async function markPurReceived(id){
   showL('Processing receipt...');
   const tok=await getAuthToken();
@@ -2821,6 +2827,9 @@ function openAIImportPreview(data) {
   if(data.tax)        document.getElementById('putx').value = data.tax.toFixed(2);
   if(data.shipping)   document.getElementById('push').value = data.shipping.toFixed(2);
   if(data.extra_costs) document.getElementById('puex').value = data.extra_costs.toFixed(2);
+  // AI import = receipt already in hand → default to Received
+  document.getElementById('pustat').value = 'received';
+  updPurSaveBtn();
   // Supplier — try to match by name
   if(data.supplier) {
     const supEl = document.getElementById('pus');
