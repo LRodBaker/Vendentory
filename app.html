@@ -1075,7 +1075,15 @@ async function loadProds2() {
       });
       AP.forEach(p=>{ if(aliasMap[p.id]) p._aliases=aliasMap[p.id]; });
     }
-  } catch(e) { /* aliases table may not exist yet — graceful fallback */ }
+    // Attach component qty_per_pack to bulk products (used in purchase import preview)
+    const {data:allComps} = await dbFetch('product_components',{select:'pack_product_id,qty_per_pack'});
+    if(allComps) {
+      allComps.forEach(c=>{
+        const p=AP.find(x=>(x.id||x.product_id)===c.pack_product_id);
+        if(p) p._qty_per_pack=(p._qty_per_pack||0)+c.qty_per_pack;
+      });
+    }
+  } catch(e) { /* aliases/components table may not exist yet — graceful fallback */ }
 }
 
 async function loadDash() {
@@ -2579,7 +2587,13 @@ function renderPL() {
       <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.unit_cost.toFixed(4)}" min="0" step="0.0001" oninput="updPL(${i},'unit_cost',this.value)">
       <div style="font-size:13px;font-weight:600" data-total>${fmt(l.total)}</div>
       <button style="background:var(--red-light);border:none;border-radius:6px;width:26px;height:26px;cursor:pointer;color:var(--red-mid);font-size:13px" onclick="rmPL(${i})">&#10005;</button>
-    </div>`).join('');
+    </div>
+    ${(l._aiDescription||l._indivUnits)?`<div style="font-size:11px;color:var(--gray-500);padding:2px 6px 6px 6px;display:flex;gap:12px;flex-wrap:wrap">
+      ${l._aiDescription?`<span style="color:var(--gray-400)">📄 "${l._aiDescription}"</span>`:''}
+      ${l._indivUnits?`<span style="color:var(--green-mid);font-weight:600">→ ${l._indivUnits} individual units on receive</span>`:''}
+      ${l._confidence&&l._confidence!=='high'?`<span style="color:${l._confidence==='low'||l._confidence==='none'?'var(--red-mid)':'var(--amber-mid)'}">${l._confidence} confidence</span>`:''}
+    </div>`:''}
+    `).join('');
   updPT();
 }
 
@@ -2724,20 +2738,27 @@ async function handleAIImportFile(input) {
       reader.readAsDataURL(file);
     });
     // Build product list context for matching
-    const prodContext = AP.map(p => `${p.name} (id:${p.id})`).join('\n');
+    const prodContext = AP.map(p=>`${p.name} | id:${p.id} | type:${p.product_type||'individual'} | upc:${p.units_per_case||1}`).join('\n');
     const prompt = `You are a purchase receipt parser for a vending machine business inventory app.
 
-Extract all line items from this receipt PDF and match them to the product list below.
-Also extract any tips, driver fees, or extra charges into the extra_costs field.
+Read the receipt PDF carefully and extract all purchased line items.
 
-PRODUCT LIST:
+RULES:
+1. qty = number of CASES or PACKS ordered as printed on the receipt — NOT individual units. If the receipt shows total individual unit count for a multi-unit item, divide by its units_per_case (upc) to get cases.
+2. Prefer matching to a BULK product (type:bulk) when the item is purchased as a case or multi-pack. Match to an individual product only if it is clearly a single unit.
+3. supplier = the vendor/seller name as shown on the receipt header (e.g. "Amazon", "Sam's Club").
+4. unit_cost = cost per CASE (same denominator as qty). line_total = qty x unit_cost.
+5. receipt_total = the final grand total charged as shown on the receipt.
+
+PRODUCT LIST (name | id | type | units_per_case):
 ${prodContext}
 
 Return ONLY a JSON object in this exact format, no other text:
 {
-  "supplier": "supplier name from receipt",
+  "supplier": "vendor name from receipt",
   "purchase_date": "YYYY-MM-DD",
   "invoice_number": "invoice or order number if present",
+  "receipt_total": 0.00,
   "subtotal": 0.00,
   "tax": 0.00,
   "shipping": 0.00,
@@ -2800,8 +2821,13 @@ function openAIImportPreview(data) {
     const supEl = document.getElementById('pus');
     if(supEl) {
       const opts = Array.from(supEl.options);
-      const match = opts.find(o => o.text.toLowerCase().includes(data.supplier.toLowerCase()));
+      const sLow = data.supplier.toLowerCase().replace(/[^a-z0-9]/g,'');
+      const match = opts.find(o => {
+        const oLow = o.text.toLowerCase();
+        return oLow.includes(data.supplier.toLowerCase()) || data.supplier.toLowerCase().includes(o.text.toLowerCase()) || oLow.replace(/[^a-z0-9]/g,'').includes(sLow);
+      });
       if(match) supEl.value = match.value;
+      else if(data.supplier) toast(`Supplier "${data.supplier}" not in your list — please select manually`,'warn');
     }
   }
   // Clear existing lines and add AI-matched ones
@@ -2820,6 +2846,8 @@ function openAIImportPreview(data) {
       const lineTotal  = line.line_total || (line.unit_cost * cases);
       const unitCost   = totalUnits > 0 ? lineTotal / totalUnits : line.unit_cost;
       const costPerCase = cases > 0 ? lineTotal / cases : lineTotal;
+      const compQPP = matchedProd?._qty_per_pack || 0;
+      const indivUnits = compQPP > 0 ? totalUnits * compQPP : null;
       PL.push({
         product_id:   line.matched_product_id || '',
         name:         line.matched_product_name || line.description,
@@ -2830,12 +2858,21 @@ function openAIImportPreview(data) {
         total:        lineTotal,
         _aiDescription: line.description,
         _confidence:  line.confidence,
-        _unmatched:   !line.matched_product_id
+        _unmatched:   !line.matched_product_id,
+        _indivUnits:  indivUnits
       });
     });
   }
   renderPL();
   updPT();
+  // Cost verification — compare extracted receipt total vs computed total
+  if(data.receipt_total && data.receipt_total > 0) {
+    const linesSum = (data.lines||[]).reduce((s,l)=>s+(l.line_total||0),0);
+    const computed = linesSum + (data.tax||0) + (data.shipping||0) + (data.extra_costs||0);
+    if(Math.abs(computed - data.receipt_total) > 0.02) {
+      setTimeout(()=>toast(`⚠ Receipt total $${data.receipt_total.toFixed(2)} vs line sum $${computed.toFixed(2)} — check amounts`,'warn'),400);
+    }
+  }
   // Show a summary toast
   const matched = data.lines.filter(l => l.matched_product_id).length;
   const total = data.lines.length;
@@ -3244,12 +3281,14 @@ async function confImport(){
     const s=parseFloat((row[sf2]||'0').replace(/[^0-9.-]/g,''))||0;
     const ap2=parseFloat((row[af]||'0').replace(/[^0-9.-]/g,''))||0;
     const rnl=rn.toLowerCase();
+    // Sales come only from individually-sold items, never bulk receiving conduits
+    const cand=AP.filter(p=>(p.product_type||'')!=='bulk');
     // 1. Exact alias match (highest priority)
-    let matched=AP.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
+    let matched=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
     // 2. Exact product name match
-    if(!matched) matched=AP.find(p=>p.name.toLowerCase()===rnl);
+    if(!matched) matched=cand.find(p=>p.name.toLowerCase()===rnl);
     // 3. Fuzzy: product name contains import name or vice versa
-    if(!matched) matched=AP.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+    if(!matched) matched=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
     const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
     lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
     if(matched&&u>0)invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
@@ -3278,6 +3317,7 @@ function showUnmatchedModal(unmatched) {
     const words=vmsName.toLowerCase().split(/\s+/).filter(w=>w.length>2);
     let best=null, bestScore=0;
     AP.forEach(p=>{
+      if((p.product_type||'')==='bulk')return;
       const pWords=p.name.toLowerCase().split(/\s+/);
       const score=words.filter(w=>pWords.some(pw=>pw.includes(w)||w.includes(pw))).length;
       if(score>bestScore){bestScore=score;best=p;}
