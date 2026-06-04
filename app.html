@@ -1529,7 +1529,8 @@ function setProdType(type) {
   const isVariety = type === 'variety';
   document.getElementById('pIsVariety').checked = isVariety;
   // Show/hide field groups
-  document.getElementById('fg-upc').style.display    = (type==='bulk'||type==='variety') ? '' : 'none';
+  document.getElementById('fg-upc').style.display    = type==='variety' ? '' : 'none';
+  if(type==='bulk') document.getElementById('pupc').value = '1'; // bulk always upc=1
   document.getElementById('fg-rp').style.display     = type==='individual' ? '' : 'none';
   document.getElementById('fg-ou').style.display     = type==='individual' ? '' : 'none';
   document.getElementById('fg-lc').style.display     = type==='individual' ? '' : 'none';
@@ -1890,7 +1891,7 @@ async function saveProd() {
       last_supplier_id:document.getElementById('psu').value||null,
       size_value:parseFloat(document.getElementById('psz').value)||null,
       size_unit:document.getElementById('psu2').value||null,
-      units_per_case:parseInt(document.getElementById('pupc').value)||1,
+      units_per_case:_prodType==='bulk' ? 1 : (parseInt(document.getElementById('pupc').value)||1),
       reorder_point:parseInt(document.getElementById('prp').value)||0,
       order_up_to_level:parseInt(document.getElementById('pou').value)||0,
       last_cost:lastCost,
