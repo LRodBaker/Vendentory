@@ -814,6 +814,7 @@ let SKU_LINES = []; // bulk barcode lines for the product edit modal
 let BASE_LINES = []; // base product links for bulk products
 let ALT_BARCODES = []; // alternate individual barcodes for a product
 let ALIASES = []; // VMS alias names for import matching
+let _editPurId = null;  // set when editing an existing purchase
 
 // ── Get current auth token (session token if logged in, anon key as fallback) ──
 let _cachedToken = null;
@@ -2648,12 +2649,16 @@ function updPL(i,f,v){
 }
 
 function rmPL(i){PL.splice(i,1);renderPL();}
-function clrPur(){PL=[];renderPL();['pui','pun'].forEach(id=>document.getElementById(id).value='');['push','putx','puex'].forEach(id=>document.getElementById(id).value='0');document.getElementById('pustat').value='ordered';updPurSaveBtn();}
+function clrPur(){_editPurId=null;PL=[];renderPL();['pui','pun','pud'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});['push','putx','puex'].forEach(id=>document.getElementById(id).value='0');document.getElementById('pustat').value='ordered';const supEl=document.getElementById('pus');if(supEl)supEl.value='';updPurSaveBtn();}
 
 function updPurSaveBtn(){
   const s=document.getElementById('pustat').value;
   const btn=document.getElementById('savePurBtn');
-  if(btn) btn.textContent=s==='ordered'?'Save order':'Save & receive purchase';
+  if(btn) btn.textContent=_editPurId?(s==='ordered'?'✏ Update order':'✏ Update & re-receive'):(s==='ordered'?'Save order':'Save & receive purchase');
+  // Show/hide cancel-edit button
+  let cancelBtn=document.getElementById('cancelEditPurBtn');
+  if(_editPurId&&!cancelBtn){cancelBtn=document.createElement('button');cancelBtn.id='cancelEditPurBtn';cancelBtn.className='btn';cancelBtn.textContent='Cancel edit';cancelBtn.onclick=()=>{clrPur();toast('Edit cancelled','ok');};btn.insertAdjacentElement('afterend',cancelBtn);}
+  else if(!_editPurId&&cancelBtn) cancelBtn.remove();
 }
 
 async function checkOverdueOrders(){
@@ -2821,13 +2826,17 @@ function openAIImportPreview(data) {
     const supEl = document.getElementById('pus');
     if(supEl) {
       const opts = Array.from(supEl.options);
-      const sLow = data.supplier.toLowerCase().replace(/[^a-z0-9]/g,'');
+      const sLow = data.supplier.toLowerCase();
       const match = opts.find(o => {
+        if(!o.value) return false; // skip the blank placeholder option
         const oLow = o.text.toLowerCase();
-        return oLow.includes(data.supplier.toLowerCase()) || data.supplier.toLowerCase().includes(o.text.toLowerCase()) || oLow.replace(/[^a-z0-9]/g,'').includes(sLow);
+        return oLow.includes(sLow) || sLow.includes(oLow);
       });
       if(match) supEl.value = match.value;
-      else if(data.supplier) toast(`Supplier "${data.supplier}" not in your list — please select manually`,'warn');
+      else {
+        supEl.value = ''; // clear stale value so previous order's supplier isn't kept
+        toast(`Supplier "${data.supplier}" not in your list — please select manually`, 'warn');
+      }
     }
   }
   // Clear existing lines and add AI-matched ones
@@ -2921,6 +2930,7 @@ async function loadPurHistory(){
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div style="font-size:16px;font-weight:700;font-family:var(--font-head)">${fmt(p.total_amount)}</div>
           ${isOrdered?`<button class="btn btn-sm btn-p" onclick="openReceiveOrder('${p.id}')">&#10003; Receive order</button>`:''}
+          <button class="btn btn-sm" onclick="editPurchase('${p.id}')" title="Edit">&#9998; Edit</button>
           <button class="btn btn-sm" onclick="togglePurLines('${p.id}',this)">&#9658; Details</button>
           <button class="btn btn-sm btn-d" onclick="deletePurchase('${p.id}','${(p.suppliers?.name||'this purchase').replace(/'/g,"\'")}')" title="Delete">&#128465;</button>
         </div>
@@ -3032,16 +3042,61 @@ async function deletePurchase(id, label) {
   const tok = await getAuthToken();
   const h = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
   // Delete inventory transactions linked to this purchase
-  await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+id, {method:'DELETE',headers:h});
+  const dr1 = await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+id, {method:'DELETE',headers:h});
+  if(!dr1.ok){ hideL(); toast('Could not delete inventory transactions (code '+dr1.status+') — check DB permissions','err'); return; }
   // Delete purchase lines
-  await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+id, {method:'DELETE',headers:h});
+  const dr2 = await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+id, {method:'DELETE',headers:h});
+  if(!dr2.ok){ hideL(); toast('Could not delete purchase lines (code '+dr2.status+') — check DB permissions','err'); return; }
   // Delete purchase header
   const delResp = await fetch(SURL+'/rest/v1/purchases?id=eq.'+id, {method:'DELETE',headers:h});
   hideL();
-  if(!delResp.ok){ toast('Delete failed — check DB permissions','err'); return; }
+  if(!delResp.ok){ toast('Could not delete purchase (code '+delResp.status+') — check DB permissions','err'); return; }
   toast('Purchase deleted','ok');
   await loadProds2();
   loadPurHistory();
+}
+
+async function editPurchase(id) {
+  showL('Loading purchase...');
+  const tok = await getAuthToken();
+  const h = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+  // Load header
+  const pr = await fetch(SURL+'/rest/v1/purchases?id=eq.'+id+'&select=*,suppliers(id,name)', {headers:h});
+  if(!pr.ok){hideL();toast('Could not load purchase','err');return;}
+  const p = (await pr.json())[0];
+  if(!p){hideL();toast('Purchase not found','err');return;}
+  // Load lines
+  const lr = await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+id+'&select=*,products(id,name,units_per_case,product_type)', {headers:h});
+  const lines = lr.ok ? await lr.json() : [];
+  // Populate header fields
+  document.getElementById('pud').value = p.purchase_date || '';
+  document.getElementById('pui').value = p.invoice_number || '';
+  document.getElementById('pun').value = p.notes || '';
+  document.getElementById('push').value = p.shipping_cost || 0;
+  document.getElementById('putx').value = p.tax_amount || 0;
+  document.getElementById('puex').value = p.extra_costs || 0;
+  document.getElementById('pustat').value = (p.status==='received') ? 'received' : 'ordered';
+  const supEl = document.getElementById('pus');
+  if(supEl && p.supplier_id) supEl.value = p.supplier_id;
+  // Populate purchase lines
+  PL = lines.map(l => ({
+    product_id:    l.product_id,
+    name:          l.products?.name || '',
+    cases:         l.cases || 0,
+    cost_per_case: l.cost_per_case || 0,
+    units:         l.units_received,
+    unit_cost:     l.unit_cost,
+    total:         l.line_total
+  }));
+  _editPurId = id;
+  renderPL();
+  updPT();
+  updPurSaveBtn();
+  hideL();
+  // Scroll to the purchase form
+  const formTop = document.getElementById('pud');
+  if(formTop) formTop.scrollIntoView({behavior:'smooth', block:'center'});
+  toast('Purchase loaded — make changes then click Update', 'ok');
 }
 
 async function togglePurLines(id,btn){
@@ -3083,29 +3138,36 @@ async function savePur() {
   const status = document.getElementById('pustat').value;
   const vl=PL.filter(l=>l.product_id&&l.units>0);
   if(!vl.length){toast('Add at least one product line','err');return;}
-  showL('Saving purchase...');
+  showL(_editPurId?'Updating purchase...':'Saving purchase...');
   const sub=vl.reduce((s,l)=>s+l.total,0);
   const sh=parseFloat(document.getElementById('push').value)||0;
   const tx=parseFloat(document.getElementById('putx').value)||0;
   const ex=parseFloat(document.getElementById('puex').value)||0;
   const tok = await getAuthToken();
   const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
-  // Insert purchase header — use fetch() to avoid JS client hang
-  const purResp = await fetch(SURL+'/rest/v1/purchases', {
-    method:'POST',
-    headers:{...wh,'Prefer':'return=representation'},
-    body:JSON.stringify({supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,status:document.getElementById('pustat').value==='ordered'?'draft':'received',notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex,created_by:CU?.id})
-  });
-  if(!purResp.ok){hideL();toast('Error saving purchase','err');return;}
-  const purArr = await purResp.json();
-  const pur = Array.isArray(purArr) ? purArr[0] : purArr;
-  if(!pur?.id){hideL();toast('Error: could not get purchase ID','err');return;}
+  const purBody={supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,status:status==='ordered'?'draft':'received',notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex};
+  let purId;
+  if(_editPurId) {
+    // Editing: reverse old inventory transactions and lines, then patch the header
+    await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
+    await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
+    const patchResp=await fetch(SURL+'/rest/v1/purchases?id=eq.'+_editPurId,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(purBody)});
+    if(!patchResp.ok){hideL();toast('Error updating purchase','err');return;}
+    purId=_editPurId;
+  } else {
+    const purResp=await fetch(SURL+'/rest/v1/purchases',{method:'POST',headers:{...wh,'Prefer':'return=representation'},body:JSON.stringify({...purBody,created_by:CU?.id})});
+    if(!purResp.ok){hideL();toast('Error saving purchase','err');return;}
+    const purArr=await purResp.json();
+    const pur=Array.isArray(purArr)?purArr[0]:purArr;
+    if(!pur?.id){hideL();toast('Error: could not get purchase ID','err');return;}
+    purId=pur.id;
+  }
 
   // Insert purchase lines
   await fetch(SURL+'/rest/v1/purchase_lines', {
     method:'POST',
     headers:{...wh,'Prefer':'return=minimal'},
-    body:JSON.stringify(vl.map(l=>({purchase_id:pur.id,product_id:l.product_id,cases:l.cases,cost_per_case:l.cost_per_case,units_received:l.units,unit_cost:l.unit_cost,line_total:l.total})))
+    body:JSON.stringify(vl.map(l=>({purchase_id:purId,product_id:l.product_id,cases:l.cases,cost_per_case:l.cost_per_case,units_received:l.units,unit_cost:l.unit_cost,line_total:l.total})))
   });
 
   const invNote = 'Invoice: '+(document.getElementById('pui').value||'—');
@@ -3123,11 +3185,11 @@ async function savePur() {
       for(const c of comps) {
         const totalUnits = l.units * c.qty_per_pack;
         const compUnitCost = totalItemsPerPack > 0 ? (l.unit_cost / totalItemsPerPack) : 0;
-        invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',quantity_change:totalUnits,warehouse_quantity_change:totalUnits,unit_cost:compUnitCost,reference_type:'purchase',reference_id:pur.id,notes:invNote+' (from bulk: '+(prod?.name||'')+')',created_by:CU?.id});
+        invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',quantity_change:totalUnits,warehouse_quantity_change:totalUnits,unit_cost:compUnitCost,reference_type:'purchase',reference_id:purId,notes:invNote+' (from bulk: '+(prod?.name||'')+')',created_by:CU?.id});
         wacUpdates.push({product_id:c.component_product_id,units:totalUnits,unit_cost:compUnitCost});
       }
     } else {
-      invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units,warehouse_quantity_change:l.units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:pur.id,notes:invNote,created_by:CU?.id});
+      invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units,warehouse_quantity_change:l.units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:purId,notes:invNote,created_by:CU?.id});
       wacUpdates.push({product_id:l.product_id,units:l.units,unit_cost:l.unit_cost});
     }
   } // end if(status==='received')
@@ -3143,7 +3205,8 @@ async function savePur() {
     await fetch(SURL+'/rest/v1/products?id=eq.'+u.product_id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({average_cost:na,last_cost:u.unit_cost,updated_at:new Date().toISOString()})});
   }
   hideL();
-  toast(status==='ordered'?'Order saved! Inventory will update when marked received.':'Purchase received! Inventory updated.','ok');
+  const wasEdit=!!_editPurId; _editPurId=null;
+  toast(wasEdit?'Purchase updated!':status==='ordered'?'Order saved! Inventory will update when marked received.':'Purchase received! Inventory updated.','ok');
   clrPur(); await loadProds2(); renderProds(); loadPurHistory();
 }
 
