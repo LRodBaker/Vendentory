@@ -433,6 +433,11 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
               <div class="card-title">Recent adjustments</div>
               <div id="raj"><div class="tm">Loading...</div></div>
             </div>
+            <div class="card" style="margin-top:13px">
+              <div class="card-title">&#128203; Physical Inventory Count</div>
+              <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px;line-height:1.5">Scan or search each product, enter your counted quantity, and the app will write off any missing units as shrinkage — with a cost summary ready for your bookkeeper.</div>
+              <button class="btn btn-p" style="width:100%;justify-content:center" onclick="openPC()">&#128203; Start Physical Count</button>
+            </div>
           </div>
         </div>
 
@@ -809,6 +814,8 @@ const SKEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZ
 
 let sb = null;
 let CU = null, CP = null, FF = {}, AP = [], AC = [], AS2 = [], PL = [], adjP = null, impRows = [], rScans = [], curRT = 'weekly';
+let camCtx = 'scan'; // 'scan' | 'count'
+let countEntries = []; // [{product_id,name,book_qty,counted_qty,avg_cost}]
 let VP_LINES = []; // variety pack component lines for the product edit modal
 let SKU_LINES = []; // bulk barcode lines for the product edit modal
 let BASE_LINES = []; // base product links for bulk products
@@ -2292,7 +2299,8 @@ function _loadHtml5QR(){
   });
 }
 
-async function startCam(){
+async function startCam(ctx){
+  camCtx = ctx || 'scan';
   const modal=document.getElementById('cam-modal');
   const status=document.getElementById('cam-status');
   modal.style.display='flex';
@@ -2326,8 +2334,13 @@ async function startCam(){
       (decodedText)=>{
         // Got a barcode!
         stopCam();
-        document.getElementById('si').value=decodedText;
-        lookupBC();
+        if(camCtx==='count'){
+          document.getElementById('pc-bc').value=decodedText;
+          pcLookupBC();
+        } else {
+          document.getElementById('si').value=decodedText;
+          lookupBC();
+        }
       },
       ()=>{} // scan failure per frame — ignore
     );
@@ -3274,6 +3287,328 @@ async function loadRAJ(){
 }
 
 function handleDrop(e){e.preventDefault();document.getElementById('idz').style.borderColor='';const f=e.dataTransfer.files[0];if(f)handleIF(f);}
+
+// ─── PHYSICAL COUNT ────────────────────────────────────────────────────────
+
+function openPC(){
+  countEntries=[];
+  // Default date to today
+  const today=new Date().toISOString().split('T')[0];
+  document.getElementById('pc-date').value=today;
+  document.getElementById('pc-bc').value='';
+  document.getElementById('pc-bc-err').textContent='';
+  document.getElementById('pc-search-drop').style.display='none';
+  document.getElementById('pc-report').style.display='none';
+  document.getElementById('pc-report').innerHTML='';
+  // Show action buttons, hide report
+  document.querySelector('#mPC .modal > div:last-of-type').style.display='grid';
+  renderCountList();
+  openM('mPC');
+  setTimeout(()=>document.getElementById('pc-date').nextElementSibling,50);
+}
+
+function pcSearchInput(){
+  const q=(document.getElementById('pc-bc').value||'').trim().toLowerCase();
+  const drop=document.getElementById('pc-search-drop');
+  if(!q||q.length<2){drop.style.display='none';return;}
+  // Only suggest if it doesn't look like a pure barcode (all digits)
+  if(/^\d+$/.test(q)){drop.style.display='none';return;}
+  const matches=AP.filter(p=>p.product_type!=='bulk'&&p.is_active!==false&&(p.name.toLowerCase().includes(q)||(p.barcode||'').includes(q))).slice(0,8);
+  if(!matches.length){drop.style.display='none';return;}
+  drop.style.display='block';
+  drop.innerHTML=matches.map(p=>`
+    <div style="padding:9px 12px;cursor:pointer;font-size:13px;border-bottom:0.5px solid var(--border)"
+         onmousedown="pcSelectProduct('${p.id}')"
+         style="padding:9px 12px;cursor:pointer;font-size:13px">
+      <span style="font-weight:500">${p.name}</span>
+      <span style="color:var(--gray-400);margin-left:6px">${p.on_hand_qty||0} on hand</span>
+    </div>`).join('');
+}
+
+function pcSelectProduct(pid){
+  const prod=AP.find(p=>p.id===pid);
+  if(!prod)return;
+  document.getElementById('pc-search-drop').style.display='none';
+  document.getElementById('pc-bc').value='';
+  document.getElementById('pc-bc-err').textContent='';
+  pcAddEntry(prod);
+}
+
+async function pcLookupBC(){
+  const bc=(document.getElementById('pc-bc').value||'').trim();
+  if(!bc)return;
+  document.getElementById('pc-search-drop').style.display='none';
+
+  // Try primary barcode (exclude bulk — sales only touch individual)
+  let prod=AP.find(p=>p.barcode===bc && p.product_type!=='bulk');
+
+  // Try alt barcodes if not found
+  if(!prod){
+    try{
+      const r=await fetch(SURL+'/rest/v1/product_barcodes?barcode=eq.'+encodeURIComponent(bc)+'&select=product_id',
+        {headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY}});
+      if(r.ok){const rows=await r.json();if(rows.length)prod=AP.find(p=>p.id===rows[0].product_id&&p.product_type!=='bulk');}
+    }catch(e){}
+  }
+
+  // Also check bulk barcodes — if someone scans a bulk pack, find the linked individual
+  if(!prod){
+    try{
+      const r=await fetch(SURL+'/rest/v1/supplier_skus?bulk_barcode=eq.'+encodeURIComponent(bc)+'&select=product_id',
+        {headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY}});
+      if(r.ok){const rows=await r.json();if(rows.length)prod=AP.find(p=>p.id===rows[0].product_id);}
+    }catch(e){}
+  }
+
+  if(!prod){
+    document.getElementById('pc-bc-err').textContent='Barcode not found: '+bc+' — try searching by name above.';
+    return;
+  }
+
+  document.getElementById('pc-bc').value='';
+  document.getElementById('pc-bc-err').textContent='';
+  pcAddEntry(prod);
+}
+
+function pcAddEntry(prod){
+  // Already in list? Focus its input instead
+  const existing=countEntries.find(e=>e.product_id===prod.id);
+  if(existing){
+    document.getElementById('pc-bc-err').textContent=prod.name+' is already in the list — update its count below.';
+    const inp=document.getElementById('pcc-'+prod.id);
+    if(inp){inp.focus();inp.select();}
+    return;
+  }
+  countEntries.push({product_id:prod.id,name:prod.name,book_qty:prod.on_hand_qty||0,counted_qty:null,avg_cost:parseFloat(prod.average_cost)||0});
+  renderCountList();
+  // Auto-focus the count input for the new row
+  setTimeout(()=>{const inp=document.getElementById('pcc-'+prod.id);if(inp){inp.focus();}},60);
+}
+
+function pcUpdateQty(pid,val){
+  const e=countEntries.find(e=>e.product_id===pid);
+  if(e){e.counted_qty=(val===''||val===null)?null:Math.max(0,parseInt(val)||0);}
+  renderCountSummary();
+  renderCountRow(pid);
+}
+
+function pcRemoveEntry(pid){
+  countEntries=countEntries.filter(e=>e.product_id!==pid);
+  renderCountList();
+}
+
+function renderCountList(){
+  const el=document.getElementById('pc-list');
+  if(!countEntries.length){
+    el.innerHTML='<div class="tm" style="text-align:center;padding:28px 0">Scan a product or type its name above to start counting</div>';
+    renderCountSummary();
+    return;
+  }
+  // Header row
+  const hdr=`<div style="display:grid;grid-template-columns:1fr 72px 90px 72px 80px 32px;gap:6px;padding:6px 10px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-400);border-bottom:1px solid var(--border)">
+    <div>Product</div><div style="text-align:right">Book</div><div style="text-align:center">Counted</div><div style="text-align:right">Variance</div><div style="text-align:right">Est. Loss</div><div></div>
+  </div>`;
+  const rows=countEntries.map(e=>pcRowHtml(e)).join('');
+  el.innerHTML=`<div style="border:0.5px solid var(--border);border-radius:10px;overflow:hidden">${hdr}${rows}</div>`;
+  renderCountSummary();
+}
+
+function renderCountRow(pid){
+  const e=countEntries.find(e=>e.product_id===pid);
+  if(!e)return;
+  const existing=document.getElementById('pcrow-'+pid);
+  if(!existing)return;
+  // Update variance and loss cells only (preserve focus on input)
+  const variance=e.counted_qty!==null?e.counted_qty-e.book_qty:null;
+  const loss=variance!==null&&variance<0?Math.abs(variance)*e.avg_cost:0;
+  existing.querySelector('.pc-var').innerHTML=variance===null?'—':`<span style="font-weight:700;color:${variance<0?'var(--red-mid)':variance>0?'var(--green)':'var(--gray-400)'}">${variance>0?'+':''}${variance}</span>`;
+  existing.querySelector('.pc-loss').innerHTML=variance===null?'—':loss>0?`<span style="color:var(--red-mid);font-weight:600">${fmt(loss)}</span>`:'<span style="color:var(--green)">✓</span>';
+}
+
+function pcRowHtml(e){
+  const variance=e.counted_qty!==null?e.counted_qty-e.book_qty:null;
+  const loss=variance!==null&&variance<0?Math.abs(variance)*e.avg_cost:0;
+  return `<div id="pcrow-${e.product_id}" style="display:grid;grid-template-columns:1fr 72px 90px 72px 80px 32px;gap:6px;padding:9px 10px;border-bottom:0.5px solid var(--border);align-items:center;font-size:13px">
+    <div style="font-weight:500;line-height:1.3">${e.name}<div style="font-size:11px;color:var(--gray-400)">Cost ${fmt(e.avg_cost)}/unit</div></div>
+    <div style="text-align:right;color:var(--gray-500)">${e.book_qty}</div>
+    <div style="text-align:center">
+      <input type="number" id="pcc-${e.product_id}" class="fi" min="0" placeholder="0"
+        value="${e.counted_qty!==null?e.counted_qty:''}"
+        style="text-align:center;padding:5px 6px;width:72px"
+        oninput="pcUpdateQty('${e.product_id}',this.value)"
+        onkeydown="if(event.key==='Enter'){document.getElementById('pc-bc').focus();}">
+    </div>
+    <div class="pc-var" style="text-align:right">${variance===null?'—':`<span style="font-weight:700;color:${variance<0?'var(--red-mid)':variance>0?'var(--green)':'var(--gray-400)'}">${variance>0?'+':''}${variance}</span>`}</div>
+    <div class="pc-loss" style="text-align:right">${variance===null?'—':loss>0?`<span style="color:var(--red-mid);font-weight:600">${fmt(loss)}</span>`:'<span style="color:var(--green)">✓</span>'}</div>
+    <div><button onclick="pcRemoveEntry('${e.product_id}')" style="background:none;border:none;color:var(--gray-400);cursor:pointer;font-size:16px;padding:2px 4px;line-height:1" title="Remove">&#10005;</button></div>
+  </div>`;
+}
+
+function renderCountSummary(){
+  const bar=document.getElementById('pc-summary-bar');
+  const filled=countEntries.filter(e=>e.counted_qty!==null);
+  if(!filled.length){bar.style.display='none';document.getElementById('pc-post-btn').disabled=true;return;}
+  const shortages=filled.filter(e=>e.counted_qty<e.book_qty);
+  const overages=filled.filter(e=>e.counted_qty>e.book_qty);
+  const matched=filled.filter(e=>e.counted_qty===e.book_qty);
+  const totalLoss=shortages.reduce((s,e)=>s+(e.book_qty-e.counted_qty)*e.avg_cost,0);
+  const totalMissing=shortages.reduce((s,e)=>s+(e.book_qty-e.counted_qty),0);
+  bar.style.display='block';
+  let html=`<strong>${filled.length}</strong> product${filled.length!==1?'s':''} counted`;
+  if(shortages.length)html+=` · <strong style="color:var(--red-mid)">${shortages.length} short (${totalMissing} units)</strong>`;
+  if(overages.length)html+=` · <strong style="color:var(--green)">${overages.length} over</strong>`;
+  if(matched.length)html+=` · <strong>${matched.length} match</strong>`;
+  if(totalLoss>0)html+=` · <strong style="color:var(--red-mid)">Est. loss: ${fmt(totalLoss)}</strong>`;
+  document.getElementById('pc-summary-text').innerHTML=html;
+  document.getElementById('pc-post-btn').disabled=false;
+}
+
+async function postCountResults(){
+  const filled=countEntries.filter(e=>e.counted_qty!==null);
+  if(!filled.length){toast('Enter at least one count first','err');return;}
+  const countDate=document.getElementById('pc-date').value||new Date().toISOString().split('T')[0];
+
+  const transactions=[];
+  for(const e of filled){
+    const variance=e.counted_qty-e.book_qty;
+    if(variance===0)continue;
+    transactions.push({
+      product_id:e.product_id,
+      transaction_type:variance<0?'write_off':'quantity_adjustment',
+      transaction_date:new Date(countDate+'T12:00:00').toISOString(),
+      quantity_change:variance,
+      warehouse_quantity_change:variance,
+      unit_cost:e.avg_cost,
+      reason_code:variance<0?'missing':'count_correction',
+      notes:`Physical count ${countDate}: book ${e.book_qty}, counted ${e.counted_qty}`,
+      created_by:CU?.id||null
+    });
+  }
+
+  if(!transactions.length){
+    toast('All counts matched — no adjustments needed!','ok');
+    pcShowReport(filled,countDate,[],'All products counted, no variances found.');
+    return;
+  }
+
+  showL('Posting '+ transactions.length +' adjustment'+(transactions.length!==1?'s':'')+'...');
+  const tok=await getAuthToken();
+  const resp=await fetch(SURL+'/rest/v1/inventory_transactions',{
+    method:'POST',
+    headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},
+    body:JSON.stringify(transactions)
+  });
+  hideL();
+
+  if(!resp.ok){
+    let msg='Error posting adjustments';
+    try{const j=await resp.json();msg=j.message||msg;}catch(e){}
+    toast(msg,'err');return;
+  }
+
+  toast('Count posted!','ok');
+  await loadProds2();
+  loadRAJ();
+  pcShowReport(filled,countDate,transactions,null);
+}
+
+function pcShowReport(entries,countDate,transactions,note){
+  const shortages=entries.filter(e=>e.counted_qty<e.book_qty);
+  const overages=entries.filter(e=>e.counted_qty>e.book_qty);
+  const matched=entries.filter(e=>e.counted_qty===e.book_qty);
+  const totalLoss=shortages.reduce((s,e)=>s+(e.book_qty-e.counted_qty)*e.avg_cost,0);
+
+  // Build plain-text version for bookkeeper copy
+  const lines=[
+    'TOBACCO ROAD VENDING LLC',
+    'Physical Inventory Count — '+countDate,
+    '─'.repeat(48),
+    '',
+    'SHRINKAGE / WRITE-OFFS',
+  ];
+  if(shortages.length){
+    shortages.forEach(e=>{
+      const missing=e.book_qty-e.counted_qty;
+      lines.push(`  ${e.name}: book ${e.book_qty}, counted ${e.counted_qty}, short ${missing} @ ${fmt(e.avg_cost)} = ${fmt(missing*e.avg_cost)}`);
+    });
+    lines.push('');
+    lines.push('  TOTAL SHRINKAGE LOSS: '+fmt(totalLoss));
+  }else{
+    lines.push('  None — all products matched or over.');
+  }
+  if(overages.length){
+    lines.push('');
+    lines.push('OVERAGES (positive adjustments)');
+    overages.forEach(e=>{
+      lines.push(`  ${e.name}: book ${e.book_qty}, counted ${e.counted_qty}, over +${e.counted_qty-e.book_qty}`);
+    });
+  }
+  if(matched.length){
+    lines.push('');
+    lines.push('MATCHED (no adjustment needed)');
+    matched.forEach(e=>lines.push(`  ${e.name}: ${e.counted_qty} units`));
+  }
+  lines.push('');
+  lines.push('─'.repeat(48));
+  lines.push('Generated by Vendentory on '+new Date().toLocaleString('en-US',{timeZone:'America/New_York'})+' ET');
+  const copyText=lines.join('\n');
+
+  const rpt=document.getElementById('pc-report');
+  rpt.style.display='block';
+  rpt.innerHTML=`
+    <div style="background:var(--gray-50);border-radius:10px;padding:16px;border:0.5px solid var(--border)">
+      <div style="font-size:15px;font-weight:700;margin-bottom:12px">&#9989; Count Posted — Summary</div>
+      ${note?`<div style="font-size:13px;color:var(--gray-500);margin-bottom:10px">${note}</div>`:''}
+      ${shortages.length?`
+        <div style="margin-bottom:10px">
+          <div style="font-size:12px;font-weight:600;color:var(--red-mid);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Write-offs (Shrinkage)</div>
+          ${shortages.map(e=>{const m=e.book_qty-e.counted_qty;return`
+            <div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:0.5px solid var(--border)">
+              <span>${e.name}</span>
+              <span style="color:var(--red-mid);font-weight:600">−${m} units · ${fmt(m*e.avg_cost)}</span>
+            </div>`;}).join('')}
+          <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;padding:8px 0;margin-top:4px">
+            <span>Total Shrinkage Loss</span>
+            <span style="color:var(--red-mid)">${fmt(totalLoss)}</span>
+          </div>
+        </div>`:'<div style="font-size:13px;color:var(--green);margin-bottom:10px">&#10003; No shrinkage — all products matched or over.</div>'}
+      ${overages.length?`
+        <div style="margin-bottom:10px">
+          <div style="font-size:12px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Positive Adjustments</div>
+          ${overages.map(e=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:0.5px solid var(--border)"><span>${e.name}</span><span style="color:var(--green);font-weight:600">+${e.counted_qty-e.book_qty} units</span></div>`).join('')}
+        </div>`:''}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
+        <button class="btn btn-p" onclick="pcCopyReport()" id="pc-copy-btn">&#128203; Copy for Bookkeeper</button>
+        <button class="btn" onclick="closeM('mPC')">Done</button>
+      </div>
+    </div>`;
+
+  // Store copy text for button
+  window._pcCopyText=copyText;
+
+  // Hide the entry controls and post button
+  document.getElementById('pc-post-btn').disabled=true;
+  document.getElementById('pc-post-btn').textContent='✓ Posted';
+}
+
+function pcCopyReport(){
+  if(!window._pcCopyText)return;
+  navigator.clipboard.writeText(window._pcCopyText).then(()=>{
+    const btn=document.getElementById('pc-copy-btn');
+    if(btn){btn.textContent='&#10003; Copied!';setTimeout(()=>{btn.innerHTML='&#128203; Copy for Bookkeeper';},2500);}
+    toast('Report copied to clipboard','ok');
+  }).catch(()=>{
+    // Fallback: show the text in a textarea
+    const ta=document.createElement('textarea');
+    ta.value=window._pcCopyText;
+    ta.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0';
+    document.body.appendChild(ta);ta.select();
+    try{document.execCommand('copy');toast('Report copied to clipboard','ok');}catch(e){toast('Could not copy — select text above manually','err');}
+    document.body.removeChild(ta);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function handleIF(file){
   if(!file)return;
@@ -4747,5 +5082,48 @@ function toast(msg,type=''){
 </script>
   <!-- AI Import hidden file input -->
   <input type="file" id="ai-import-file" accept="application/pdf" style="display:none" onchange="handleAIImportFile(this)">
+
+<!-- PHYSICAL COUNT MODAL -->
+<div class="modal-bg" id="mPC" style="display:none;align-items:flex-start;padding-top:24px">
+  <div class="modal" style="max-width:680px;width:100%;max-height:92vh;overflow-y:auto;display:flex;flex-direction:column;gap:0">
+    <button class="mc" onclick="closeM('mPC')">&#10005;</button>
+    <div class="modal-title" style="margin-bottom:4px">&#128203; Physical Inventory Count</div>
+    <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Scan or search each product, enter the quantity you counted. Shortages are posted as write-offs.</div>
+
+    <!-- Date + scan bar -->
+    <div style="background:var(--gray-900);border-radius:12px;padding:16px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+        <div style="font-size:12px;color:rgba(255,255,255,0.5);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Count Date</div>
+        <input type="date" id="pc-date" class="fi" style="max-width:160px;background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.15);color:#fff;font-size:13px">
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="pc-bc" class="fi" style="flex:1;min-width:160px;background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.15);color:#fff" placeholder="Scan barcode or type product name..." autocomplete="off"
+          oninput="pcSearchInput()" onkeydown="if(event.key==='Enter'){pcLookupBC();}">
+        <button class="btn" style="background:rgba(255,255,255,0.1);border-color:rgba(255,255,255,0.2);color:#fff;flex-shrink:0" onclick="startCam('count')">&#128247; Camera</button>
+      </div>
+      <div id="pc-search-drop" style="display:none;background:var(--white);border:0.5px solid var(--border);border-radius:8px;max-height:180px;overflow-y:auto;margin-top:4px;position:relative;z-index:20"></div>
+      <div id="pc-bc-err" style="font-size:12px;color:var(--red-mid);margin-top:6px;min-height:16px"></div>
+    </div>
+
+    <!-- Count list -->
+    <div id="pc-list" style="margin-bottom:14px">
+      <div class="tm" style="text-align:center;padding:28px 0">Scan a product or type its name above to start counting</div>
+    </div>
+
+    <!-- Summary bar -->
+    <div id="pc-summary-bar" style="background:var(--teal-light);border-radius:8px;padding:11px 14px;font-size:13px;margin-bottom:14px;display:none">
+      <div id="pc-summary-text" style="font-weight:500"></div>
+    </div>
+
+    <!-- Action buttons -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <button class="btn" onclick="closeM('mPC')">Cancel</button>
+      <button class="btn btn-p" id="pc-post-btn" disabled onclick="postCountResults()">&#10003; Post Write-offs &amp; Generate Report</button>
+    </div>
+
+    <!-- Report (shown after posting) -->
+    <div id="pc-report" style="display:none;margin-top:14px"></div>
+  </div>
+</div>
 </body>
 </html>
