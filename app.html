@@ -3063,7 +3063,7 @@ async function deletePurchase(id, label) {
   if(!confirm('Delete purchase from ' + label + '?\n\nThis will also reverse the inventory transactions (purchase receipts) linked to this purchase. This cannot be undone.')) return;
   showL('Deleting purchase...');
   const tok = await getAuthToken();
-  const h = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+  const h = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'};
   // Delete inventory transactions linked to this purchase
   const dr1 = await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+id, {method:'DELETE',headers:h});
   if(!dr1.ok){ hideL(); toast('Could not delete inventory transactions (code '+dr1.status+') — check DB permissions','err'); return; }
