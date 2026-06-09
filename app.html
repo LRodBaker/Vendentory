@@ -2782,6 +2782,8 @@ RULES:
 3. supplier = the vendor/seller name as shown on the receipt header (e.g. "Amazon", "Sam's Club").
 4. unit_cost = cost per CASE (same denominator as qty). line_total = qty x unit_cost.
 5. receipt_total = the final grand total charged as shown on the receipt.
+6. CRITICAL — "lines" must contain ONLY actual purchased products. Never include tax, sales tax, shipping, handling, fees, tips, discounts, or any non-product charge as a line item. Those belong ONLY in the top-level tax/shipping/extra_costs fields.
+7. If a line on the receipt is clearly a fee, tax, or shipping charge — put it in the correct header field and do NOT add it to lines.
 
 PRODUCT LIST (name | id | type | units_per_case):
 ${prodContext}
@@ -2875,8 +2877,23 @@ function openAIImportPreview(data) {
   // We convert to individual units here (cases × units_per_case) so the
   // purchase line matches the manual-entry format used everywhere else.
   PL = [];
-  if(data.lines && data.lines.length > 0) {
-    data.lines.forEach(line => {
+
+  // Safety filter — strip any line the AI misclassified as a product
+  // (tax, shipping, fees, discounts, etc.)
+  const NON_PRODUCT = /tax|ship|handl|fee|tip|discount|rebate|credit|refund|surcharge|service charge/i;
+  const productLines = (data.lines||[]).filter(line => {
+    const desc = (line.description||'').trim();
+    if(!desc) return false;
+    if(NON_PRODUCT.test(desc) && !line.matched_product_id) return false;
+    return true;
+  });
+  if(productLines.length < (data.lines||[]).length) {
+    const skipped = (data.lines||[]).length - productLines.length;
+    setTimeout(()=>toast(`Removed ${skipped} non-product line${skipped!==1?'s':''} (tax/shipping) from import`,'warn'),300);
+  }
+
+  if(productLines.length > 0) {
+    productLines.forEach(line => {
       const matchedProd = line.matched_product_id
         ? AP.find(p => p.product_id === line.matched_product_id || p.id === line.matched_product_id)
         : null;
