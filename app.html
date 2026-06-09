@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Vendentory">
@@ -834,15 +837,17 @@ let _editPurId = null;  // set when editing an existing purchase
 // ── Get current auth token (session token if logged in, anon key as fallback) ──
 let _cachedToken = null;
 async function getAuthToken() {
-  if (_cachedToken) return _cachedToken;
+  // Always try a fresh getSession first — don't rely on cache for writes
+  // (cached token can expire mid-session, causing silent DELETE/PATCH failures)
   try {
-    // Hard 4s timeout — if getSession hangs (common on iOS background tab),
-    // fall back to anon key immediately so the save fetch can still proceed.
     const timeout = new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), 4000));
     const result = await Promise.race([sb.auth.getSession(), timeout]);
     const session = result?.data?.session;
     if (session?.access_token) { _cachedToken = session.access_token; return _cachedToken; }
   } catch(e) {}
+  // Fall back to cached token if getSession fails
+  if (_cachedToken) return _cachedToken;
+  // Last resort — anon key (read-only operations only)
   return SKEY;
 }
 
@@ -3022,8 +3027,8 @@ async function loadPurHistory(){
   const monthNames=['January','February','March','April','May','June','July','August','September','October','November','December'];
   const curYr=nowD.getFullYear().toString();
 
-  // All months open by default — flat list newest first, no year nesting.
-  // Current month header is highlighted teal. Click any header to collapse.
+  // Current month open, past months collapsed. Flat list newest first, no year nesting.
+  // Current month highlighted teal. Click any header to toggle.
   function monthFolderHTML(mk){
     const [yr,mo]=mk.split('-');
     const label=monthNames[parseInt(mo)-1]+' '+yr;
@@ -3032,18 +3037,19 @@ async function loadPurHistory(){
     const count=monthPurs.length;
     const gid='phg-'+mk.replace('-','');
     const isCur=mk===curMonKey;
+    const open=isCur; // only current month starts open
     return`<div style="border:0.5px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;cursor:pointer;background:${isCur?'var(--teal-light)':'var(--gray-50)'};border-bottom:0.5px solid var(--border)" onclick="togglePurGroup('${gid}',this)">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;cursor:pointer;background:${isCur?'var(--teal-light)':'var(--gray-50)'};border-bottom:${open?'0.5px solid var(--border)':'none'}" onclick="togglePurGroup('${gid}',this)">
         <div style="display:flex;align-items:center;gap:9px">
           <span style="font-weight:700;font-size:13px;color:${isCur?'var(--teal-dark)':'var(--gray-900)'}">${label}</span>
           ${isCur?'<span style="font-size:10px;font-weight:700;background:var(--teal);color:#fff;padding:1px 7px;border-radius:10px;letter-spacing:.3px">CURRENT</span>':''}
         </div>
         <div style="display:flex;align-items:center;gap:12px">
           <span style="font-size:12px;color:var(--gray-600)">${count} purchase${count!==1?'s':''} · <strong>${fmt(monthTotal)}</strong></span>
-          <span style="font-size:13px;color:var(--gray-400)" id="${gid}-arrow">&#9660;</span>
+          <span style="font-size:13px;color:var(--gray-400)" id="${gid}-arrow">${open?'&#9660;':'&#9654;'}</span>
         </div>
       </div>
-      <div id="${gid}" style="display:block;padding:0 14px">
+      <div id="${gid}" style="display:${open?'block':'none'};padding:0 14px">
         ${monthPurs.map(p=>purRowHTML(p)).join('')}
       </div>
     </div>`;
@@ -3104,8 +3110,11 @@ async function deletePurchase(id, label) {
     // Step 3 — delete the purchase header itself
     const dr3 = await fetch(SURL+'/rest/v1/purchases?id=eq.'+id, {method:'DELETE',headers:h});
     if(!dr3.ok) {
-      let msg=''; try{ const j=await dr3.json(); msg=j.message||''; }catch(e){}
-      hideL(); toast('Could not delete purchase ('+dr3.status+(msg?': '+msg:'')+')', 'err'); return;
+      let msg='';
+      try{ const j=await dr3.json(); msg=j.message||j.hint||j.details||JSON.stringify(j); }catch(e){}
+      hideL();
+      toast('Could not delete purchase ('+dr3.status+(msg?': '+msg:'')+')', 'err');
+      return;
     }
 
     hideL();
