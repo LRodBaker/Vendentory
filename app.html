@@ -3219,19 +3219,74 @@ async function savePur() {
   // Insert all inventory transactions in one batch
   if(invTxns.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
 
-  // Update WAC for each affected product
-  for(const u of wacUpdates) {
-    const prod = AP.find(p => p.id === u.product_id || p.product_id === u.product_id);
-    const cq = parseFloat(prod?.on_hand_qty)||0, cc = parseFloat(prod?.average_cost)||0;
-    const nq = cq + u.units;
-    const na = nq > 0 ? ((cq*cc)+(u.units*u.unit_cost))/nq : u.unit_cost;
-    await fetch(SURL+'/rest/v1/products?id=eq.'+u.product_id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({average_cost:na,last_cost:u.unit_cost,updated_at:new Date().toISOString()})});
+  // Recalculate WAC from full purchase history for each affected product
+  const wacProductIds = [...new Set(wacUpdates.map(u => u.product_id))];
+  for(const pid of wacProductIds) {
+    await replayWAC(pid, wh);
   }
   hideL();
   const wasEdit=!!_editPurId; _editPurId=null;
   toast(wasEdit?'Purchase updated!':status==='ordered'?'Order saved! Inventory will update when marked received.':'Purchase received! Inventory updated.','ok');
   clrPur(); await loadProds2(); renderProds(); loadPurHistory();
 }
+
+// ─── WAC REPLAY ────────────────────────────────────────────────────────────────
+// Recomputes average_cost for a product by replaying ALL purchase_receipt
+// transactions in chronological order. Ignores any lines with qty <= 0 or
+// unit_cost <= 0 (bad data, opening-balance noise, etc.). Also captures
+// last_cost from the most recent valid receipt.
+// Called after every purchase receive so historical bad costs self-correct.
+async function replayWAC(productId, wh) {
+  try {
+    // Fetch every purchase_receipt for this product, oldest first
+    const r = await fetch(
+      SURL+'/rest/v1/inventory_transactions'
+        +'?product_id=eq.'+productId
+        +'&transaction_type=eq.purchase_receipt'
+        +'&select=quantity_change,unit_cost,transaction_date,created_at'
+        +'&order=transaction_date.asc,created_at.asc',
+      { headers: wh }
+    );
+    if(!r.ok) return;
+    const txns = await r.json();
+
+    // Filter to only valid, meaningful receipts
+    const valid = txns.filter(t => {
+      const qty = parseFloat(t.quantity_change);
+      const uc  = parseFloat(t.unit_cost);
+      return qty > 0 && uc > 0;
+    });
+
+    if(!valid.length) return; // no receipts yet — leave average_cost alone
+
+    // Replay running WAC
+    let runQty = 0, runWAC = 0;
+    let lastCost = 0;
+    for(const t of valid) {
+      const qty = parseFloat(t.quantity_change);
+      const uc  = parseFloat(t.unit_cost);
+      runWAC  = (runQty * runWAC + qty * uc) / (runQty + qty);
+      runQty += qty;
+      lastCost = uc;
+    }
+
+    // Round to 6 decimal places to keep DB tidy
+    const newWAC = Math.round(runWAC * 1000000) / 1000000;
+
+    await fetch(SURL+'/rest/v1/products?id=eq.'+productId, {
+      method: 'PATCH',
+      headers: { ...wh, 'Prefer': 'return=minimal' },
+      body: JSON.stringify({
+        average_cost: newWAC,
+        last_cost:    Math.round(lastCost * 1000000) / 1000000,
+        updated_at:   new Date().toISOString()
+      })
+    });
+  } catch(e) {
+    console.warn('replayWAC failed for '+productId, e);
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function srchAdj(){
   const q=document.getElementById('aps').value.toLowerCase();
