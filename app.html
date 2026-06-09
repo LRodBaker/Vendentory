@@ -2625,7 +2625,7 @@ function renderPL() {
 function selPP(i,pid){
   const p=AP.find(x=>x.product_id===pid);if(!p)return;
   // For bulk products units_per_case is always 1 — real pack size is in _qty_per_pack
-  const upc = p.product_type==='bulk' && p._qty_per_pack>0
+  const upc = (p.product_type==='bulk'||p.product_type==='variety') && p._qty_per_pack>0
     ? p._qty_per_pack
     : (parseInt(p.units_per_case)||1);
   PL[i].product_id=pid;
@@ -2645,7 +2645,7 @@ function updPL(i,f,v){
   const prod=AP.find(x=>x.product_id===PL[i].product_id);
   // For bulk products units_per_case is always 1 — real pack size is in _qty_per_pack
   const upc = PL[i]._upc || (
-    prod?.product_type==='bulk' && prod?._qty_per_pack>0
+    (prod?.product_type==='bulk'||prod?.product_type==='variety') && prod?._qty_per_pack>0
       ? prod._qty_per_pack
       : (parseInt(prod?.units_per_case)||1)
   );
@@ -2779,6 +2779,7 @@ async function markPurReceived(id){
 
 // ── AI PURCHASE IMPORT ───────────────────────────────────────────────────────
 function openAIImport() {
+  clrPur(); // always start fresh before an AI import
   document.getElementById('ai-import-file').click();
 }
 
@@ -2925,7 +2926,7 @@ function openAIImportPreview(data) {
         ? AP.find(p => p.product_id === line.matched_product_id || p.id === line.matched_product_id)
         : null;
       // For bulk products units_per_case is always 1 — real pack size is in _qty_per_pack
-      const upc = matchedProd?.product_type === 'bulk' && matchedProd?._qty_per_pack > 0
+      const upc = (matchedProd?.product_type === 'bulk'||matchedProd?.product_type === 'variety') && matchedProd?._qty_per_pack > 0
         ? matchedProd._qty_per_pack
         : (parseInt(matchedProd?.units_per_case) || 1);
       const cases      = line.qty || 1;
@@ -3177,7 +3178,7 @@ async function editPurchase(id) {
   // Populate purchase lines
   PL = lines.map(l => {
     const cachedProd = AP.find(x=>x.id===l.product_id||x.product_id===l.product_id);
-    const upc = cachedProd?.product_type==='bulk' && cachedProd?._qty_per_pack>0
+    const upc = (cachedProd?.product_type==='bulk'||cachedProd?.product_type==='variety') && cachedProd?._qty_per_pack>0
       ? cachedProd._qty_per_pack
       : (parseInt(cachedProd?.units_per_case)||1);
     return {
