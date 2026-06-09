@@ -2722,7 +2722,7 @@ async function checkOverdueOrders(){
         <span><strong>${p.suppliers?.name||'Unknown'}</strong> ordered ${fmtD(p.purchase_date)} &mdash; <strong style="color:#991B1B">${days(p.purchase_date)} days ago</strong></span>
         <div style="display:flex;gap:6px">
           <button class="btn btn-sm btn-p" onclick="markPurReceived('${p.id}')">Mark received</button>
-          <button class="btn btn-sm btn-d" onclick="deletePurchase('${p.id}','${p.suppliers?.name||'this order'}')">Delete</button>
+          <button class="btn btn-sm btn-d" data-pid="${p.id}" data-plabel="${(p.suppliers?.name||'this order').replace(/"/g,'&quot;')}" data-action="del-pur">Delete</button>
         </div>
       </div>`).join('');
     banner.style.display='block';
@@ -3002,10 +3002,10 @@ async function loadPurHistory(){
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div style="font-size:16px;font-weight:700;font-family:var(--font-head)">${fmt(p.total_amount)}</div>
-          ${isOrdered?`<button class="btn btn-sm btn-p" onclick="openReceiveOrder('${p.id}')">&#10003; Receive order</button>`:''}
-          <button class="btn btn-sm" onclick="editPurchase('${p.id}')" title="Edit">&#9998; Edit</button>
-          <button class="btn btn-sm" onclick="togglePurLines('${p.id}',this)">&#9658; Details</button>
-          <button class="btn btn-sm btn-d" onclick="deletePurchase('${p.id}','${(p.suppliers?.name||'this purchase').replace(/'/g,"\'")}')" title="Delete">&#128465;</button>
+          ${isOrdered?`<button class="btn btn-sm btn-p" data-pid="${p.id}" data-action="receive-pur">&#10003; Receive order</button>`:''}
+          <button class="btn btn-sm" data-pid="${p.id}" data-action="edit-pur" title="Edit">&#9998; Edit</button>
+          <button class="btn btn-sm" data-pid="${p.id}" data-action="detail-pur">&#9658; Details</button>
+          <button class="btn btn-sm btn-d" data-pid="${p.id}" data-plabel="${(p.suppliers?.name||'this purchase').replace(/"/g,'&quot;')}" data-action="del-pur" title="Delete">&#128465;</button>
         </div>
       </div>
       <div id="phl-${p.id}" style="display:none;margin-top:10px"></div>
@@ -3054,6 +3054,20 @@ async function loadPurHistory(){
   let html='';
   allMonthKeys.forEach(mk=>{ html+=monthFolderHTML(mk); });
   el.innerHTML=html;
+
+  // Delegated listener — handles all purchase row buttons without inline onclick strings
+  // (inline onclick with apostrophes in supplier names like "Sam's Club" silently breaks)
+  el.addEventListener('click', function(e){
+    const btn = e.target.closest('[data-action]');
+    if(!btn) return;
+    const action = btn.dataset.action;
+    const pid    = btn.dataset.pid;
+    const label  = btn.dataset.plabel || 'this purchase';
+    if(action === 'del-pur')     deletePurchase(pid, label);
+    if(action === 'edit-pur')    editPurchase(pid);
+    if(action === 'receive-pur') openReceiveOrder(pid);
+    if(action === 'detail-pur')  togglePurLines(pid, btn);
+  });
 }
 
 function togglePurGroup(gid, header){
