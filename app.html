@@ -2970,6 +2970,13 @@ function openAIImportPreview(data) {
 async function loadPurHistory(){
   const el=document.getElementById('pur-history');
   if(!el)return;
+
+  // Save which month groups are currently open so we can restore after reload
+  const openGroups=new Set();
+  el.querySelectorAll('[id^="phg-"]').forEach(div=>{
+    if(div.style.display!=='none') openGroups.add(div.id);
+  });
+
   el.innerHTML='<div class="tm">Loading...</div>';
   const monthVal=document.getElementById('ph-month')?.value;
   let purFilters = {};
@@ -3058,19 +3065,36 @@ async function loadPurHistory(){
   allMonthKeys.forEach(mk=>{ html+=monthFolderHTML(mk); });
   el.innerHTML=html;
 
-  // Delegated listener — handles all purchase row buttons without inline onclick strings
-  // (inline onclick with apostrophes in supplier names like "Sam's Club" silently breaks)
-  el.addEventListener('click', function(e){
-    const btn = e.target.closest('[data-action]');
-    if(!btn) return;
-    const action = btn.dataset.action;
-    const pid    = btn.dataset.pid;
-    const label  = btn.dataset.plabel || 'this purchase';
-    if(action === 'del-pur')     deletePurchase(pid, label);
-    if(action === 'edit-pur')    editPurchase(pid);
-    if(action === 'receive-pur') openReceiveOrder(pid);
-    if(action === 'detail-pur')  togglePurLines(pid, btn);
-  });
+  // Restore previously open months (preserves state across reloads)
+  // Current month is already open by default from monthFolderHTML.
+  // Any other month that was open before the reload gets re-opened here.
+  if(openGroups.size){
+    openGroups.forEach(gid=>{
+      const div=document.getElementById(gid);
+      const arrow=document.getElementById(gid+'-arrow');
+      if(div && div.style.display==='none'){
+        div.style.display='block';
+        if(arrow) arrow.innerHTML='&#9660;';
+      }
+    });
+  }
+
+  // Delegated listener — attached once only via a flag on the element
+  // to prevent multiple listeners accumulating across loadPurHistory() calls
+  if(!el._purListenerAttached){
+    el._purListenerAttached = true;
+    el.addEventListener('click', function(e){
+      const btn = e.target.closest('[data-action]');
+      if(!btn) return;
+      const action = btn.dataset.action;
+      const pid    = btn.dataset.pid;
+      const label  = btn.dataset.plabel || 'this purchase';
+      if(action === 'del-pur')     deletePurchase(pid, label);
+      if(action === 'edit-pur')    editPurchase(pid);
+      if(action === 'receive-pur') openReceiveOrder(pid);
+      if(action === 'detail-pur')  togglePurLines(pid, btn);
+    });
+  }
 }
 
 function togglePurGroup(gid, header){
