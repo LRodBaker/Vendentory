@@ -3001,15 +3001,15 @@ async function loadPurHistory(){
       ?`<span class="badge" style="background:${overdue?'var(--red-light)':'var(--amber-light)'};color:${overdue?'var(--red)':'var(--amber)'};margin-left:4px">${overdue?'&#9888; OVERDUE':'Ordered'}</span>`
       :`<span class="badge b-ok" style="margin-left:4px">Received</span>`;
     return`<div style="border-bottom:0.5px solid var(--border);padding:11px 0${overdue?';background:#FFF8F8;border-radius:8px;padding:10px;margin-bottom:4px':''}">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-        <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:nowrap">
+        <div style="min-width:0;flex:1">
           <div style="font-weight:600;font-size:13px">${p.suppliers?.name||'Unknown supplier'} ${statusBadge}</div>
-          <div style="font-size:12px;color:var(--gray-400);margin-top:2px">${fmtD(p.purchase_date)}${p.invoice_number?' · Invoice: '+p.invoice_number:''}${p.notes?' · '+p.notes:''}</div>
+          <div style="font-size:12px;color:var(--gray-400);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${fmtD(p.purchase_date)}${p.invoice_number?' · Invoice: '+p.invoice_number:''}${p.notes?' · '+p.notes:''}</div>
           <div style="font-size:11px;color:var(--gray-400);margin-top:1px">
             Sub: ${fmt(p.subtotal_amount)}${p.shipping_cost>0?' · Ship: '+fmt(p.shipping_cost):''}${p.tax_amount>0?' · Tax: '+fmt(p.tax_amount):''}${p.extra_costs>0?' · Extra: '+fmt(p.extra_costs):''}
           </div>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:nowrap">
           <div style="font-size:16px;font-weight:700;font-family:var(--font-head)">${fmt(p.total_amount)}</div>
           ${isOrdered?`<button class="btn btn-sm btn-p" data-pid="${p.id}" data-action="receive-pur">&#10003; Receive order</button>`:''}
           <button class="btn btn-sm" data-pid="${p.id}" data-action="edit-pur" title="Edit">&#9998; Edit</button>
