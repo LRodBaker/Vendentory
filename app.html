@@ -2673,21 +2673,23 @@ function updPL(i,f,v){
   }
 
   // Update DOM without full re-render (preserves focus while typing)
+  // inputs order: cases(0), cost_per_case(1), units(2), unit_cost(3)
   const lineEls = document.getElementById('plines').children;
   if(lineEls[i]){
     const totalDiv = lineEls[i].querySelector('[data-total]');
     if(totalDiv) totalDiv.textContent = fmt(PL[i].total);
     const inputs = lineEls[i].querySelectorAll('input');
-    // inputs order: cases(0), cost_per_case(1), units(2), unit_cost(3)
-    if(f==='cases'||f==='cost_per_case'||f==='units'){
-      if(inputs[2] && document.activeElement!==inputs[2]) inputs[2].value = PL[i].units;
-      if(inputs[3] && document.activeElement!==inputs[3]) inputs[3].value = PL[i].unit_cost.toFixed(4);
+    // Always update unit_cost — it is always a computed output, never a free-type field
+    // (unless the user is literally typing IN the unit_cost box, handled by its own branch)
+    if(f !== 'unit_cost'){
+      // Update units only if user isn't currently typing in it
+      if(inputs[2] && document.activeElement !== inputs[2]) inputs[2].value = PL[i].units;
+      // Always update unit_cost display — it's derived, never active while user types cases/cost/units
+      if(inputs[3]) inputs[3].value = PL[i].unit_cost.toFixed(4);
     }
-    if(f==='unit_cost'){
-      if(inputs[1] && document.activeElement!==inputs[1]) inputs[1].value = PL[i].cost_per_case.toFixed(2);
-    }
-    if(f==='cases'||f==='unit_cost'){
-      if(inputs[2] && document.activeElement!==inputs[2]) inputs[2].value = PL[i].units;
+    if(f === 'unit_cost'){
+      if(inputs[1] && document.activeElement !== inputs[1]) inputs[1].value = PL[i].cost_per_case.toFixed(2);
+      if(inputs[2] && document.activeElement !== inputs[2]) inputs[2].value = PL[i].units;
     }
   }
   updPT();
