@@ -2622,10 +2622,14 @@ function renderPL() {
 
 function selPP(i,pid){
   const p=AP.find(x=>x.product_id===pid);if(!p)return;
-  const upc=parseInt(p.units_per_case)||1;
+  // For bulk products units_per_case is always 1 — real pack size is in _qty_per_pack
+  const upc = p.product_type==='bulk' && p._qty_per_pack>0
+    ? p._qty_per_pack
+    : (parseInt(p.units_per_case)||1);
   PL[i].product_id=pid;
   PL[i].name=p.name;
   PL[i].units=PL[i].cases*upc;
+  PL[i]._upc=upc; // cache so updPL can use it without re-looking up
   // Don't pre-fill cost — user enters actual receipt cost
   PL[i].cost_per_case=PL[i].cost_per_case||0;
   PL[i].total=PL[i].cost_per_case*PL[i].cases;
@@ -2637,7 +2641,12 @@ function updPL(i,f,v){
   const val=parseFloat(v)||0;
   PL[i][f]=val;
   const prod=AP.find(x=>x.product_id===PL[i].product_id);
-  const upc=parseInt(prod?.units_per_case)||1;
+  // For bulk products units_per_case is always 1 — real pack size is in _qty_per_pack
+  const upc = PL[i]._upc || (
+    prod?.product_type==='bulk' && prod?._qty_per_pack>0
+      ? prod._qty_per_pack
+      : (parseInt(prod?.units_per_case)||1)
+  );
 
   if(f==='cases'){
     // Recalculate units from cases × upc, then derive unit_cost
@@ -3116,15 +3125,22 @@ async function editPurchase(id) {
   const supEl = document.getElementById('pus');
   if(supEl && p.supplier_id) supEl.value = p.supplier_id;
   // Populate purchase lines
-  PL = lines.map(l => ({
-    product_id:    l.product_id,
-    name:          l.products?.name || '',
-    cases:         l.cases || 0,
-    cost_per_case: l.cost_per_case || 0,
-    units:         l.units_received,
-    unit_cost:     l.unit_cost,
-    total:         l.line_total
-  }));
+  PL = lines.map(l => {
+    const cachedProd = AP.find(x=>x.id===l.product_id||x.product_id===l.product_id);
+    const upc = cachedProd?.product_type==='bulk' && cachedProd?._qty_per_pack>0
+      ? cachedProd._qty_per_pack
+      : (parseInt(cachedProd?.units_per_case)||1);
+    return {
+      product_id:    l.product_id,
+      name:          l.products?.name || '',
+      cases:         l.cases || 0,
+      cost_per_case: l.cost_per_case || 0,
+      units:         l.units_received,
+      unit_cost:     l.unit_cost,
+      total:         l.line_total,
+      _upc:          upc
+    };
+  });
   _editPurId = id;
   renderPL();
   updPT();
