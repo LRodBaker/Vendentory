@@ -590,6 +590,14 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
               <div class="ir"><div style="color:var(--gray-400)">Scan suffix</div><div style="font-weight:500">Enter (auto)</div></div>
             </div>
             <div class="card">
+              <div class="card-title">&#9881; Inventory Costing</div>
+              <div style="font-size:13px;color:var(--gray-600);margin-bottom:10px;line-height:1.5">
+                Recalculates the Weighted Average Cost (WAC) for <strong>every active product</strong> by replaying all purchase receipts from oldest to newest. Use this to fix any products with incorrect costs that haven't been touched by a recent purchase.
+              </div>
+              <div id="wac-recalc-status" style="display:none;font-size:13px;margin-bottom:10px;padding:10px 13px;border-radius:8px"></div>
+              <button class="btn btn-p btn-sm" id="wac-recalc-btn" onclick="recalcAllWAC()">&#8635; Recalculate All WAC</button>
+            </div>
+            <div class="card">
               <div class="card-title">Security</div>
               <div class="ir"><div style="color:var(--gray-400)">Session</div><div class="tg" style="font-weight:500">Active</div></div>
               <div class="ir"><div style="color:var(--gray-400)">Audit logging</div><div class="tg" style="font-weight:500">Enabled</div></div>
@@ -3285,6 +3293,73 @@ async function replayWAC(productId, wh) {
   } catch(e) {
     console.warn('replayWAC failed for '+productId, e);
   }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── RECALC ALL WAC (Settings button) ────────────────────────────────────────
+// Runs replayWAC across every active individual product. Bulk products are
+// skipped — their WAC is irrelevant (units_per_case=1, cost flows to individual).
+async function recalcAllWAC() {
+  const btn    = document.getElementById('wac-recalc-btn');
+  const status = document.getElementById('wac-recalc-status');
+
+  // Guard: don't double-run
+  if(btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = '⏳ Running…';
+  status.style.display = 'none';
+
+  // Only individual products have a meaningful WAC
+  const targets = AP.filter(p => p.product_type === 'individual' && p.is_active !== false);
+  if(!targets.length) {
+    status.style.background = 'var(--amber-light)';
+    status.style.color      = 'var(--amber)';
+    status.textContent      = 'No active individual products found.';
+    status.style.display    = 'block';
+    btn.disabled = false;
+    btn.textContent = '↻ Recalculate All WAC';
+    return;
+  }
+
+  const tok = await getAuthToken();
+  const wh  = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+
+  let done = 0, fixed = 0, errors = 0;
+  for(const p of targets) {
+    btn.textContent = `⏳ ${done+1} / ${targets.length}…`;
+    const oldWAC = parseFloat(p.average_cost) || 0;
+    try {
+      await replayWAC(p.id, wh);
+      // Check what replayWAC wrote back
+      const chk = await fetch(SURL+'/rest/v1/products?id=eq.'+p.id+'&select=average_cost', { headers: wh });
+      if(chk.ok) {
+        const rows = await chk.json();
+        const newWAC = parseFloat(rows[0]?.average_cost) || 0;
+        if(Math.abs(newWAC - oldWAC) > 0.0001) fixed++;
+      }
+    } catch(e) {
+      errors++;
+      console.warn('recalcAllWAC error on', p.name, e);
+    }
+    done++;
+  }
+
+  // Reload product cache so the UI shows updated costs immediately
+  await loadProds2();
+  renderProds();
+
+  // Show result
+  const hasErrors = errors > 0;
+  status.style.background = hasErrors ? 'var(--amber-light)' : 'var(--green-light)';
+  status.style.color      = hasErrors ? 'var(--amber)'       : 'var(--green)';
+  status.innerHTML = hasErrors
+    ? `⚠ Done with ${errors} error${errors!==1?'s':''}. ${fixed} product${fixed!==1?'s':''} updated, ${done-errors-fixed} already correct.`
+    : `✓ All ${done} products checked. ${fixed} WAC value${fixed!==1?'s':''} corrected${fixed===0?' — everything looks good!':'.'}`;
+  status.style.display = 'block';
+
+  btn.disabled    = false;
+  btn.textContent = '↻ Recalculate All WAC';
+  toast(fixed > 0 ? `WAC recalculated — ${fixed} product${fixed!==1?'s':''} corrected` : 'WAC check complete — all costs correct', 'ok');
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
