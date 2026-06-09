@@ -694,8 +694,8 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
         <div class="fg"><label class="fl">Category</label><select class="fs" id="pca"></select></div>
         <div class="fg"><label class="fl">Brand</label><input class="fi" id="pbr" placeholder="e.g. Monster"></div>
         <div class="fg" id="fg-sup"><label class="fl">Supplier</label><select class="fs" id="psu"></select></div>
-        <!-- Units per case — bulk & variety only -->
-        <div class="fg" id="fg-upc" style="display:none"><label class="fl">Units per case</label><input class="fi" type="number" id="pupc" value="1" min="1"></div>
+        <!-- Units per case — always 1 for bulk/variety, hidden from UI -->
+        <div class="fg" id="fg-upc" style="display:none"><input type="hidden" id="pupc" value="1"></div>
         <!-- Cost + price — individual only -->
         <div class="fg" id="fg-lc" style="display:none"><label class="fl">Last cost ($)</label><input class="fi" type="number" id="plc" value="0" step="0.01"></div>
         <div class="fg" id="fg-sp" style="display:none"><label class="fl">Selling price ($)</label><input class="fi" type="number" id="psp" value="0" step="0.01"></div>
@@ -1202,7 +1202,7 @@ async function openPD(id) {
         <div class="ir"><div style="color:var(--gray-400)">On hand</div><div style="font-size:15px;font-weight:700;color:${p.on_hand_qty<=p.reorder_point?'var(--red-mid)':'var(--teal)'}">${p.on_hand_qty} units</div></div>
         <div class="ir"><div style="color:var(--gray-400)">Reorder point</div><div style="font-weight:500">${p.reorder_point}</div></div>
         <div class="ir"><div style="color:var(--gray-400)">Order up to</div><div style="font-weight:500">${p.order_up_to_level}</div></div>
-        <div class="ir"><div style="color:var(--gray-400)">Units per case</div><div style="font-weight:500">${p.units_per_case}</div></div>
+
       </div>
       <div>
         <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);margin-bottom:7px">Cost &amp; price</div>
@@ -1546,7 +1546,7 @@ function setProdType(type) {
   const isVariety = type === 'variety';
   document.getElementById('pIsVariety').checked = isVariety;
   // Show/hide field groups
-  document.getElementById('fg-upc').style.display    = type==='variety' ? '' : 'none';
+  document.getElementById('fg-upc').style.display    = 'none'; // always hidden — units_per_case is always 1 for bulk/variety
   if(type==='bulk') document.getElementById('pupc').value = '1'; // bulk always upc=1
   document.getElementById('fg-rp').style.display     = type==='individual' ? '' : 'none';
   document.getElementById('fg-ou').style.display     = type==='individual' ? '' : 'none';
@@ -2799,7 +2799,7 @@ async function handleAIImportFile(input) {
       reader.readAsDataURL(file);
     });
     // Build product list context for matching
-    const prodContext = AP.map(p=>`${p.name} | id:${p.id} | type:${p.product_type||'individual'} | upc:${p.units_per_case||1}`).join('\n');
+    const prodContext = AP.map(p=>`${p.name} | id:${p.id} | type:${p.product_type||'individual'} | pack_qty:${p._qty_per_pack||p.units_per_case||1}`).join('\n');
     const prompt = `You are a purchase receipt parser for a vending machine business inventory app.
 
 Read the receipt PDF carefully and extract all purchased line items.
