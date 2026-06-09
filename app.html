@@ -2980,80 +2980,37 @@ async function loadPurHistory(){
   const monthNames=['January','February','March','April','May','June','July','August','September','October','November','December'];
   const curYr=nowD.getFullYear().toString();
 
-  function monthFolderHTML(mk, indented){
+  // All months open by default — flat list newest first, no year nesting.
+  // Current month header is highlighted teal. Click any header to collapse.
+  function monthFolderHTML(mk){
     const [yr,mo]=mk.split('-');
-    const label=monthNames[parseInt(mo)-1]+(indented?'':' '+yr);
+    const label=monthNames[parseInt(mo)-1]+' '+yr;
     const monthPurs=groups[mk];
     const monthTotal=monthPurs.reduce((s,p)=>s+parseFloat(p.total_amount||0),0);
     const count=monthPurs.length;
     const gid='phg-'+mk.replace('-','');
-    const pad=indented?'padding:0 0 0 0':'';
-    return`<div style="border:0.5px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden;${pad}">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;cursor:pointer;background:var(--gray-50)" onclick="togglePurGroup('${gid}',this)">
-        <div style="font-weight:600;font-size:13px">${label}</div>
+    const isCur=mk===curMonKey;
+    return`<div style="border:0.5px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;cursor:pointer;background:${isCur?'var(--teal-light)':'var(--gray-50)'};border-bottom:0.5px solid var(--border)" onclick="togglePurGroup('${gid}',this)">
+        <div style="display:flex;align-items:center;gap:9px">
+          <span style="font-weight:700;font-size:13px;color:${isCur?'var(--teal-dark)':'var(--gray-900)'}">${label}</span>
+          ${isCur?'<span style="font-size:10px;font-weight:700;background:var(--teal);color:#fff;padding:1px 7px;border-radius:10px;letter-spacing:.3px">CURRENT</span>':''}
+        </div>
         <div style="display:flex;align-items:center;gap:12px">
-          <span style="font-size:12px;color:var(--gray-400)">${count} purchase${count!==1?'s':''} · ${fmt(monthTotal)}</span>
-          <span style="font-size:12px;color:var(--gray-400)" id="${gid}-arrow">&#9654;</span>
+          <span style="font-size:12px;color:var(--gray-600)">${count} purchase${count!==1?'s':''} · <strong>${fmt(monthTotal)}</strong></span>
+          <span style="font-size:13px;color:var(--gray-400)" id="${gid}-arrow">&#9660;</span>
         </div>
       </div>
-      <div id="${gid}" style="display:none;padding:0 14px">
+      <div id="${gid}" style="display:block;padding:0 14px">
         ${monthPurs.map(p=>purRowHTML(p)).join('')}
       </div>
     </div>`;
   }
 
-  // Separate month keys into: current month, past months this year, prior years
-  const pastMonthsThisYear=[];
-  const byYear={};
-  Object.keys(groups).sort((a,b)=>b.localeCompare(a)).forEach(mk=>{
-    if(mk===curMonKey) return; // handled separately
-    const yr=mk.substring(0,4);
-    if(yr===curYr){
-      pastMonthsThisYear.push(mk);
-    } else {
-      if(!byYear[yr])byYear[yr]=[];
-      byYear[yr].push(mk);
-    }
-  });
-
+  // Sort all months newest → oldest, flat — no year nesting
+  const allMonthKeys=Object.keys(groups).sort((a,b)=>b.localeCompare(a));
   let html='';
-
-  // 1. Current month — flat
-  if(groups[curMonKey]){
-    const mp=groups[curMonKey];
-    const mt=mp.reduce((s,p)=>s+parseFloat(p.total_amount||0),0);
-    html+=`<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-400);margin:4px 0 8px">${monthNames[nowD.getMonth()]} ${curYr} <span style="font-weight:400;color:var(--gray-300)">· ${mp.length} purchase${mp.length!==1?'s':''} · ${fmt(mt)}</span></div>`;
-    html+=mp.map(p=>purRowHTML(p)).join('');
-  }
-
-  // 2. Past months in current year — individual collapsed month folders
-  if(pastMonthsThisYear.length){
-    if(groups[curMonKey]) html+='<div style="margin-top:12px"></div>';
-    pastMonthsThisYear.forEach(mk=>{ html+=monthFolderHTML(mk, false); });
-  }
-
-  // 3. Prior years — one collapsed year folder, months nested inside
-  const priorYears=Object.keys(byYear).sort((a,b)=>b.localeCompare(a));
-  priorYears.forEach(yr=>{
-    const monthsInYear=byYear[yr]; // already sorted desc
-    const yearTotal=monthsInYear.reduce((s,mk)=>s+groups[mk].reduce((ss,p)=>ss+parseFloat(p.total_amount||0),0),0);
-    const yearCount=monthsInYear.reduce((s,mk)=>s+groups[mk].length,0);
-    const ygid='phgy-'+yr;
-    const monthsHTML=monthsInYear.map(mk=>monthFolderHTML(mk, true)).join('');
-    html+=`<div style="border:0.5px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;cursor:pointer;background:var(--gray-50)" onclick="togglePurGroup('${ygid}',this)">
-        <div style="font-weight:700;font-size:13px">${yr}</div>
-        <div style="display:flex;align-items:center;gap:12px">
-          <span style="font-size:12px;color:var(--gray-400)">${yearCount} purchase${yearCount!==1?'s':''} · ${fmt(yearTotal)}</span>
-          <span style="font-size:12px;color:var(--gray-400)" id="${ygid}-arrow">&#9654;</span>
-        </div>
-      </div>
-      <div id="${ygid}" style="display:none;padding:8px 14px">
-        ${monthsHTML}
-      </div>
-    </div>`;
-  });
-
+  allMonthKeys.forEach(mk=>{ html+=monthFolderHTML(mk); });
   el.innerHTML=html;
 }
 
@@ -3068,23 +3025,41 @@ function togglePurGroup(gid, header){
 }
 
 async function deletePurchase(id, label) {
-  if(!confirm('Delete purchase from ' + label + '?\n\nThis will also reverse the inventory transactions (purchase receipts) linked to this purchase. This cannot be undone.')) return;
+  if(!confirm('Delete purchase from ' + label + '?\n\nThis will also reverse any inventory transactions linked to this purchase. This cannot be undone.')) return;
   showL('Deleting purchase...');
-  const tok = await getAuthToken();
-  const h = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'};
-  // Delete inventory transactions linked to this purchase
-  const dr1 = await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+id, {method:'DELETE',headers:h});
-  if(!dr1.ok){ hideL(); toast('Could not delete inventory transactions (code '+dr1.status+') — check DB permissions','err'); return; }
-  // Delete purchase lines
-  const dr2 = await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+id, {method:'DELETE',headers:h});
-  if(!dr2.ok){ hideL(); toast('Could not delete purchase lines (code '+dr2.status+') — check DB permissions','err'); return; }
-  // Delete purchase header
-  const delResp = await fetch(SURL+'/rest/v1/purchases?id=eq.'+id, {method:'DELETE',headers:h});
-  hideL();
-  if(!delResp.ok){ toast('Could not delete purchase (code '+delResp.status+') — check DB permissions','err'); return; }
-  toast('Purchase deleted','ok');
-  await loadProds2();
-  loadPurHistory();
+  try {
+    const tok = await getAuthToken();
+    const h = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'};
+
+    // Step 1 — delete linked inventory transactions (may be zero rows — that is fine)
+    const dr1 = await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+id, {method:'DELETE',headers:h});
+    if(!dr1.ok && dr1.status !== 404) {
+      let msg=''; try{ const j=await dr1.json(); msg=j.message||''; }catch(e){}
+      hideL(); toast('Could not delete inventory transactions ('+dr1.status+(msg?': '+msg:'')+')', 'err'); return;
+    }
+
+    // Step 2 — delete purchase lines (may be zero rows — that is fine)
+    const dr2 = await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+id, {method:'DELETE',headers:h});
+    if(!dr2.ok && dr2.status !== 404) {
+      let msg=''; try{ const j=await dr2.json(); msg=j.message||''; }catch(e){}
+      hideL(); toast('Could not delete purchase lines ('+dr2.status+(msg?': '+msg:'')+')', 'err'); return;
+    }
+
+    // Step 3 — delete the purchase header itself
+    const dr3 = await fetch(SURL+'/rest/v1/purchases?id=eq.'+id, {method:'DELETE',headers:h});
+    if(!dr3.ok) {
+      let msg=''; try{ const j=await dr3.json(); msg=j.message||''; }catch(e){}
+      hideL(); toast('Could not delete purchase ('+dr3.status+(msg?': '+msg:'')+')', 'err'); return;
+    }
+
+    hideL();
+    toast('Purchase deleted', 'ok');
+    await loadProds2();
+    loadPurHistory();
+  } catch(e) {
+    hideL();
+    toast('Delete failed: '+e.message, 'err');
+  }
 }
 
 async function editPurchase(id) {
