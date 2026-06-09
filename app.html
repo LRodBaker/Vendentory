@@ -2924,8 +2924,11 @@ function openAIImportPreview(data) {
       const matchedProd = line.matched_product_id
         ? AP.find(p => p.product_id === line.matched_product_id || p.id === line.matched_product_id)
         : null;
-      const upc       = parseInt(matchedProd?.units_per_case) || 1;
-      const cases     = line.qty || 1;
+      // For bulk products units_per_case is always 1 — real pack size is in _qty_per_pack
+      const upc = matchedProd?.product_type === 'bulk' && matchedProd?._qty_per_pack > 0
+        ? matchedProd._qty_per_pack
+        : (parseInt(matchedProd?.units_per_case) || 1);
+      const cases      = line.qty || 1;
       const totalUnits = cases * upc;
       const lineTotal  = line.line_total || (line.unit_cost * cases);
       const unitCost   = totalUnits > 0 ? lineTotal / totalUnits : line.unit_cost;
@@ -2933,17 +2936,18 @@ function openAIImportPreview(data) {
       const compQPP = matchedProd?._qty_per_pack || 0;
       const indivUnits = compQPP > 0 ? totalUnits * compQPP : null;
       PL.push({
-        product_id:   line.matched_product_id || '',
-        name:         line.matched_product_name || line.description,
-        cases:        cases,
+        product_id:    line.matched_product_id || '',
+        name:          line.matched_product_name || line.description,
+        cases:         cases,
         cost_per_case: costPerCase,
-        units:        totalUnits,
-        unit_cost:    unitCost,
-        total:        lineTotal,
+        units:         totalUnits,
+        unit_cost:     unitCost,
+        total:         lineTotal,
+        _upc:          upc,
         _aiDescription: line.description,
-        _confidence:  line.confidence,
-        _unmatched:   !line.matched_product_id,
-        _indivUnits:  indivUnits
+        _confidence:   line.confidence,
+        _unmatched:    !line.matched_product_id,
+        _indivUnits:   indivUnits
       });
     });
   }
