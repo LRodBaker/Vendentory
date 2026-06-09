@@ -3811,6 +3811,45 @@ function pcCopyReport(){
   });
 }
 
+// ── DOWNLOAD COUNT SHEET ─────────────────────────────────────────────────────
+// Generates a CSV of all active individual products (A→Z) with a blank Count
+// column so Rod can print it, walk the warehouse, and fill in counts by hand.
+function downloadCountSheet(){
+  // Filter to active individual products only, sorted alphabetically
+  const prods = AP
+    .filter(p => p.product_type === 'individual' && p.is_active !== false)
+    .sort((a,b) => a.name.localeCompare(b.name));
+
+  if(!prods.length){ toast('No active individual products found','err'); return; }
+
+  const countDate = document.getElementById('pc-date').value || new Date().toISOString().split('T')[0];
+
+  // Build CSV — quote all text fields to handle commas safely
+  const escape = v => '"' + String(v||'').replace(/"/g,'""') + '"';
+  const header = ['Product Name','Book Qty','Count','Notes'].map(escape).join(',');
+  const rows = prods.map(p =>
+    [escape(p.name), escape(p.on_hand_qty||0), escape(''), escape('')].join(',')
+  );
+
+  const csv = [
+    escape('Tobacco Road Vending LLC — Physical Count Sheet') + ',,,',
+    escape('Date: ' + countDate) + ',,,',
+    ',,,',
+    header,
+    ...rows
+  ].join('\r\n');
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'count-sheet-' + countDate + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('Count sheet downloaded — ' + prods.length + ' products', 'ok');
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handleIF(file){
@@ -5325,6 +5364,11 @@ function toast(msg,type=''){
     <!-- Summary bar -->
     <div id="pc-summary-bar" style="background:var(--teal-light);border-radius:8px;padding:11px 14px;font-size:13px;margin-bottom:14px;display:none">
       <div id="pc-summary-text" style="font-weight:500"></div>
+    </div>
+
+    <!-- Download count sheet -->
+    <div style="margin-bottom:10px">
+      <button class="btn" style="width:100%;justify-content:center;gap:7px" onclick="downloadCountSheet()">&#128203; Download Count Sheet (CSV)</button>
     </div>
 
     <!-- Action buttons -->
