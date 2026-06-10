@@ -1888,6 +1888,34 @@ async function saveProd() {
   function clearSaveErr(){ if(errDiv){errDiv.style.display='none';errDiv.textContent='';} }
   if(!nm){ showSaveErr('Product name is required'); return; }
   clearSaveErr();
+
+  // ── product_components validation ─────────────────────────────────────────
+  // For bulk products: every BASE_LINES entry must have a resolved product_id
+  // that (a) exists in AP and (b) is an individual product (not bulk/variety).
+  if(_prodType === 'bulk' && typeof BASE_LINES !== 'undefined' && BASE_LINES.length) {
+    for(let _vi=0; _vi<BASE_LINES.length; _vi++) {
+      const _bl = BASE_LINES[_vi];
+      if(_bl._mode === 'create') continue; // will be created — skip
+      if(!_bl.product_id) { showSaveErr('Base product row '+((_vi+1))+' has no product selected. Select a product or remove the row.'); return; }
+      const _blMatch = AP.find(p=>p.id===_bl.product_id||p.product_id===_bl.product_id);
+      if(!_blMatch) { showSaveErr('Base product row '+((_vi+1))+': product ID not found in product list. This may be a stale link — remove and re-add it.'); return; }
+      if(_blMatch.product_type && _blMatch.product_type !== 'individual') { showSaveErr('Base product "'+_blMatch.name+'" is type "'+_blMatch.product_type+'" — component links must point to individual products only.'); return; }
+    }
+  }
+  // For variety packs: every VP_LINES entry must have a component_product_id
+  // that (a) exists in AP and (b) is an individual product.
+  if((typeof VP_LINES !== 'undefined') && VP_LINES.length) {
+    for(let _vi=0; _vi<VP_LINES.length; _vi++) {
+      const _vl = VP_LINES[_vi];
+      if(_vl._mode === 'create') continue; // will be created — skip
+      if(!_vl.component_product_id) { showSaveErr('Variety component row '+((_vi+1))+' has no product selected. Select a product or remove the row.'); return; }
+      const _vlMatch = AP.find(p=>p.id===_vl.component_product_id||p.product_id===_vl.component_product_id);
+      if(!_vlMatch) { showSaveErr('Variety component row '+((_vi+1))+': product ID not found. This may be a stale link — remove and re-add it.'); return; }
+      if(_vlMatch.product_type && _vlMatch.product_type !== 'individual') { showSaveErr('Variety component "'+_vlMatch.name+'" is type "'+_vlMatch.product_type+'" — component links must point to individual products only.'); return; }
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   const saveBtn=document.querySelector('#mprod .btn-p');
   if(saveBtn){saveBtn.disabled=true;saveBtn.textContent='Saving...';}
   // Hard 20s safety net — guarantees button resets even if an await never resolves
@@ -2766,12 +2794,9 @@ async function markPurReceived(id){
     }
   }
   if(invTxns.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
-  for(const u of wacUpdates){
-    const prod=AP.find(p=>p.id===u.product_id||p.product_id===u.product_id);
-    const cq=parseFloat(prod?.on_hand_qty)||0,cc=parseFloat(prod?.average_cost)||0;
-    const nq=cq+u.units,na=nq>0?((cq*cc)+(u.units*u.unit_cost))/nq:u.unit_cost;
-    await fetch(SURL+'/rest/v1/products?id=eq.'+u.product_id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({average_cost:na,last_cost:u.unit_cost,updated_at:new Date().toISOString()})});
-  }
+  // Use replayWAC (full purchase history replay) — same as savePur(), prevents incremental drift
+  const wacProductIds=[...new Set(wacUpdates.map(u=>u.product_id))];
+  for(const pid of wacProductIds){ await replayWAC(pid,wh); }
   await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString()})});
   hideL();
   toast('Order marked received! Inventory updated.','ok');
@@ -3819,6 +3844,115 @@ function pcCopyReport(){
     document.body.removeChild(ta);
   });
 }
+
+// ─── DOWNLOAD BLANK COUNT SHEET (CSV) ────────────────────────────────────────
+// Exports all active individual products A→Z with a blank Count column.
+// Rod fills it in manually, then uploads it back via pcUploadCSV.
+function downloadCountSheet() {
+  const prods = AP.filter(p => p.product_type !== 'bulk' && p.product_type !== 'variety' && p.is_active !== false)
+    .sort((a,b) => a.name.localeCompare(b.name));
+  if(!prods.length){ toast('No active individual products found','err'); return; }
+  const rows = [['Product Name','Barcode','Book Qty','Count']];
+  for(const p of prods){
+    rows.push([
+      '"'+p.name.replace(/"/g,'""')+'"',
+      p.barcode||'',
+      p.on_hand_qty||0,
+      '' // blank — Rod fills this in
+    ]);
+  }
+  const csv = rows.map(r=>r.join(',')).join('\r\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'CountSheet_'+(new Date().toISOString().split('T')[0])+'.csv';
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+  toast('Count sheet downloaded','ok');
+}
+
+// ─── UPLOAD FILLED COUNT SHEET (CSV) ─────────────────────────────────────────
+// Reads a filled-in count sheet CSV. The Count column drives entries:
+//   blank = skip that row entirely
+//   0 or any number = add/update entry in countEntries
+// Matches rows by product name (case-insensitive) OR barcode.
+function pcUploadCSV(input) {
+  const file = input.files[0];
+  input.value = ''; // reset so same file can be re-selected
+  if(!file){ return; }
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const text = e.target.result;
+    const lines = text.split(/\r?\n/).filter(l=>l.trim());
+    if(lines.length < 2){ toast('CSV appears empty','err'); return; }
+
+    // Parse header row to find column indices
+    function splitCSVRow(row) {
+      const result = []; let cur = ''; let inQ = false;
+      for(let i=0; i<row.length; i++){
+        const ch = row[i];
+        if(ch==='"'){ inQ=!inQ; }
+        else if(ch===','&&!inQ){ result.push(cur.trim()); cur=''; }
+        else { cur+=ch; }
+      }
+      result.push(cur.trim());
+      return result;
+    }
+
+    const header = splitCSVRow(lines[0]).map(h=>h.toLowerCase().replace(/"/g,'').trim());
+    const nameIdx  = header.findIndex(h=>h.includes('product')||h==='name');
+    const bcIdx    = header.findIndex(h=>h.includes('barcode'));
+    const countIdx = header.findIndex(h=>h==='count'||h.includes('count'));
+    if(countIdx === -1){ toast('CSV must have a "Count" column','err'); return; }
+
+    let added=0, skipped=0, notFound=0;
+    const notFoundNames=[];
+
+    for(let i=1; i<lines.length; i++){
+      const cols = splitCSVRow(lines[i]).map(c=>c.replace(/^"|"$/g,'').trim());
+      const countVal = cols[countIdx];
+      if(countVal===''||countVal===undefined||countVal===null) { skipped++; continue; } // blank = skip
+
+      const nameRaw  = nameIdx  !== -1 ? cols[nameIdx]  : '';
+      const bcRaw    = bcIdx    !== -1 ? cols[bcIdx]    : '';
+      const countNum = Math.max(0, parseInt(countVal)||0);
+
+      // Match product: try barcode first (exact), then name (case-insensitive)
+      let prod = null;
+      if(bcRaw) prod = AP.find(p=>p.barcode===bcRaw && p.product_type!=='bulk' && p.is_active!==false);
+      if(!prod && nameRaw) {
+        const nameLow = nameRaw.toLowerCase();
+        prod = AP.find(p=>p.name.toLowerCase()===nameLow && p.product_type!=='bulk' && p.is_active!==false);
+      }
+      if(!prod){
+        notFound++;
+        if(nameRaw) notFoundNames.push(nameRaw);
+        continue;
+      }
+
+      // Add or update in countEntries
+      const existing = countEntries.find(c=>c.product_id===prod.id);
+      if(existing){
+        existing.counted_qty = countNum;
+      } else {
+        countEntries.push({product_id:prod.id,name:prod.name,book_qty:prod.on_hand_qty||0,counted_qty:countNum,avg_cost:parseFloat(prod.average_cost)||0});
+      }
+      added++;
+    }
+
+    renderCountList();
+    let msg = added+' product'+(added!==1?'s':'')+' loaded from CSV';
+    if(skipped) msg += ' · '+skipped+' blank rows skipped';
+    if(notFound) msg += ' · '+notFound+' not matched';
+    toast(msg, notFound>0?'warn':'ok');
+    if(notFound>0 && notFoundNames.length){
+      console.warn('Vendentory CSV upload — unmatched rows:', notFoundNames);
+    }
+  };
+  reader.readAsText(file);
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -5340,6 +5474,14 @@ function toast(msg,type=''){
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <button class="btn" onclick="closeM('mPC')">Cancel</button>
       <button class="btn btn-p" id="pc-post-btn" disabled onclick="postCountResults()">&#10003; Post Write-offs &amp; Generate Report</button>
+    </div>
+    <!-- CSV helpers -->
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <button class="btn btn-sm" style="flex:1" onclick="downloadCountSheet()">&#11015; Download Count Sheet (CSV)</button>
+      <label class="btn btn-sm" style="flex:1;cursor:pointer;justify-content:center">
+        &#11014; Upload Filled CSV
+        <input type="file" accept=".csv" style="display:none" onchange="pcUploadCSV(this)">
+      </label>
     </div>
 
     <!-- Report (shown after posting) -->
