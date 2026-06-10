@@ -229,7 +229,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
         <div class="sb-section">Inventory</div>
         <div class="nav-item" data-page="products">&#9634; Products</div>
         <div class="nav-item" data-page="purchases">&#9684; Purchases</div>
-        <div class="nav-item" data-page="adjustments">&#9650; Adjustments</div>
+        <div class="nav-item" data-page="adjustments">&#9650; Stock Control</div>
         <div class="sb-section">Reporting</div>
         <div class="nav-item" data-page="imports">&#9776; Import Sales</div>
         <div class="nav-item" data-page="reports">&#9641; Reports</div>
@@ -400,7 +400,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
         <div class="page" id="page-adjustments">
           <div style="max-width:460px">
             <div class="card">
-              <div class="card-title">Inventory adjustment / write-off</div>
+              <div class="card-title">Stock adjustment / write-off</div>
               <div class="fg">
                 <label class="fl">Product (search or scan barcode)</label>
                 <div style="display:flex;gap:8px">
@@ -1028,7 +1028,7 @@ function hasFeature(feature) {
   return FF[feature] === true;
 }
 
-const PTITLES={dashboard:'Dashboard',scan:'Scan Product',products:'Products',purchases:'Purchases',adjustments:'Adjustments',imports:'Import Sales',reports:'Reports',machines:'Machines',settings:'Settings'};
+const PTITLES={dashboard:'Dashboard',scan:'Scan Product',products:'Products',purchases:'Purchases',adjustments:'Stock Control',imports:'Import Sales',reports:'Reports',machines:'Machines',settings:'Settings'};
 
 function nav(pg) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
@@ -1242,7 +1242,7 @@ async function openPD(id) {
 
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       <button class="btn btn-p btn-sm" onclick="closeM('mpd');nav('purchases')">Receive inventory</button>
-      <button class="btn btn-sm" onclick="closeM('mpd');nav('adjustments')">Adjust quantity</button>
+      <button class="btn btn-sm" onclick="closeM('mpd');nav('adjustments')">Stock Control</button>
       <button class="btn btn-sm" onclick="pdEditClicked()">&#9998; Edit</button>
     </div>`;
   openM('mpd');
