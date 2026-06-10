@@ -277,6 +277,16 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
         <!-- DASHBOARD -->
         <div class="page active" id="page-dashboard">
           <div style="margin-bottom:16px;font-size:13px" class="tm" id="greet">Good morning</div>
+          <!-- Negative inventory alert — hidden unless problems exist -->
+          <div id="neg-inv-banner" style="display:none;background:var(--red-light);border:1px solid var(--red-mid);border-radius:10px;padding:12px 15px;margin-bottom:14px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
+              <div>
+                <div style="font-weight:700;color:var(--red);font-size:13px;margin-bottom:4px">&#9888; Negative Inventory Detected</div>
+                <div id="neg-inv-list" style="font-size:12px;color:var(--gray-700)"></div>
+              </div>
+              <button class="btn btn-sm" style="flex-shrink:0" onclick="nav('products')">View Products</button>
+            </div>
+          </div>
           <div class="g4" style="margin-bottom:16px">
             <div class="stat-card"><div class="stat-label">This month sales</div><div class="stat-val" id="sm">—</div></div>
             <div class="stat-card"><div class="stat-label">Inventory value</div><div class="stat-val" id="siv">—</div></div>
@@ -1150,6 +1160,20 @@ async function loadDash() {
   // Week ago for top sellers query
   const {data:ms}=await dbFetch('sales_lines',{select:'sales_amount',filters:{'period_start_date':'gte.'+mStart,'period_start_date2':'lte.'+todayStr}});
   document.getElementById('sm').textContent=fmt((ms||[]).reduce((s,r)=>s+parseFloat(r.sales_amount||0),0));
+  // Negative inventory alert
+  const negProds=AP.filter(p=>p.product_type==='individual'&&p.on_hand_qty<0);
+  const negBanner=document.getElementById('neg-inv-banner');
+  const negList=document.getElementById('neg-inv-list');
+  if(negProds.length&&negBanner&&negList){
+    negBanner.style.display='block';
+    negList.innerHTML=negProds.map(p=>`<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0">
+      <span style="font-weight:500">${p.name}</span>
+      <span style="color:var(--red-mid);font-weight:700;cursor:pointer" onclick="openPD('${p.id}')">${p.on_hand_qty} units &#8594; Fix</span>
+    </div>`).join('');
+  } else if(negBanner) {
+    negBanner.style.display='none';
+  }
+
   const low=AP.filter(p=>p.stock_status==='REORDER'||p.on_hand_qty<=p.reorder_point).slice(0,5);
   document.getElementById('dls').innerHTML=low.length?low.map(p=>`
     <div class="lr-row"><div style="font-size:14px">&#128230;</div>
@@ -1193,7 +1217,7 @@ function renderProds() {
       <div style="font-size:13px;font-weight:600;margin-bottom:2px;line-height:1.3">${p.name}</div>
       <div style="font-size:11px;color:var(--gray-400);margin-bottom:7px">${p.product_code||''} ${p.barcode?'&#183; '+p.barcode:''}</div>
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <span class="badge ${p.stock_status==='REORDER'?'b-red':p.on_hand_qty<=p.reorder_point?'b-low':'b-ok'}">${p.on_hand_qty} in stock</span>
+        <span class="badge ${p.on_hand_qty<0?'b-red':p.stock_status==='REORDER'?'b-red':p.on_hand_qty<=p.reorder_point?'b-low':'b-ok'}">${p.on_hand_qty<0?'&#9888; '+p.on_hand_qty+' — negative':p.on_hand_qty+' in stock'}</span>
         <span style="font-size:12px;color:var(--gray-400)">${p.selling_price>0?fmt(p.selling_price):''}</span>
       </div>
     </div>`).join('');
@@ -1228,7 +1252,16 @@ async function openPD(id) {
     <div class="g2">
       <div>
         <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);margin-bottom:7px">Inventory</div>
-        <div class="ir"><div style="color:var(--gray-400)">On hand</div><div style="font-size:15px;font-weight:700;color:${p.on_hand_qty<=p.reorder_point?'var(--red-mid)':'var(--teal)'}">${p.on_hand_qty} units</div></div>
+        <div class="ir"><div style="color:var(--gray-400)">On hand</div><div style="font-size:15px;font-weight:700;color:${p.on_hand_qty<0?'var(--red)':p.on_hand_qty<=p.reorder_point?'var(--red-mid)':'var(--teal)'}">${p.on_hand_qty} units</div></div>
+        ${p.on_hand_qty<0?`<div style="background:var(--red-light);border:1px solid var(--red-mid);border-radius:8px;padding:10px 12px;margin:6px 0;font-size:12px">
+          <div style="font-weight:700;color:var(--red);margin-bottom:6px">&#9888; Negative on-hand — something is off</div>
+          <div style="color:var(--gray-700);margin-bottom:8px;line-height:1.5">Possible causes: a purchase receipt was never entered, a sale was double-imported, or the opening balance was wrong.<br>
+          <strong>If you cannot find the source:</strong> do a physical count and use that as your new baseline.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-sm btn-p" onclick="pdFixNegative('${p.id}')">&#128203; Set baseline from count</button>
+            <button class="btn btn-sm" onclick="document.getElementById('pd-txn-filter').value='purchase_receipt';pdFilterTxns()">&#128270; Review purchases</button>
+          </div>
+        </div>`:''}
         <div class="ir"><div style="color:var(--gray-400)">Reorder point</div><div style="font-weight:500">${p.reorder_point}</div></div>
         <div class="ir"><div style="color:var(--gray-400)">Order up to</div><div style="font-weight:500">${p.order_up_to_level}</div></div>
 
@@ -1276,6 +1309,64 @@ async function openPD(id) {
     if(el) el.innerHTML='<div class="tm" style="font-size:12px;color:var(--red)">Could not load transactions.</div>';
   }
 }
+
+// ─── NEGATIVE INVENTORY CORRECTION ──────────────────────────────────────────
+async function pdFixNegative(productId) {
+  const current = AP.find(p=>p.id===productId||p.product_id===productId);
+  const productName = current?.name || 'this product';
+  const currentQty = current?.on_hand_qty ?? 0;
+
+  const countStr = prompt(
+    `Set baseline count for "${productName}"
+
+Current DB on-hand: ${currentQty} (negative)
+
+Enter the TRUE quantity you physically have on hand right now.
+This will post a quantity_adjustment to bring the count to that number.`
+  );
+  if(countStr===null) return; // cancelled
+  const newQty = parseInt(countStr);
+  if(isNaN(newQty)||newQty<0){ toast('Enter a valid number (0 or more)','err'); return; }
+
+  const variance = newQty - currentQty;
+  if(variance===0){ toast('No change needed — count matches current value','ok'); return; }
+
+  const confirmed = confirm(
+    `This will post a quantity_adjustment of ${variance>0?'+':''}${variance} units
+to bring "${productName}" from ${currentQty} to ${newQty}.
+
+Continue?`
+  );
+  if(!confirmed) return;
+
+  showL('Correcting inventory...');
+  const tok = await getAuthToken();
+  const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'};
+  const resp = await fetch(SURL+'/rest/v1/inventory_transactions', {
+    method:'POST', headers:wh,
+    body: JSON.stringify({
+      product_id: productId,
+      transaction_type: 'quantity_adjustment',
+      transaction_date: new Date().toISOString(),
+      quantity_change: variance,
+      warehouse_quantity_change: variance,
+      reason_code: 'count_correction',
+      notes: `Baseline correction: negative on-hand fixed. Book was ${currentQty}, physical count is ${newQty}.`,
+      created_by: CU?.id||null
+    })
+  });
+  hideL();
+
+  if(resp.ok) {
+    toast(`Inventory corrected — ${productName} now shows ${newQty} units`,'ok');
+    await loadProds2();
+    loadShrinkSummary();
+    openPD(productId); // refresh modal
+  } else {
+    toast('Could not post correction — check permissions','err');
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ─── PRODUCT DETAIL — FULL TRANSACTION VIEWER ───────────────────────────────
 let _pdTxns = []; // cached for filter/re-render without re-fetching
