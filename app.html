@@ -438,6 +438,18 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
               <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px;line-height:1.5">Scan or search each product, enter your counted quantity, and the app will write off any missing units as shrinkage — with a cost summary ready for your bookkeeper.</div>
               <button class="btn btn-p" style="width:100%;justify-content:center" onclick="openPC()">&#128203; Start Physical Count</button>
             </div>
+            <div class="card" style="margin-top:13px">
+              <div class="card-header">
+                <div class="card-title" style="margin-bottom:0">&#128200; Shrinkage &amp; Loss Summary</div>
+                <select class="fs" id="shrink-period" style="font-size:12px;padding:5px 8px;width:auto" onchange="loadShrinkSummary()">
+                  <option value="30">Last 30 days</option>
+                  <option value="90">Last 90 days</option>
+                  <option value="365">This year</option>
+                  <option value="0">All time</option>
+                </select>
+              </div>
+              <div id="shrink-summary"><div class="tm">Loading...</div></div>
+            </div>
           </div>
         </div>
 
@@ -1021,7 +1033,7 @@ function nav(pg) {
   closeSB();
   if(pg==='dashboard') loadDash();
   if(pg==='products'){ loadProds2().then(()=>renderProds()).catch(()=>renderProds()); }
-  if(pg==='adjustments'){loadRAJ();setDates();}
+  if(pg==='adjustments'){loadRAJ();loadShrinkSummary();setDates();}
   if(pg==='reports'){
     document.getElementById('rpt-wpick').style.display='block';
     ['rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick','rpt-bkpick'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
@@ -3486,9 +3498,20 @@ function updAP(){
   if(!adjP)return;
   const ch=parseInt(document.getElementById('aq').value)||0;
   const af=adjP.on_hand_qty+ch;
+  const typeEl=document.getElementById('at');
+  // Auto-suggest type: negative qty -> write_off, positive -> quantity_adjustment
+  if(ch!==0){
+    if(ch<0&&typeEl.value==='quantity_adjustment') typeEl.value='write_off';
+    if(ch>0&&typeEl.value==='write_off') typeEl.value='quantity_adjustment';
+  }
+  // Show dollar impact for negative adjustments
+  const _prod=AP.find(p=>p.product_id===adjP.product_id||p.id===adjP.product_id);
+  const _avgCost=parseFloat(_prod?.average_cost)||0;
+  const _impact=ch<0&&_avgCost>0?Math.abs(ch)*_avgCost:0;
+  const _impactHtml=_impact>0?' <span style="color:var(--red-mid);font-size:11px">('+fmt(_impact)+' loss)</span>':'';
   document.getElementById('aprv').style.display='flex';
   document.getElementById('apb').textContent=adjP.on_hand_qty+' units';
-  document.getElementById('apc').textContent=(ch>0?'+':'')+ch+' units';
+  document.getElementById('apc').innerHTML=(ch>0?'+':'')+ch+' units'+_impactHtml;
   document.getElementById('apa').textContent=af+' units';
 }
 
@@ -3505,13 +3528,76 @@ async function saveAdj(){
   });
   hideL();
   if(!adjResp.ok){toast('Error saving adjustment','err');return;}
+  // Reload inventory immediately so on-hand count reflects the change
+  await loadProds2();
+  loadRAJ();
+  loadShrinkSummary();
   toast('Adjustment saved!','ok');
   adjP=null;
   ['aps','aq','an'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('api').style.display='none';
   document.getElementById('aprv').style.display='none';
-  await loadProds2(); loadRAJ();
+  // Reset type to neutral default
+  document.getElementById('at').value='quantity_adjustment';
 }
+
+// ─── SHRINKAGE & LOSS SUMMARY ────────────────────────────────────────────────
+async function loadShrinkSummary(){
+  const el=document.getElementById('shrink-summary');
+  if(!el)return;
+  el.innerHTML='<div class="tm">Loading...</div>';
+  const days=parseInt(document.getElementById('shrink-period')?.value)||30;
+  let filters={'transaction_type':'in.(write_off,quantity_adjustment)'};
+  if(days>0){
+    const since=new Date();since.setDate(since.getDate()-days);
+    filters['transaction_date']='gte.'+since.toISOString().split('T')[0];
+  }
+  const {data}=await dbFetch('inventory_transactions',{select:'*,products(name,average_cost)',filters,order:'transaction_date.desc',limit:200});
+  if(!data||!data.length){
+    el.innerHTML='<div class="tm" style="text-align:center;padding:16px 0">No write-offs or adjustments in this period</div>';
+    return;
+  }
+  // Split write-offs (shrinkage) from quantity adjustments
+  const writeOffs=data.filter(t=>t.transaction_type==='write_off');
+  const adjPlus=data.filter(t=>t.transaction_type==='quantity_adjustment'&&t.quantity_change>0);
+  const adjMinus=data.filter(t=>t.transaction_type==='quantity_adjustment'&&t.quantity_change<0);
+  // Dollar value: use unit_cost on the transaction if present, else product average_cost
+  function txnCost(t){ return Math.abs(t.quantity_change)*(parseFloat(t.unit_cost)||parseFloat(t.products?.average_cost)||0); }
+  const shrinkUnits=writeOffs.reduce((s,t)=>s+Math.abs(t.quantity_change),0)+adjMinus.reduce((s,t)=>s+Math.abs(t.quantity_change),0);
+  const shrinkDollars=writeOffs.reduce((s,t)=>s+txnCost(t),0)+adjMinus.reduce((s,t)=>s+txnCost(t),0);
+  const gainUnits=adjPlus.reduce((s,t)=>s+t.quantity_change,0);
+  const gainDollars=adjPlus.reduce((s,t)=>s+txnCost(t),0);
+  // Group by product for top-loss table
+  const byProd={};
+  [...writeOffs,...adjMinus].forEach(t=>{
+    const id=t.product_id;
+    if(!byProd[id]) byProd[id]={name:t.products?.name||'Unknown',units:0,dollars:0};
+    byProd[id].units+=Math.abs(t.quantity_change);
+    byProd[id].dollars+=txnCost(t);
+  });
+  const topLosses=Object.values(byProd).sort((a,b)=>b.dollars-a.dollars).slice(0,5);
+  el.innerHTML=`
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+      <div class="stat-card" style="background:var(--red-light)">
+        <div class="stat-label">Total Shrinkage</div>
+        <div class="stat-val" style="color:var(--red)">${fmt(shrinkDollars)}</div>
+        <div style="font-size:11px;color:var(--gray-400);margin-top:3px">${shrinkUnits} unit${shrinkUnits!==1?'s':''} lost</div>
+      </div>
+      <div class="stat-card" style="background:var(--green-light)">
+        <div class="stat-label">Positive Adjustments</div>
+        <div class="stat-val" style="color:var(--green)">${fmt(gainDollars)}</div>
+        <div style="font-size:11px;color:var(--gray-400);margin-top:3px">${gainUnits} unit${gainUnits!==1?'s':''} added</div>
+      </div>
+    </div>
+    ${topLosses.length?`
+    <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-400);margin-bottom:6px">Top Losses by Product</div>
+    ${topLosses.map(p=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:0.5px solid var(--border);font-size:13px">
+        <span style="font-weight:500">${p.name}</span>
+        <span style="color:var(--red-mid);font-weight:600">${fmt(p.dollars)} <span style="font-size:11px;color:var(--gray-400)">(${p.units} units)</span></span>
+      </div>`).join('')}`:''}`;
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function loadRAJ(){
   const {data}=await dbFetch('inventory_transactions',{select:'*,products(name)',filters:{'transaction_type':'in.(quantity_adjustment,write_off)'},order:'created_at.desc',limit:8});
@@ -3743,9 +3829,11 @@ async function postCountResults(){
     toast(msg,'err');return;
   }
 
-  toast('Count posted!','ok');
+  // Reload inventory first so on-hand figures in the report are current
   await loadProds2();
   loadRAJ();
+  loadShrinkSummary();
+  toast('Count posted! Inventory updated.','ok');
   pcShowReport(filled,countDate,transactions,null);
 }
 
@@ -4052,8 +4140,12 @@ async function confImport(){
   if(invTxnsBatch.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(invTxnsBatch)});
   hideL();
   const unmatched=lines.filter(l=>!l.product_id);
-  toast('Import complete! '+lines.length+' products imported.'+(unmatched.length?' ('+unmatched.length+' unmatched)':''),'ok');
-  cancImport(); await loadProds2(); loadIH();
+  const totalUnits=invTxnsBatch.reduce((s,t)=>s+Math.abs(t.quantity_change),0);
+  // Reload inventory immediately so on-hand reflects consumed units
+  await loadProds2();
+  loadIH();
+  toast('Import complete! '+lines.length+' items · '+totalUnits+' units consumed'+(unmatched.length?' · '+unmatched.length+' unmatched':''),'ok');
+  cancImport();
   if(unmatched.length) showUnmatchedModal(unmatched);
 }
 
