@@ -3834,8 +3834,10 @@ function handleDrop(e){e.preventDefault();document.getElementById('idz').style.b
 async function openPC(){
   countEntries=[];
   // Default date to today
-  const today=new Date().toISOString().split('T')[0];
-  document.getElementById('pc-date').value=today;
+  // Leave date blank — Rod must explicitly set it. Prevents accidental today-date posts.
+  document.getElementById('pc-date').value='';
+  document.getElementById('pc-date-confirm').style.display='none';
+  document.getElementById('pc-date-banner').style.background='var(--amber)';
   document.getElementById('pc-bc').value='';
   document.getElementById('pc-bc-err').textContent='';
   document.getElementById('pc-search-drop').style.display='none';
@@ -3849,6 +3851,17 @@ async function openPC(){
   hideL();
   renderCountList();
   openM('mPC');
+}
+
+function pcConfirmDate(){
+  const d=document.getElementById('pc-date').value;
+  const banner=document.getElementById('pc-date-banner');
+  const confirm=document.getElementById('pc-date-confirm');
+  if(!d){ banner.style.background='var(--amber)'; confirm.style.display='none'; return; }
+  // Turn banner green once a date is set
+  banner.style.background='var(--green)';
+  confirm.style.display='block';
+  confirm.textContent='\u2713 Count date set to '+d;
 }
 
 function pcSearchInput(){
@@ -4010,7 +4023,14 @@ function renderCountSummary(){
 async function postCountResults(){
   const filled=countEntries.filter(e=>e.counted_qty!==null);
   if(!filled.length){toast('Enter at least one count first','err');return;}
-  const countDate=document.getElementById('pc-date').value||new Date().toISOString().split('T')[0];
+  const countDate=document.getElementById('pc-date').value;
+  if(!countDate){
+    // Flash the date banner red to draw attention
+    const banner=document.getElementById('pc-date-banner');
+    if(banner){banner.style.background='var(--red)';setTimeout(()=>{banner.style.background='var(--amber)';},2000);}
+    toast('Set the count date before posting — this is the date stamped on every transaction','err');
+    return;
+  }
 
   const transactions=[];
   for(const e of filled){
@@ -4190,6 +4210,12 @@ function pcUploadCSV(input) {
   const file = input.files[0];
   input.value = ''; // reset so same file can be re-selected
   if(!file){ return; }
+  // Warn if date not set — don't block upload, but make it obvious
+  if(!document.getElementById('pc-date').value){
+    const banner=document.getElementById('pc-date-banner');
+    if(banner){banner.style.background='var(--red)';setTimeout(()=>{banner.style.background='var(--amber)';},3000);}
+    toast('Set the count date before uploading — you can change it after but do it now','warn');
+  }
   const reader = new FileReader();
   reader.onload = function(e) {
     const text = e.target.result;
@@ -6030,14 +6056,27 @@ function toast(msg,type=''){
   <div class="modal" style="max-width:680px;width:100%;max-height:92vh;overflow-y:auto;display:flex;flex-direction:column;gap:0">
     <button class="mc" onclick="closeM('mPC')">&#10005;</button>
     <div class="modal-title" style="margin-bottom:4px">&#128203; Physical Inventory Count</div>
-    <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Scan or search each product, enter the quantity you counted. Shortages are posted as write-offs.</div>
 
-    <!-- Date + scan bar -->
-    <div style="background:var(--gray-900);border-radius:12px;padding:16px;margin-bottom:14px">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-        <div style="font-size:12px;color:rgba(255,255,255,0.5);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Count Date</div>
-        <input type="date" id="pc-date" class="fi" style="max-width:160px;background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.15);color:#fff;font-size:13px">
+    <!-- DATE CONFIRMATION — prominent, required before anything else -->
+    <div id="pc-date-banner" style="background:var(--amber);border-radius:12px;padding:16px 18px;margin-bottom:14px">
+      <div style="font-size:13px;font-weight:700;color:#fff;margin-bottom:10px">
+        &#9888; Step 1: Confirm the date this count was physically performed
       </div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <input type="date" id="pc-date" class="fi"
+          style="font-size:16px;font-weight:700;background:#fff;border:2px solid rgba(0,0,0,0.2);color:var(--gray-900);padding:10px 14px;border-radius:8px;min-width:180px"
+          onchange="pcConfirmDate()">
+        <div id="pc-date-confirm" style="display:none;background:rgba(255,255,255,0.25);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;color:#fff">
+          &#10003; Date confirmed
+        </div>
+      </div>
+      <div style="font-size:12px;color:rgba(255,255,255,0.85);margin-top:8px">
+        This date will be stamped on every transaction. Today is auto-filled — change it if the count was done on a different day.
+      </div>
+    </div>
+
+    <!-- Scan bar — shown after date confirmed -->
+    <div style="background:var(--gray-900);border-radius:12px;padding:16px;margin-bottom:14px">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <input id="pc-bc" class="fi" style="flex:1;min-width:160px;background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.15);color:#fff" placeholder="Scan barcode or type product name..." autocomplete="off"
           oninput="pcSearchInput()" onkeydown="if(event.key==='Enter'){pcLookupBC();}">
