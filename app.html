@@ -1243,10 +1243,22 @@ async function openPD(id) {
       </div>
     </div>
 
-    <!-- Purchase cost history — loaded async below -->
+    <!-- Full transaction history — loaded async below -->
     <div style="margin-top:16px">
-      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);margin-bottom:8px">Purchase cost history &amp; WAC</div>
-      <div id="pd-cost-history"><div class="tm" style="font-size:12px">Loading...</div></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400)">Transaction History</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <select id="pd-txn-filter" class="fs" style="font-size:11px;padding:3px 6px;width:auto" onchange="pdFilterTxns()">
+            <option value="">All types</option>
+            <option value="purchase_receipt">Purchases</option>
+            <option value="sales_consumption">Sales</option>
+            <option value="quantity_adjustment">Adjustments</option>
+            <option value="write_off">Write-offs</option>
+            <option value="opening_balance">Opening balance</option>
+          </select>
+        </div>
+      </div>
+      <div id="pd-txn-list"><div class="tm" style="font-size:12px">Loading...</div></div>
     </div>
 
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
@@ -1256,65 +1268,169 @@ async function openPD(id) {
     </div>`;
   openM('mpd');
 
-  // Load purchase receipt history async and inject into the modal
+  // Load full transaction history async
   try {
-    const txnResp = await fetch(
-      SURL+'/rest/v1/inventory_transactions?product_id=eq.'+p.id
-        +'&transaction_type=eq.purchase_receipt'
-        +'&select=created_at,quantity_change,unit_cost,notes'
-        +'&order=created_at.asc'
-        +'&limit=20',
-      { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
-    );
-    const txns = txnResp.ok ? await txnResp.json() : [];
-    const el = document.getElementById('pd-cost-history');
-    if(!el) return; // modal closed before load finished
-
-    if(!txns.length) {
-      el.innerHTML='<div class="tm" style="font-size:12px">No purchase receipts recorded yet.</div>';
-      return;
-    }
-
-    // Compute running WAC across receipts
-    let runQty = 0, runCost = 0;
-    const rows = txns.map(t => {
-      const units = parseInt(t.quantity_change) || 0;
-      const uc    = parseFloat(t.unit_cost) || 0;
-      const prevValue = runQty * runCost;
-      runQty  += units;
-      runCost  = runQty > 0 ? (prevValue + units * uc) / runQty : uc;
-      return { date: t.created_at, units, uc, wac: runCost, notes: t.notes||'' };
-    });
-
-    el.innerHTML=`
-      <div style="overflow-x:auto">
-        <table class="tbl" style="font-size:12px">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th style="text-align:right">Units in</th>
-              <th style="text-align:right">Unit cost</th>
-              <th style="text-align:right">WAC after</th>
-              <th style="color:var(--gray-400);font-weight:400">Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map((r,i)=>`
-              <tr style="${i===rows.length-1?'background:var(--teal-light);font-weight:600':''}">
-                <td>${fmtD(r.date)}</td>
-                <td style="text-align:right">+${r.units}</td>
-                <td style="text-align:right">${fmt(r.uc)}</td>
-                <td style="text-align:right;color:var(--teal-dark)">${fmt(r.wac)}</td>
-                <td style="color:var(--gray-400);font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.notes}">${r.notes}</td>
-              </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>`;
-  } catch(e) {
-    const el = document.getElementById('pd-cost-history');
-    if(el) el.innerHTML='<div class="tm" style="font-size:12px;color:var(--red)">Could not load cost history.</div>';
+    await pdLoadTxns(p.id, '');
+  } catch(e_outer) {
+    const el = document.getElementById('pd-txn-list');
+    if(el) el.innerHTML='<div class="tm" style="font-size:12px;color:var(--red)">Could not load transactions.</div>';
   }
 }
+
+// ─── PRODUCT DETAIL — FULL TRANSACTION VIEWER ───────────────────────────────
+let _pdTxns = []; // cached for filter/re-render without re-fetching
+
+async function pdLoadTxns(productId, filterType) {
+  const el = document.getElementById('pd-txn-list');
+  if(!el) return;
+  el.innerHTML = '<div class="tm" style="font-size:12px">Loading...</div>';
+
+  const pid = productId || _currentPDid;
+  if(!pid) return;
+
+  const tok = await getAuthToken();
+  const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok};
+
+  const url = SURL+'/rest/v1/inventory_transactions'
+    +'?product_id=eq.'+pid
+    +(filterType ? '&transaction_type=eq.'+filterType : '')
+    +'&select=id,transaction_type,transaction_date,quantity_change,unit_cost,reason_code,notes,reference_type,reference_id,created_at'
+    +'&order=transaction_date.desc,created_at.desc'
+    +'&limit=100';
+
+  const resp = await fetch(url, {headers:wh});
+  _pdTxns = resp.ok ? await resp.json() : [];
+
+  pdRenderTxns();
+}
+
+function pdFilterTxns() {
+  const f = document.getElementById('pd-txn-filter')?.value || '';
+  pdLoadTxns(_currentPDid, f);
+}
+
+function pdRenderTxns() {
+  const el = document.getElementById('pd-txn-list');
+  if(!el) return;
+
+  if(!_pdTxns.length) {
+    el.innerHTML = '<div class="tm" style="font-size:12px">No transactions found.</div>';
+    return;
+  }
+
+  // Running balance (newest first — reverse to calc, then re-reverse for display)
+  const icons = {
+    purchase_receipt:'&#128230;', sales_consumption:'&#128200;',
+    quantity_adjustment:'&#9889;', write_off:'&#10060;',
+    opening_balance:'&#127937;', transfer_to_machine:'&#127978;'
+  };
+  const labels = {
+    purchase_receipt:'Purchase', sales_consumption:'Sale',
+    quantity_adjustment:'Adjustment', write_off:'Write-off',
+    opening_balance:'Opening balance', transfer_to_machine:'Transfer'
+  };
+
+  el.innerHTML = _pdTxns.map(t => {
+    const isNeg = t.quantity_change < 0;
+    const canDelete = ['write_off','quantity_adjustment','opening_balance'].includes(t.transaction_type);
+    const dateStr = t.transaction_date ? t.transaction_date.split('T')[0] : fmtD(t.created_at);
+    const detail = [t.reason_code, t.notes].filter(Boolean).join(' · ');
+    return `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:0.5px solid var(--border);font-size:13px" id="pdtxn-${t.id}">
+      <div style="font-size:16px;flex-shrink:0;margin-top:1px">${icons[t.transaction_type]||'&#128221;'}</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+          <div style="font-weight:600">${labels[t.transaction_type]||t.transaction_type}</div>
+          <div style="font-weight:700;color:${isNeg?'var(--red-mid)':'var(--green)'};flex-shrink:0">${t.quantity_change>0?'+':''}${t.quantity_change}</div>
+        </div>
+        <div style="font-size:11px;color:var(--gray-400);margin-top:2px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <span>&#128197;
+            <span id="pdtxn-date-${t.id}">${dateStr}</span>
+            <button style="background:none;border:none;cursor:pointer;color:var(--teal);font-size:10px;padding:0 3px" title="Edit date" onclick="pdShowDateEdit('${t.id}','${dateStr}')">&#9998;</button>
+          </span>
+          ${t.unit_cost>0?`<span>&#36;${parseFloat(t.unit_cost).toFixed(4)}/unit</span>`:''}
+          ${detail?`<span>${detail}</span>`:''}
+        </div>
+        <div id="pdtxn-dateedit-${t.id}" style="display:none;margin-top:6px;display:none;align-items:center;gap:8px;flex-wrap:wrap">
+          <input type="date" class="fi" id="pdtxn-dateinput-${t.id}" value="${dateStr}"
+            style="font-size:12px;padding:4px 8px;width:150px">
+          <button class="btn btn-sm btn-p" onclick="pdSaveTxnDate('${t.id}')">&#10003; Save</button>
+          <button class="btn btn-sm" onclick="pdHideDateEdit('${t.id}')">Cancel</button>
+        </div>
+      </div>
+      ${canDelete?`<button class="btn btn-sm btn-d" style="flex-shrink:0;font-size:11px;padding:3px 8px" onclick="pdDeleteTxn('${t.id}','${t.transaction_type}',${t.quantity_change})">&#128465;</button>`:'<div style="width:50px"></div>'}
+    </div>`;
+  }).join('');
+}
+
+function pdShowDateEdit(txnId, currentDate) {
+  const row = document.getElementById('pdtxn-dateedit-'+txnId);
+  if(row) { row.style.display='flex'; }
+  const inp = document.getElementById('pdtxn-dateinput-'+txnId);
+  if(inp) { inp.value=currentDate; inp.focus(); }
+}
+
+function pdHideDateEdit(txnId) {
+  const row = document.getElementById('pdtxn-dateedit-'+txnId);
+  if(row) row.style.display='none';
+}
+
+async function pdSaveTxnDate(txnId) {
+  const inp = document.getElementById('pdtxn-dateinput-'+txnId);
+  if(!inp || !inp.value) { toast('Pick a date first','err'); return; }
+  const newDate = inp.value; // YYYY-MM-DD
+  const tok = await getAuthToken();
+  const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'};
+  const resp = await fetch(SURL+'/rest/v1/inventory_transactions?id=eq.'+txnId, {
+    method:'PATCH', headers:wh,
+    body: JSON.stringify({transaction_date: new Date(newDate+'T12:00:00').toISOString()})
+  });
+  if(resp.ok) {
+    // Update display
+    const dateEl = document.getElementById('pdtxn-date-'+txnId);
+    if(dateEl) dateEl.textContent = newDate;
+    pdHideDateEdit(txnId);
+    // Update in cached array
+    const t = _pdTxns.find(x=>x.id===txnId);
+    if(t) t.transaction_date = newDate+'T12:00:00';
+    toast('Date updated','ok');
+  } else {
+    toast('Could not update date — check permissions','err');
+  }
+}
+
+async function pdDeleteTxn(txnId, txnType, qty) {
+  const typeLabel = {write_off:'write-off', quantity_adjustment:'adjustment', opening_balance:'opening balance'}[txnType] || txnType;
+  const qtyLabel = qty > 0 ? `+${qty}` : `${qty}`;
+  if(!confirm(`Delete this ${typeLabel} (${qtyLabel} units)?
+
+This will adjust on-hand quantity accordingly. Run Recalculate All WAC after if needed.
+
+This cannot be undone.`)) return;
+
+  const tok = await getAuthToken();
+  const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+  const resp = await fetch(SURL+'/rest/v1/inventory_transactions?id=eq.'+txnId, {method:'DELETE',headers:wh});
+
+  if(resp.ok || resp.status===204) {
+    // Remove from DOM and cache
+    const row = document.getElementById('pdtxn-'+txnId);
+    if(row) row.remove();
+    _pdTxns = _pdTxns.filter(t=>t.id!==txnId);
+    toast('Transaction deleted — on-hand updated','ok');
+    // Refresh product list so on-hand count updates everywhere
+    await loadProds2();
+    // Update the on-hand badge in the modal if still open
+    const p = AP.find(x=>x.id===_currentPDid);
+    if(p) {
+      const onHandEl = document.querySelector('#pdc .ir .teal, #pdc [style*="teal"]');
+      // Re-open the product detail to refresh all values
+      openPD(_currentPDid);
+    }
+  } else {
+    toast('Could not delete — check permissions','err');
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Called by the Edit button inside product detail — uses _currentPDid (never stale)
 function pdEditClicked() {
