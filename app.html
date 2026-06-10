@@ -3174,7 +3174,9 @@ async function deletePurchase(id, label) {
       hideL(); toast('Could not delete inventory transactions ('+dr1.status+(msg?': '+msg:'')+')', 'err'); return;
     }
 
-    // Step 2 — delete purchase lines (may be zero rows — that is fine)
+    // Step 2 — fetch lines first (need product IDs for WAC replay after delete), then delete
+    const linesResp = await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+id+'&select=product_id', {headers:h});
+    const lines = linesResp.ok ? await linesResp.json() : [];
     const dr2 = await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+id, {method:'DELETE',headers:h});
     if(!dr2.ok && dr2.status !== 404) {
       let msg=''; try{ const j=await dr2.json(); msg=j.message||''; }catch(e){}
@@ -3192,7 +3194,15 @@ async function deletePurchase(id, label) {
     }
 
     hideL();
-    toast('Purchase deleted', 'ok');
+    // Rerun WAC for all products on this purchase — their average_cost
+    // still reflects the deleted purchase until replayed
+    const affectedProds=[...new Set((lines||[]).map(l=>l.product_id).filter(Boolean))];
+    if(affectedProds.length){
+      const tok2=await getAuthToken();
+      const wh2={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
+      for(const pid of affectedProds){ await replayWAC(pid,wh2); }
+    }
+    toast('Purchase deleted and costs recalculated', 'ok');
     await loadProds2();
     loadPurHistory();
   } catch(e) {
@@ -3621,7 +3631,7 @@ function handleDrop(e){e.preventDefault();document.getElementById('idz').style.b
 
 // ─── PHYSICAL COUNT ────────────────────────────────────────────────────────
 
-function openPC(){
+async function openPC(){
   countEntries=[];
   // Default date to today
   const today=new Date().toISOString().split('T')[0];
@@ -3633,9 +3643,12 @@ function openPC(){
   document.getElementById('pc-report').innerHTML='';
   // Show action buttons, hide report
   document.querySelector('#mPC .modal > div:last-of-type').style.display='grid';
+  // Always reload fresh inventory before opening — book_qty must be current
+  showL('Loading current inventory...');
+  await loadProds2();
+  hideL();
   renderCountList();
   openM('mPC');
-  setTimeout(()=>document.getElementById('pc-date').nextElementSibling,50);
 }
 
 function pcSearchInput(){
