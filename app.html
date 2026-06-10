@@ -618,6 +618,15 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
               <button class="btn btn-p btn-sm" id="wac-recalc-btn" onclick="recalcAllWAC()">&#8635; Recalculate All WAC</button>
             </div>
             <div class="card">
+              <div class="card-title">&#128269; Inventory Audit</div>
+              <div style="font-size:13px;color:var(--gray-600);margin-bottom:10px;line-height:1.5">
+                Scans every product's transaction history for duplicate receipts, impossible quantities, and mismatches between the DB sum and what's shown on-hand. Run this before any physical count.
+              </div>
+              <div id="audit-tool-status" style="display:none;font-size:13px;margin-bottom:10px;padding:10px 13px;border-radius:8px"></div>
+              <div id="audit-tool-results" style="display:none;margin-bottom:12px"></div>
+              <button class="btn btn-p btn-sm" id="audit-tool-btn" onclick="runInventoryAudit()">&#128269; Run Inventory Audit</button>
+            </div>
+            <div class="card">
               <div class="card-title">Security</div>
               <div class="ir"><div style="color:var(--gray-400)">Session</div><div class="tg" style="font-weight:500">Active</div></div>
               <div class="ir"><div style="color:var(--gray-400)">Audit logging</div><div class="tg" style="font-weight:500">Enabled</div></div>
@@ -2789,6 +2798,20 @@ async function markPurReceived(id){
   showL('Processing receipt...');
   const tok=await getAuthToken();
   const wh={'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+
+  // Guard: check if inventory transactions already exist for this purchase.
+  // If so, this purchase was already received (via savePur) — posting again would double-count.
+  const existCheck=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+id+'&select=id&limit=1',{headers:wh});
+  const existRows=existCheck.ok?await existCheck.json():[];
+  if(existRows.length>0){
+    // Already has transactions — just flip status to received without re-posting inventory
+    await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString()})});
+    hideL();
+    toast('Order marked received!','ok');
+    await loadProds2(); loadPurHistory(); checkOverdueOrders();
+    return;
+  }
+
   // Load the purchase lines
   const {data:lines}=await dbFetch('purchase_lines',{select:'*',filters:{'purchase_id':'eq.'+id}});
   if(!lines||!lines.length){hideL();toast('No lines found on this purchase','err');return;}
@@ -3064,7 +3087,10 @@ async function loadPurHistory(){
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:nowrap">
           <div style="font-size:16px;font-weight:700;font-family:var(--font-head)">${fmt(p.total_amount)}</div>
-          ${isOrdered?`<button class="btn btn-sm btn-p" data-pid="${p.id}" data-action="receive-pur">&#10003; Receive order</button>`:''}
+          ${isOrdered
+            ?`<button class="btn btn-sm btn-p" data-pid="${p.id}" data-action="receive-pur">&#10003; Receive order</button>`
+            :`<span style="font-size:11px;color:var(--green);font-weight:600;display:flex;align-items:center;gap:3px">&#10003; Received</span>`
+          }
           <button class="btn btn-sm" data-pid="${p.id}" data-action="edit-pur" title="Edit">&#9998; Edit</button>
           <button class="btn btn-sm" data-pid="${p.id}" data-action="detail-pur">&#9658; Details</button>
           <button class="btn btn-sm btn-d" data-pid="${p.id}" data-plabel="${(p.suppliers?.name||'this purchase').replace(/"/g,'&quot;')}" data-action="del-pur" title="Delete">&#128465;</button>
@@ -3310,9 +3336,12 @@ async function savePur() {
   const purBody={supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,status:status==='ordered'?'draft':'received',notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex};
   let purId;
   if(_editPurId) {
-    // Editing: reverse old inventory transactions and lines, then patch the header
-    await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
-    await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
+    // Editing: reverse old inventory transactions and lines, then patch the header.
+    // Both DELETEs must succeed before we re-insert — checked explicitly to prevent double-posting.
+    const delTxnResp=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
+    if(!delTxnResp.ok&&delTxnResp.status!==404){hideL();toast('Could not reverse old inventory transactions — edit aborted to prevent double-counting. Try again.','err');return;}
+    const delLinesResp=await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
+    if(!delLinesResp.ok&&delLinesResp.status!==404){hideL();toast('Could not remove old purchase lines — edit aborted. Try again.','err');return;}
     const patchResp=await fetch(SURL+'/rest/v1/purchases?id=eq.'+_editPurId,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(purBody)});
     if(!patchResp.ok){hideL();toast('Error updating purchase','err');return;}
     purId=_editPurId;
@@ -3361,8 +3390,19 @@ async function savePur() {
       wacUpdates.push({product_id:l.product_id,units:l.units,unit_cost:l.unit_cost});
     }
   } // end if(status==='received')
-  // Insert all inventory transactions in one batch
-  if(invTxns.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
+  // Final guard: before inserting, verify no transactions already exist for this purchase.
+  // This is the last line of defence against double-posting if an edit DELETE failed silently.
+  if(invTxns.length) {
+    const existChk=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+purId+'&select=id&limit=1',{headers:wh});
+    const existRows=existChk.ok?await existChk.json():[];
+    if(existRows.length>0){
+      hideL();
+      toast('⚠ Inventory transactions already exist for this purchase — not re-posting to prevent double-counting. If this was an edit, go to Settings → Inventory Audit to check for duplicates.','err');
+      clrPur(); await loadProds2(); loadPurHistory();
+      return;
+    }
+    await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
+  }
 
   // Recalculate WAC from full purchase history for each affected product
   const wacProductIds = [...new Set(wacUpdates.map(u => u.product_id))];
@@ -3374,6 +3414,166 @@ async function savePur() {
   toast(wasEdit?'Purchase updated!':status==='ordered'?'Order saved! Inventory will update when marked received.':'Purchase received! Inventory updated.','ok');
   clrPur(); await loadProds2(); renderProds(); loadPurHistory();
 }
+
+// ─── INVENTORY AUDIT ─────────────────────────────────────────────────────────
+async function runInventoryAudit(){
+  const btn=document.getElementById('audit-tool-btn');
+  const statusEl=document.getElementById('audit-tool-status');
+  const resultsEl=document.getElementById('audit-tool-results');
+  btn.disabled=true; btn.textContent='Running audit...';
+  statusEl.style.display='none';
+  resultsEl.style.display='none';
+
+  const tok=await getAuthToken();
+  const wh={'apikey':SKEY,'Authorization':'Bearer '+tok};
+
+  // 1. Fetch ALL inventory transactions
+  statusEl.innerHTML='Fetching transactions...';
+  statusEl.style.display='block';
+  statusEl.style.background='var(--gray-50)';
+  statusEl.style.color='var(--gray-600)';
+
+  const txnResp=await fetch(
+    SURL+'/rest/v1/inventory_transactions'
+      +'?select=id,product_id,transaction_type,quantity_change,reference_type,reference_id,transaction_date,created_at,products(name)'
+      +'&order=product_id.asc,created_at.asc'
+      +'&limit=5000',
+    {headers:wh}
+  );
+  if(!txnResp.ok){
+    statusEl.innerHTML='&#10060; Error fetching transactions';
+    statusEl.style.background='var(--red-light)';
+    statusEl.style.color='var(--red)';
+    btn.disabled=false; btn.textContent='&#128269; Run Inventory Audit';
+    return;
+  }
+  const txns=await txnResp.json();
+
+  // 2. Fetch current on_hand from the DB view
+  const invResp=await fetch(SURL+'/rest/v1/inventory_on_hand?select=product_id,on_hand_qty',{headers:wh});
+  const invRows=invResp.ok?await invResp.json():[];
+  const invMap={};invRows.forEach(r=>{invMap[r.product_id]=parseFloat(r.on_hand_qty||0);});
+
+  // 3. Group transactions by product
+  const byProd={};
+  txns.forEach(t=>{
+    if(!byProd[t.product_id]) byProd[t.product_id]={
+      name:t.products?.name||'Unknown',
+      product_id:t.product_id,
+      txns:[],
+      receiptsByPurId:{}
+    };
+    byProd[t.product_id].txns.push(t);
+    // Track purchase receipts by reference_id to spot duplicates
+    if(t.transaction_type==='purchase_receipt'&&t.reference_id){
+      if(!byProd[t.product_id].receiptsByPurId[t.reference_id])
+        byProd[t.product_id].receiptsByPurId[t.reference_id]=[];
+      byProd[t.product_id].receiptsByPurId[t.reference_id].push(t);
+    }
+  });
+
+  const issues=[];
+  const clean=[];
+
+  for(const [pid,pd] of Object.entries(byProd)){
+    const prodIssues=[];
+
+    // Check A: duplicate purchase receipts (same reference_id posted more than once)
+    for(const [purId,rows] of Object.entries(pd.receiptsByPurId)){
+      if(rows.length>1){
+        const totalUnits=rows.reduce((s,r)=>s+parseFloat(r.quantity_change),0);
+        const dupeIds=rows.map(r=>r.id);
+        const keepId=rows[0].id; // oldest — keep this one
+        const deleteIds=rows.slice(1).map(r=>r.id);
+        prodIssues.push({
+          type:'duplicate_receipt',
+          severity:'high',
+          label:'Duplicate purchase receipt',
+          detail:`Purchase order ${purId.slice(0,8)}... was posted ${rows.length}× — ${totalUnits} units added instead of ${totalUnits/rows.length}.`,
+          sql:`-- Delete duplicate receipt(s) for ${pd.name}
+DELETE FROM inventory_transactions
+WHERE id IN ('${deleteIds.join("','")}');`,
+          txnIds:deleteIds
+        });
+      }
+    }
+
+    // Check B: recompute sum and compare to on_hand view
+    const summed=pd.txns.reduce((s,t)=>s+parseFloat(t.quantity_change),0);
+    const dbOnHand=invMap[pid]??null;
+    if(dbOnHand!==null && Math.abs(summed-dbOnHand)>0.01){
+      prodIssues.push({
+        type:'sum_mismatch',
+        severity:'medium',
+        label:'Transaction sum ≠ on-hand view',
+        detail:`Transactions sum to ${summed} but inventory_on_hand shows ${dbOnHand}. View may need a refresh or there is a rounding issue.`,
+        sql:null
+      });
+    }
+
+    // Check C: suspiciously high on-hand (more than 500 individual units)
+    if(dbOnHand!==null && dbOnHand>500){
+      prodIssues.push({
+        type:'high_qty',
+        severity:'medium',
+        label:'Unusually high on-hand quantity',
+        detail:`${dbOnHand} units on hand — likely a duplicate receipt or data entry error.`,
+        sql:null
+      });
+    }
+
+    // Check D: negative on-hand
+    if(dbOnHand!==null && dbOnHand<0){
+      prodIssues.push({
+        type:'negative_qty',
+        severity:'high',
+        label:'Negative on-hand quantity',
+        detail:`${dbOnHand} units — sales or write-offs exceeded purchases. Check for missing receipts or wrong sales quantities.`,
+        sql:null
+      });
+    }
+
+    if(prodIssues.length){
+      issues.push({...pd, issues:prodIssues, onHand:dbOnHand, sum:summed});
+    } else {
+      clean.push(pd.name);
+    }
+  }
+
+  btn.disabled=false; btn.textContent='&#128269; Run Inventory Audit';
+
+  if(!issues.length){
+    statusEl.innerHTML='&#10003; All '+Object.keys(byProd).length+' products checked — no issues found.';
+    statusEl.style.background='var(--green-light)';
+    statusEl.style.color='var(--green)';
+    resultsEl.style.display='none';
+    return;
+  }
+
+  const highCount=issues.filter(p=>p.issues.some(i=>i.severity==='high')).length;
+  statusEl.innerHTML=`&#9888; Found issues in ${issues.length} product${issues.length!==1?'s':''} (${highCount} high severity). See details below.`;
+  statusEl.style.background='var(--amber-light)';
+  statusEl.style.color='var(--amber)';
+
+  resultsEl.innerHTML=issues.map(p=>{
+    const hasHigh=p.issues.some(i=>i.severity==='high');
+    return`<div style="border:1px solid ${hasHigh?'var(--red)':'var(--amber)'};border-radius:10px;padding:12px 14px;margin-bottom:10px;background:${hasHigh?'var(--red-light)':'var(--amber-light)'}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <div style="font-weight:700;font-size:13px">${p.name}</div>
+        <div style="font-size:12px;color:var(--gray-600)">On-hand: <strong>${p.onHand??'—'}</strong> · Txn sum: <strong>${p.sum}</strong></div>
+      </div>
+      ${p.issues.map(issue=>`
+        <div style="margin-bottom:8px">
+          <div style="font-size:12px;font-weight:600;color:${issue.severity==='high'?'var(--red)':'var(--amber)'}">&#9888; ${issue.label}</div>
+          <div style="font-size:12px;color:var(--gray-700);margin-top:2px">${issue.detail}</div>
+          ${issue.sql?`<pre style="font-size:11px;background:var(--gray-900);color:#e2e8f0;padding:10px;border-radius:6px;margin-top:6px;overflow-x:auto;white-space:pre-wrap;word-break:break-all">${issue.sql}</pre>
+          <button class="btn btn-sm" style="margin-top:4px;font-size:11px" onclick="navigator.clipboard.writeText(${JSON.stringify(issue.sql)}).then(()=>toast('SQL copied','ok'))">&#128203; Copy SQL</button>`:''}
+        </div>`).join('')}
+    </div>`;
+  }).join('');
+  resultsEl.style.display='block';
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ─── WAC REPLAY ────────────────────────────────────────────────────────────────
 // Recomputes average_cost for a product by replaying ALL purchase_receipt
