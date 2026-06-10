@@ -513,6 +513,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
             <button class="tab-btn" onclick="switchRT('top',this)">Top sellers</button>
             <button class="tab-btn" onclick="switchRT('bottom',this)">Bottom sellers</button>
             <button class="tab-btn" onclick="switchRT('bookkeeper',this)">&#128196; Bookkeeper</button>
+            <button class="tab-btn" onclick="switchRT('shrinkage',this)">&#9888; Losses</button>
           </div>
           <div id="rpt-wpick" style="margin-bottom:14px">
             <div style="background:var(--white);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
@@ -550,6 +551,13 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
               <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">Start date</label><input class="fi" type="date" id="rpt-bks" style="width:160px"></div>
               <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">End date</label><input class="fi" type="date" id="rpt-bke" style="width:160px"></div>
               <button class="btn btn-p" onclick="runBookkeeperRpt()">&#9654; Run report</button>
+            </div>
+          </div>
+          <div id="rpt-shpick" style="display:none;margin-bottom:14px">
+            <div style="background:var(--white);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+              <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">Start date</label><input class="fi" type="date" id="rpt-shs" style="width:160px"></div>
+              <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:12px;font-weight:600">End date</label><input class="fi" type="date" id="rpt-she" style="width:160px"></div>
+              <button class="btn btn-p" onclick="runShrinkageRpt()">&#9654; Run report</button>
             </div>
           </div>
           <div id="rc"><div class="tm">Loading...</div></div>
@@ -1036,7 +1044,7 @@ function nav(pg) {
   if(pg==='adjustments'){loadRAJ();loadShrinkSummary();setDates();}
   if(pg==='reports'){
     document.getElementById('rpt-wpick').style.display='block';
-    ['rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick','rpt-bkpick'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
+    ['rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick','rpt-bkpick','rpt-shpick'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
     loadWeekOpts();
   }
   if(pg==='purchases') {
@@ -3949,7 +3957,7 @@ function downloadCountSheet() {
       '' // blank — Rod fills this in
     ]);
   }
-  const csv = rows.map(r=>r.join(',')).join('\r\n');
+  const csv = rows.map(r=>r.join(',')).join('\n');
   const blob = new Blob([csv], {type:'text/csv'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -4637,7 +4645,7 @@ async function toggleIHLines(id, btn){
 function switchRT(tab,btn){
   document.querySelectorAll('.tab-bar .tab-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active'); curRT=tab;
-  ['rpt-wpick','rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick','rpt-bkpick'].forEach(id=>{
+  ['rpt-wpick','rpt-mpick','rpt-cpick','rpt-gpick','rpt-plpick','rpt-bkpick','rpt-shpick'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.style.display='none';
   });
   if(tab==='weekly'){
@@ -4677,6 +4685,15 @@ function switchRT(tab,btn){
     if(bks&&!bks.value)bks.value='2026-04-01';
     if(bke&&!bke.value)bke.value='2026-04-30';
     document.getElementById('rc').innerHTML='<div class="muted">Select a date range and click Run report to generate the bookkeeper export.</div>';
+  }
+  else if(tab==='shrinkage'){
+    const el=document.getElementById('rpt-shpick');if(el)el.style.display='block';
+    const now=new Date();
+    const shs=document.getElementById('rpt-shs'),she=document.getElementById('rpt-she');
+    // Default to current month
+    if(shs&&!shs.value) shs.value=now.getFullYear()+'-'+(String(now.getMonth()+1).padStart(2,'0'))+'-01';
+    if(she&&!she.value) she.value=now.toISOString().split('T')[0];
+    document.getElementById('rc').innerHTML='<div class="muted">Select a date range and click Run report.</div>';
   }
 }
 
@@ -4890,6 +4907,201 @@ async function runPLRpt(){
     <tr style="border-top:2px solid var(--border)"><td colspan="2"><strong>TOTAL</strong></td><td><strong>${tu}</strong></td><td><strong>${fmt(ts)}</strong></td><td><strong>${fmt(tc)}</strong></td><td style="color:${gp>=0?'var(--green)':'var(--red)'};font-weight:700">${fmt(gp)}</td><td><strong>${margin}%</strong></td></tr>
     </tbody></table></div>`;
 }
+
+// ─── SHRINKAGE & LOSSES REPORT ───────────────────────────────────────────────
+async function runShrinkageRpt(){
+  const start=document.getElementById('rpt-shs')?.value;
+  const end=document.getElementById('rpt-she')?.value;
+  if(!start||!end){toast('Please select start and end dates','err');return;}
+  document.getElementById('rc').innerHTML='<div class="tm">Loading...</div>';
+
+  const tok=await getAuthToken();
+  const wh={'apikey':SKEY,'Authorization':'Bearer '+tok};
+
+  // Fetch all write-off and negative quantity_adjustment transactions in range
+  const r=await fetch(
+    SURL+'/rest/v1/inventory_transactions'
+      +'?transaction_type=in.(write_off,quantity_adjustment)'
+      +'&transaction_date=gte.'+start+'T00:00:00'
+      +'&transaction_date=lte.'+end+'T23:59:59'
+      +'&select=id,product_id,transaction_type,transaction_date,quantity_change,unit_cost,reason_code,notes,products(name,average_cost)'
+      +'&order=transaction_date.asc',
+    {headers:wh}
+  );
+  if(!r.ok){document.getElementById('rc').innerHTML='<div style="color:var(--red)">Error loading data</div>';return;}
+  const txns=await r.json();
+
+  // Separate losses (negative) from gains (positive adjustments)
+  const losses=txns.filter(t=>t.quantity_change<0);
+  const gains=txns.filter(t=>t.quantity_change>0);
+
+  function txnDollars(t){
+    return Math.abs(t.quantity_change)*(parseFloat(t.unit_cost)||parseFloat(t.products?.average_cost)||0);
+  }
+
+  // Aggregate losses by product
+  const byProd={};
+  losses.forEach(t=>{
+    const id=t.product_id;
+    if(!byProd[id]) byProd[id]={
+      name:t.products?.name||'Unknown',
+      product_id:id,
+      units:0,
+      dollars:0,
+      write_off_units:0,
+      adj_units:0,
+      reasons:{},
+      lastDate:t.transaction_date
+    };
+    const units=Math.abs(t.quantity_change);
+    byProd[id].units+=units;
+    byProd[id].dollars+=txnDollars(t);
+    if(t.transaction_type==='write_off') byProd[id].write_off_units+=units;
+    else byProd[id].adj_units+=units;
+    const rc=t.reason_code||'unspecified';
+    byProd[id].reasons[rc]=(byProd[id].reasons[rc]||0)+units;
+    if(t.transaction_date>byProd[id].lastDate) byProd[id].lastDate=t.transaction_date;
+  });
+
+  const rows=Object.values(byProd).sort((a,b)=>b.dollars-a.dollars);
+  const totalLossUnits=losses.reduce((s,t)=>s+Math.abs(t.quantity_change),0);
+  const totalLossDollars=losses.reduce((s,t)=>s+txnDollars(t),0);
+  const totalGainUnits=gains.reduce((s,t)=>s+t.quantity_change,0);
+  const totalGainDollars=gains.reduce((s,t)=>s+txnDollars(t),0);
+  const netDollars=totalGainDollars-totalLossDollars;
+
+  // Cache for PDF/CSV
+  window._shrinkRptData={start,end,rows,totalLossUnits,totalLossDollars,totalGainUnits,totalGainDollars,netDollars,losses,gains};
+
+  if(!rows.length && !gains.length){
+    document.getElementById('rc').innerHTML=`<div class="card"><div style="text-align:center;padding:32px;color:var(--gray-400)">&#10003; No write-offs or adjustments recorded between ${start} and ${end}</div></div>`;
+    return;
+  }
+
+  function reasonBadges(reasons){
+    return Object.entries(reasons).map(([k,v])=>`<span class="badge b-gray" style="margin-right:3px;font-size:10px">${k} ×${v}</span>`).join('');
+  }
+
+  document.getElementById('rc').innerHTML=`
+    <div class="card" style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+        <div style="font-size:15px;font-weight:700;font-family:var(--font-head)">&#9888; Shrinkage &amp; Losses: ${start} to ${end}</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm" onclick="downloadShrinkageCSV()">&#11015; CSV</button>
+          <button class="btn btn-sm btn-p" onclick="downloadShrinkageRptPDF()">&#128196; PDF</button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">
+        <div class="stat-card" style="background:var(--red-light)">
+          <div class="stat-label">Total Loss Value</div>
+          <div class="stat-val" style="color:var(--red)">${fmt(totalLossDollars)}</div>
+          <div style="font-size:11px;color:var(--gray-400);margin-top:3px">${totalLossUnits} unit${totalLossUnits!==1?'s':''} lost</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Write-offs</div>
+          <div class="stat-val">${losses.filter(t=>t.transaction_type==='write_off').reduce((s,t)=>s+Math.abs(t.quantity_change),0)}</div>
+          <div style="font-size:11px;color:var(--gray-400);margin-top:3px">units written off</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Adj. Corrections</div>
+          <div class="stat-val">${losses.filter(t=>t.transaction_type==='quantity_adjustment').reduce((s,t)=>s+Math.abs(t.quantity_change),0)}</div>
+          <div style="font-size:11px;color:var(--gray-400);margin-top:3px">units adjusted down</div>
+        </div>
+        <div class="stat-card" style="background:${netDollars>=0?'var(--green-light)':'var(--red-light)'}">
+          <div class="stat-label">Net Adjustment</div>
+          <div class="stat-val" style="color:${netDollars>=0?'var(--green)':'var(--red)'}">${fmt(netDollars)}</div>
+          <div style="font-size:11px;color:var(--gray-400);margin-top:3px">gains − losses</div>
+        </div>
+      </div>
+      ${rows.length?`
+      <div style="font-size:13px;font-weight:600;margin-bottom:10px">Loss by product</div>
+      <table class="tbl" id="shrink-rpt-table">
+        <thead><tr>
+          <th>#</th><th>Product</th><th>Units Lost</th><th>Avg Cost</th><th>Total Loss</th><th>% of Loss</th><th>Reasons</th>
+        </tr></thead>
+        <tbody>
+        ${rows.map((r,i)=>{
+          const pct=totalLossDollars>0?((r.dollars/totalLossDollars)*100).toFixed(1):0;
+          const avgCost=r.units>0?r.dollars/r.units:0;
+          return`<tr>
+            <td style="color:var(--gray-400)">${i+1}</td>
+            <td><strong>${r.name}</strong></td>
+            <td style="color:var(--red-mid);font-weight:600">${r.units}</td>
+            <td>${fmt(avgCost)}</td>
+            <td style="color:var(--red-mid);font-weight:700">${fmt(r.dollars)}</td>
+            <td><div style="display:flex;align-items:center;gap:6px">
+              <div style="width:60px;height:6px;background:var(--gray-100);border-radius:3px">
+                <div style="width:${pct}%;height:100%;background:var(--red-mid);border-radius:3px"></div>
+              </div>
+              <span style="font-size:11px">${pct}%</span>
+            </div></td>
+            <td style="font-size:11px">${reasonBadges(r.reasons)}</td>
+          </tr>`;
+        }).join('')}
+        <tr style="border-top:2px solid var(--border)">
+          <td colspan="2"><strong>TOTAL</strong></td>
+          <td style="color:var(--red-mid);font-weight:700">${totalLossUnits}</td>
+          <td></td>
+          <td style="color:var(--red-mid);font-weight:700">${fmt(totalLossDollars)}</td>
+          <td colspan="2"></td>
+        </tr>
+        </tbody>
+      </table>`:''}
+      ${gains.length?`
+      <div style="margin-top:18px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--green)">Positive adjustments (gains)</div>
+        <div style="font-size:13px;color:var(--gray-600)">${totalGainUnits} units added · estimated value ${fmt(totalGainDollars)}</div>
+      </div>`:''}
+    </div>`;
+}
+
+function downloadShrinkageCSV(){
+  const d=window._shrinkRptData;
+  if(!d){toast('Run the report first','err');return;}
+  const rows=[['Product','Units Lost','Avg Cost','Total Loss ($)','Write-offs','Neg Adjustments','Top Reason']];
+  d.rows.forEach(r=>{
+    const avgCost=r.units>0?(r.dollars/r.units).toFixed(4):0;
+    const topReason=Object.entries(r.reasons).sort((a,b)=>b[1]-a[1])[0]?.[0]||'';
+    rows.push([
+      '"'+r.name.replace(/"/g,'""')+'"',
+      r.units,
+      avgCost,
+      r.dollars.toFixed(2),
+      r.write_off_units,
+      r.adj_units,
+      topReason
+    ]);
+  });
+  rows.push(['','','','','','','']);
+  rows.push(['TOTAL LOSS',d.totalLossUnits,'',d.totalLossDollars.toFixed(2),'','','']);
+  const csv=rows.map(r=>r.join(',')).join('\n');
+  const blob=new Blob([csv],{type:'text/csv'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download='Shrinkage_'+d.start+'_'+d.end+'.csv';
+  document.body.appendChild(a);a.click();
+  document.body.removeChild(a);URL.revokeObjectURL(url);
+}
+
+function downloadShrinkageRptPDF(){
+  const d=window._shrinkRptData;
+  if(!d){toast('Run the report first','err');return;}
+  const tableBody=d.rows.map((r,i)=>{
+    const avgCost=r.units>0?r.dollars/r.units:0;
+    const pct=d.totalLossDollars>0?((r.dollars/d.totalLossDollars)*100).toFixed(1):0;
+    const topReason=Object.entries(r.reasons).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—';
+    return`<tr><td>${i+1}</td><td><strong>${r.name}</strong></td><td style="color:#A32D2D;font-weight:700">${r.units}</td><td>$${avgCost.toFixed(4)}</td><td style="color:#A32D2D;font-weight:700">$${r.dollars.toFixed(2)}</td><td>${pct}%</td><td style="font-size:11px">${topReason}</td></tr>`;
+  }).join('')
+  +`<tr style="border-top:2px solid #ccc"><td colspan="2"><strong>TOTAL</strong></td><td style="color:#A32D2D;font-weight:700">${d.totalLossUnits}</td><td></td><td style="color:#A32D2D;font-weight:700">$${d.totalLossDollars.toFixed(2)}</td><td colspan="2"></td></tr>`;
+  _buildRptPDF(
+    'Shrinkage & Losses Report',
+    [['Period',d.start+' to '+d.end],['Total Loss',fmt(d.totalLossDollars)],['Units Lost',d.totalLossUnits],['Net Adjustment (gains − losses)',fmt(d.netDollars)]],
+    ['#','Product','Units Lost','Avg Cost','Total Loss','% of Total','Top Reason'],
+    tableBody,
+    'Shrinkage_'+d.start+'_'+d.end+'.pdf'
+  );
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 function _buildRptPDF(title, summaryPairs, tableHeaders, tableBodyHTML, filename){
   const ch=s=>`<th style="padding:6px 8px;background:#f5f5f2;font-size:11px;text-align:left;color:#666;border-bottom:2px solid #ddd;white-space:nowrap">${s}</th>`;
