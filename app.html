@@ -4708,8 +4708,11 @@ async function confImport(){
   if(unmatched.length) showUnmatchedModal(unmatched);
 }
 
+// Store unmatched lines for retroactive fix
+let _unmatchedLines = [];
+
 function showUnmatchedModal(unmatched) {
-  // Deduplicate by raw name
+  _unmatchedLines = unmatched;
   const seen=new Set();
   const unique=unmatched.filter(l=>{
     if(seen.has(l.raw_product_name))return false;
@@ -4717,12 +4720,11 @@ function showUnmatchedModal(unmatched) {
     return true;
   });
 
-  // For each unmatched name, find the closest product in AP using word overlap scoring
   function bestGuess(vmsName) {
     const words=vmsName.toLowerCase().split(/\s+/).filter(w=>w.length>2);
     let best=null, bestScore=0;
     AP.forEach(p=>{
-      if((p.product_type||'')==='bulk')return;
+      if((p.product_type||'')=='bulk')return;
       const pWords=p.name.toLowerCase().split(/\s+/);
       const score=words.filter(w=>pWords.some(pw=>pw.includes(w)||w.includes(pw))).length;
       if(score>bestScore){bestScore=score;best=p;}
@@ -4733,48 +4735,89 @@ function showUnmatchedModal(unmatched) {
   const listEl=document.getElementById('unmatched-list');
   listEl.innerHTML=unique.map((l,i)=>{
     const guess=bestGuess(l.raw_product_name);
+    const esc=l.raw_product_name.replace(/\\/g,'\\\\  ').replace(/'/g,"\\'").replace(/"/g,'&quot;');
     const guessHTML=guess
       ?`<div style="font-size:12px;color:var(--gray-400);margin-top:3px">Best guess: <strong>${guess.name}</strong></div>
-        <button class="btn btn-sm btn-p" style="margin-top:6px" onclick="fixUnmatched('${guess.id}','${l.raw_product_name.replace(/'/g,"\\'").replace(/"/g,'&quot;')}',${i})">&#128295; Fix — add alias to "${guess.name}"</button>`
-      :`<div style="font-size:12px;color:var(--gray-400);margin-top:3px">No close match found — add this product first, then set alias.</div>
-        <button class="btn btn-sm" style="margin-top:6px" onclick="closeM('m-unmatched');openAP()">+ Add new product</button>`;
+        <button class="btn btn-sm btn-p" style="margin-top:6px" onclick="fixUnmatched('${guess.id}','${esc}',${i})">&#128295; Fix &amp; apply inventory</button>`
+      :`<div style="font-size:12px;color:var(--gray-400);margin-top:3px">No close match — pick below or add a new product.</div>
+        <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+          <select class="fs" style="font-size:12px;padding:4px 8px;flex:1;min-width:160px" id="um-sel-${i}">
+            <option value="">Select product...</option>
+            ${AP.filter(p=>p.product_type!=='bulk'&&p.is_active!==false).map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}
+          </select>
+          <button class="btn btn-sm btn-p" onclick="fixUnmatchedFromSel(${i},'${esc}')">&#128295; Fix &amp; apply</button>
+          <button class="btn btn-sm" onclick="closeM('m-unmatched');openAP()">+ New product</button>
+        </div>`;
     return`<div style="border:0.5px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px;${guess?'border-left:3px solid var(--amber)':'border-left:3px solid var(--red)'}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
         <div style="flex:1">
           <div style="font-weight:600;font-size:13px">&#8220;${l.raw_product_name}&#8221;</div>
-          <div style="font-size:11px;color:var(--gray-400);margin-top:2px">${l.units_sold} units · ${fmt(l.sales_amount)} — sales recorded, inventory not adjusted</div>
+          <div style="font-size:11px;color:var(--gray-400);margin-top:2px">${l.units_sold} units · ${fmt(l.sales_amount)} — <strong style="color:var(--amber)">inventory NOT adjusted yet</strong></div>
           ${guessHTML}
         </div>
-        <span id="um-status-${i}" style="font-size:12px;color:var(--teal-mid);display:none">&#10003; Fixed</span>
+        <div id="um-status-${i}" style="display:none;font-size:12px;color:var(--green);font-weight:600">&#10003; Fixed &amp; inventory applied</div>
       </div>
     </div>`;
   }).join('');
-
   openM('m-unmatched');
 }
 
+function fixUnmatchedFromSel(rowIndex, vmsName) {
+  const sel=document.getElementById('um-sel-'+rowIndex);
+  if(!sel||!sel.value){toast('Select a product first','err');return;}
+  fixUnmatched(sel.value,vmsName,rowIndex);
+}
+
 async function fixUnmatched(productId, vmsName, rowIndex) {
-  // Load the product, pre-populate the alias, open edit modal
   const prod=AP.find(p=>p.id===productId||p.product_id===productId);
   if(!prod){toast('Product not found','err');return;}
+  showL('Fixing '+vmsName+'...');
+  const tok=await getAuthToken();
+  const wh={'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'};
 
-  // Open the product edit modal for this product
-  await openEP(productId);
-
-  // After modal opens, add the VMS name as a new alias if not already there
-  const alreadyExists=ALIASES.some(a=>a.alias.toLowerCase()===vmsName.toLowerCase());
-  if(!alreadyExists){
-    ALIASES.push({alias:vmsName, db_id:null});
-    renderAliases();
+  // 1. Save alias directly to DB
+  const alreadyAliased=(prod._aliases||[]).some(a=>a.toLowerCase()===vmsName.toLowerCase());
+  if(!alreadyAliased){
+    const ar=await fetch(SURL+'/rest/v1/product_aliases',{method:'POST',headers:wh,body:JSON.stringify({product_id:prod.id,alias:vmsName})});
+    if(ar.ok) prod._aliases=[...(prod._aliases||[]),vmsName.toLowerCase()];
   }
 
-  // Mark as fixed in the unmatched list
-  const statusEl=document.getElementById('um-status-'+rowIndex);
-  if(statusEl)statusEl.style.display='';
+  // 2. Find all unmatched lines with this raw name and fix each one
+  const matchingLines=_unmatchedLines.filter(l=>l.raw_product_name===vmsName);
+  const wacAtSale=parseFloat(prod.average_cost)||0;
 
-  // Close unmatched modal so user can see the product edit modal
-  closeM('m-unmatched');
-  toast('Alias pre-filled — review and save the product','ok');
+  for(const line of matchingLines){
+    // Update sales_line to link to correct product
+    await fetch(
+      SURL+'/rest/v1/sales_lines?sales_import_id=eq.'+line.sales_import_id+'&raw_product_name=eq.'+encodeURIComponent(vmsName)+'&product_id=is.null',
+      {method:'PATCH',headers:wh,body:JSON.stringify({product_id:prod.id,unit_cost_at_sale:wacAtSale})}
+    );
+    // Post missing inventory transaction
+    if(line.units_sold>0){
+      await fetch(SURL+'/rest/v1/inventory_transactions',{
+        method:'POST',headers:wh,
+        body:JSON.stringify({
+          product_id:prod.id,
+          transaction_type:'sales_consumption',
+          transaction_date:new Date((line.period_start_date||new Date().toISOString().split('T')[0])+'T12:00:00').toISOString(),
+          quantity_change:-Math.round(line.units_sold),
+          warehouse_quantity_change:-Math.round(line.units_sold),
+          unit_cost:wacAtSale,
+          reference_type:'import',
+          reference_id:line.sales_import_id,
+          notes:'Retroactive: '+( line.period_start_date||'')+( line.period_end_date?' to '+line.period_end_date:''),
+          created_by:CU?.id||null
+        })
+      });
+    }
+  }
+
+  hideL();
+  const statusEl=document.getElementById('um-status-'+rowIndex);
+  if(statusEl) statusEl.style.display='block';
+  const totalUnits=matchingLines.reduce((s,l)=>s+Math.round(l.units_sold||0),0);
+  toast('Fixed! Alias saved · '+totalUnits+' units applied to inventory','ok');
+  await loadProds2();
 }
 
 function cancImport(){impRows=[];document.getElementById('ipa').style.display='none';document.getElementById('ifl').value='';}
