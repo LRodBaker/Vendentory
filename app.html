@@ -1135,8 +1135,8 @@ async function loadProds2() {
 
 async function loadDash() {
   await loadProds2();
-  const tv=AP.reduce((s,p)=>s+(parseFloat(p.inventory_value)||0),0);
-  const rc=AP.filter(p=>p.stock_status==='REORDER').length;
+  const tv=AP.filter(p=>p.product_type==='individual').reduce((s,p)=>s+(parseFloat(p.inventory_value)||0),0);
+  const rc=AP.filter(p=>p.product_type==='individual'&&p.stock_status==='REORDER').length;
   document.getElementById('siv').textContent=fmt(tv);
   document.getElementById('sr').textContent=rc;
   const now=new Date();
@@ -4645,7 +4645,7 @@ async function takeAuditSnapshot(){
       value:parseFloat(r.inventory_value||0),
       avg_cost:parseFloat(r.average_cost||0)
     })),
-    totalInventoryValue: (invRaw||[]).reduce((s,r)=>s+parseFloat(r.inventory_value||0),0)
+    totalInventoryValue: (invRaw||[]).filter(r=>{ const p=prodsNow?.find?.(x=>x.id===r.product_id); return !p||p.product_type==='individual'; }).reduce((s,r)=>s+parseFloat(r.inventory_value||0),0)
   };
 
   localStorage.setItem('vendentory_audit_snapshot', JSON.stringify(snapshot));
@@ -4726,7 +4726,7 @@ async function openAuditCompare(){
 
   const nowTotalSales=(salesLines||[]).reduce((s,l)=>s+parseFloat(l.sales_amount||0),0);
   const nowTotalUnits=(salesLines||[]).reduce((s,l)=>s+parseInt(l.units_sold||0),0);
-  const nowInvValue=(invRaw||[]).reduce((s,r)=>s+parseFloat(r.inventory_value||0),0);
+  const nowInvValue=(invRaw||[]).filter(r=>{ const p=(prodsNow||[]).find(x=>x.id===r.product_id); return !p||p.product_type==='individual'; }).reduce((s,r)=>s+parseFloat(r.inventory_value||0),0);
   const nowImportCount=(imports||[]).length;
 
   const monthlySalesNow={};
@@ -5052,7 +5052,7 @@ function renderSalesRpt(rows,label){
 }
 
 function loadInvRpt(){
-  const tv=AP.reduce((s,p)=>s+(parseFloat(p.inventory_value)||0),0);
+  const tv=AP.filter(p=>p.product_type==='individual').reduce((s,p)=>s+(parseFloat(p.inventory_value)||0),0);
   window._invRptData={products:AP,tv};
   document.getElementById('rc').innerHTML=rHdr([['Total value',fmt(tv)],['Products',AP.length],['Need reorder',AP.filter(p=>p.stock_status==='REORDER').length],['Active',AP.filter(p=>p.is_active).length]])+
     `<div class="card">
@@ -5730,7 +5730,7 @@ async function runBookkeeperRpt(){
     if(!invByCat[c])invByCat[c]=0;
     invByCat[c]+=parseFloat(r.inventory_value||0);
   });
-  const totalInvValue=(inv||[]).reduce((s,r)=>s+parseFloat(r.inventory_value||0),0);
+  const totalInvValue=(inv||[]).filter(r=>{ const p=AP.find(x=>x.id===r.product_id); return !p||p.product_type==='individual'; }).reduce((s,r)=>s+parseFloat(r.inventory_value||0),0);
 
   // ── Totals ──
   const totalSales=prodRows.reduce((s,r)=>s+r.sales,0);
