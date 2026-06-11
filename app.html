@@ -177,6 +177,17 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
   .pline{grid-template-columns:1fr 1fr}.hb{display:block}
 }
 .tg{color:var(--green)}.tr{color:var(--red-mid)}.ta{color:var(--amber)}.tm{color:var(--gray-400);font-size:13px}
+/* ── READ-ONLY MODE ── single class on body hides all write controls */
+body.ro .btn-p:not(.ro-show),body.ro .btn-d,body.ro #savePurBtn,body.ro #del-prod-btn,
+body.ro #pc-post-btn,body.ro #wac-recalc-btn,body.ro #audit-tool-btn,body.ro #ai-import-btn,
+body.ro [onclick^="openAP"],body.ro [onclick^="openEP"],body.ro [onclick^="saveProd"],
+body.ro [onclick^="deleteProd"],body.ro [onclick^="saveAdj"],body.ro [onclick^="postCount"],
+body.ro [onclick^="confImport"],body.ro [onclick^="markPur"],body.ro [onclick^="recalcAll"],
+body.ro [onclick^="runInventoryAudit"],body.ro [onclick^="deleteImport"],body.ro [onclick^="deleteCat"],
+body.ro [onclick^="deleteSup"],body.ro [onclick^="openPC"],body.ro [onclick^="savePro"],
+body.ro [onclick^="openAPfromUPC"],body.ro [onclick^="openAPfromScan"],body.ro [onclick^="saveAliasFromPrompt"],
+body.ro .ro-hide{display:none!important}
+body.ro #ro-badge{display:flex!important}
 </style>
 </head>
 <body>
@@ -256,6 +267,7 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
           <div style="font-size:12px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="uname">—</div>
           <div style="font-size:11px;color:rgba(255,255,255,0.35)" id="urole">—</div>
         </div>
+        <div id="ro-badge" style="display:none;background:var(--amber);color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:20px;letter-spacing:.5px;align-items:center">&#128274; VIEW ONLY</div>
         <button style="background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.35);font-size:14px;padding:4px" onclick="doLogout()">&#9099;</button>
       </div>
     </div>
@@ -637,6 +649,12 @@ body{font-family:var(--font-body);background:#f0f0ec;color:var(--gray-900);min-h
               <div class="ir"><div style="color:var(--gray-400)">Scan suffix</div><div style="font-weight:500">Enter (auto)</div></div>
             </div>
             <div class="card">
+              <div class="card-title">&#128100; User Access</div>
+              <div style="font-size:13px;color:var(--gray-600);margin-bottom:12px;line-height:1.5">Manage who can access Vendentory and what they can do. <strong>View only</strong> users see everything but cannot add, edit, or delete anything.</div>
+              <div id="user-list"><div class="tm">Loading...</div></div>
+              <button class="btn btn-sm" style="margin-top:10px" onclick="loadUserList()">&#8635; Refresh users</button>
+            </div>
+            <div class="card">
               <div class="card-title">Security</div>
               <div class="ir"><div style="color:var(--gray-400)">Session</div><div class="tg" style="font-weight:500">Active</div></div>
               <div class="ir"><div style="color:var(--gray-400)">Audit logging</div><div class="tg" style="font-weight:500">Enabled</div></div>
@@ -1008,6 +1026,71 @@ async function doSignup() {
 }
 
 async function doLogout() { await sb.auth.signOut(); }
+
+// ─── READ-ONLY USER MANAGEMENT ───────────────────────────────────────────────
+async function loadUserList() {
+  const el = document.getElementById('user-list');
+  if(!el) return;
+  el.innerHTML = '<div class="tm">Loading...</div>';
+
+  const tok = await getAuthToken();
+  const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok};
+  const resp = await fetch(SURL+'/rest/v1/user_profiles?select=id,full_name,role&order=full_name.asc', {headers:wh});
+  if(!resp.ok){ el.innerHTML='<div class="tm" style="color:var(--red)">Could not load users</div>'; return; }
+  const users = await resp.json();
+
+  if(!users.length){ el.innerHTML='<div class="tm">No users found</div>'; return; }
+
+  const roleColors = {admin:'var(--teal)',owner:'var(--teal)',read_only:'var(--amber)',viewer:'var(--amber)',bookkeeper:'var(--amber)'};
+  const roleLabels = {admin:'Admin',owner:'Owner',read_only:'View only',viewer:'View only',bookkeeper:'View only'};
+
+  el.innerHTML = users.map(u => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:0.5px solid var(--border);gap:10px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:13px;font-weight:600">${u.full_name||'—'}</div>
+        <div style="font-size:11px;color:var(--gray-400);margin-top:1px">ID: ${u.id.slice(0,8)}...</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:11px;font-weight:700;color:${roleColors[u.role]||'var(--gray-400)'};background:var(--gray-50);padding:3px 8px;border-radius:20px">${roleLabels[u.role]||u.role}</span>
+        ${u.id !== CU?.id ? `
+        <select class="fs" style="font-size:12px;padding:4px 8px;width:auto" onchange="setUserRole('${u.id}',this.value)">
+          <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
+          <option value="read_only" ${['read_only','viewer','bookkeeper'].includes(u.role)?'selected':''}>View only</option>
+        </select>` : '<span style="font-size:11px;color:var(--gray-400)">(you)</span>'}
+      </div>
+    </div>`).join('');
+}
+
+async function setUserRole(userId, newRole) {
+  if(!confirm(`Change this user's role to "${newRole==='read_only'?'View only':'Admin'}"?
+
+${newRole==='read_only'?'They will be able to see everything but cannot make any changes.':'They will have full access to add, edit, and delete.'}`)) {
+    await loadUserList(); return; // reset dropdown
+  }
+  const tok = await getAuthToken();
+  const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'};
+  const resp = await fetch(SURL+'/rest/v1/user_profiles?id=eq.'+userId, {
+    method:'PATCH', headers:wh,
+    body: JSON.stringify({role: newRole})
+  });
+  if(resp.ok){
+    toast('Role updated — user will see the change on next login','ok');
+    await loadUserList();
+  } else {
+    toast('Could not update role','err');
+    await loadUserList();
+  }
+}
+
+// JS-level guard — belt-and-suspenders on top of CSS hiding
+function _roBlock(fnName) {
+  if(window._isReadOnly){
+    toast('View-only access — contact your administrator to make changes','warn');
+    return true;
+  }
+  return false;
+}
+// ─────────────────────────────────────────────────────────────────────────────
 function showLE(m){const el=document.getElementById('lerr');el.textContent=m;el.style.display='block';}
 function showSE(m){const el=document.getElementById('suerr');el.textContent=m;el.style.display='block';}
 function showFP(){toast('Go to Supabase > Authentication > Email Templates to enable password reset.');}
@@ -1025,6 +1108,13 @@ async function loadProf() {
   if(document.getElementById('sn')) document.getElementById('sn').value=nm;
   if(document.getElementById('se')) document.getElementById('se').value=CU.email;
   if(document.getElementById('sro')) document.getElementById('sro').value=rl;
+  // Apply read-only mode for non-admin roles
+  window._isReadOnly = ['read_only','viewer','bookkeeper'].includes(rl);
+  if(window._isReadOnly){
+    document.body.classList.add('ro');
+  } else {
+    document.body.classList.remove('ro');
+  }
   // Load feature flags for this user
   await loadFlags();
 }
@@ -1071,7 +1161,7 @@ function nav(pg) {
     checkOverdueOrders();
     updPurSaveBtn();
   }
-  if(pg==='settings'){loadSets();loadProf();}
+  if(pg==='settings'){loadSets();loadProf();loadUserList();}
   if(pg==='imports'){loadIH();loadAuditStatus();}
 }
 
@@ -2118,6 +2208,7 @@ function renderAliases() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function saveProd() {
+  if(_roBlock('saveProd'))return;
   const nm=document.getElementById('pn').value.trim();
   const errDiv=document.getElementById('mprod-err');
   function showSaveErr(msg){ if(errDiv){errDiv.textContent=msg;errDiv.style.display='block';} toast(msg,'err'); }
@@ -2507,6 +2598,7 @@ async function saveProd() {
 
 // ── DELETE PRODUCT ──────────────────────────────────────────────────────────
 async function deleteProd() {
+  if(_roBlock('deleteProd'))return;
   const eid = document.getElementById('peid').value;
   if(!eid) return;
   const p = AP.find(x => x.id === eid || x.product_id === eid);
@@ -3613,6 +3705,7 @@ function updPT(){
 }
 
 async function savePur() {
+  if(_roBlock('savePur'))return;
   const status = document.getElementById('pustat').value;
   const vl=PL.filter(l=>l.product_id&&l.units>0);
   if(!vl.length){toast('Add at least one product line','err');return;}
@@ -4046,6 +4139,7 @@ function updAP(){
 }
 
 async function saveAdj(){
+  if(_roBlock('saveAdj'))return;
   if(!adjP){toast('Select a product first','err');return;}
   const qty=parseInt(document.getElementById('aq').value)||0;
   if(!qty){toast('Enter a quantity change','err');return;}
@@ -4333,6 +4427,7 @@ function renderCountSummary(){
 }
 
 async function postCountResults(){
+  if(_roBlock('postCount'))return;
   const filled=countEntries.filter(e=>e.counted_qty!==null);
   if(!filled.length){toast('Enter at least one count first','err');return;}
   const countDate=document.getElementById('pc-date').value;
@@ -4660,6 +4755,7 @@ function parseCSV(text){
 function fndKey(obj,cands){return cands.find(k=>k in obj)||Object.keys(obj)[0]||'';}
 
 async function confImport(){
+  if(_roBlock('confImport'))return;
   if(!impRows.length)return;
   showL('Importing sales data...');
   const sd=document.getElementById('isd').value,ed=document.getElementById('ied').value;
