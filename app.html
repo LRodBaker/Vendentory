@@ -891,6 +891,7 @@ let sb = null;
 let CU = null, CP = null, FF = {}, AP = [], AC = [], AS2 = [], PL = [], adjP = null, impRows = [], rScans = [], curRT = 'weekly';
 let camCtx = 'scan'; // 'scan' | 'count'
 let countEntries = []; // [{product_id,name,book_qty,counted_qty,avg_cost}]
+let _pcSnapshot = {}; // {product_id: {on_hand_qty, average_cost}} — locked at modal open
 let VP_LINES = []; // variety pack component lines for the product edit modal
 let SKU_LINES = []; // bulk barcode lines for the product edit modal
 let BASE_LINES = []; // base product links for bulk products
@@ -4309,6 +4310,7 @@ function handleDrop(e){e.preventDefault();document.getElementById('idz').style.b
 
 async function openPC(){
   countEntries=[];
+  _pcSnapshot={};
   // Default date to today
   // Leave date blank — Rod must explicitly set it. Prevents accidental today-date posts.
   document.getElementById('pc-date').value='';
@@ -4321,8 +4323,26 @@ async function openPC(){
   document.getElementById('pc-report').innerHTML='';
   // Show action buttons, hide report
   document.querySelector('#mPC .modal > div:last-of-type').style.display='grid';
-  // Always reload fresh inventory before opening — book_qty must be current
-  showL('Loading current inventory...');
+  // Take a point-in-time snapshot from DB — book_qty is locked at this moment
+  // regardless of how long the count takes or what other transactions post during it
+  showL('Taking inventory snapshot...');
+  const tok=await getAuthToken();
+  const wh={'apikey':SKEY,'Authorization':'Bearer '+tok};
+  const snapResp=await fetch(
+    SURL+'/rest/v1/inventory_on_hand?select=product_id,on_hand_qty,average_cost',
+    {headers:wh}
+  );
+  if(snapResp.ok){
+    const snapRows=await snapResp.json();
+    _pcSnapshot={};
+    snapRows.forEach(r=>{_pcSnapshot[r.product_id]={on_hand_qty:parseFloat(r.on_hand_qty||0),average_cost:parseFloat(r.average_cost||0)};});
+    // Show snapshot timestamp
+    const snapTimeEl=document.getElementById('pc-snapshot-time');
+    const snapInfoEl=document.getElementById('pc-snapshot-info');
+    if(snapTimeEl) snapTimeEl.textContent=new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',second:'2-digit'});
+    if(snapInfoEl) snapInfoEl.style.display='block';
+  }
+  // Also refresh AP for product names/search — but book_qty comes from snapshot, not AP
   await loadProds2();
   hideL();
   renderCountList();
@@ -4412,7 +4432,9 @@ function pcAddEntry(prod){
     if(inp){inp.focus();inp.select();}
     return;
   }
-  countEntries.push({product_id:prod.id,name:prod.name,book_qty:prod.on_hand_qty||0,counted_qty:null,avg_cost:parseFloat(prod.average_cost)||0});
+  // Use snapshot book_qty — locked at modal open, not live from AP cache
+  const _snap=_pcSnapshot[prod.id]||{on_hand_qty:prod.on_hand_qty||0,average_cost:parseFloat(prod.average_cost)||0};
+  countEntries.push({product_id:prod.id,name:prod.name,book_qty:_snap.on_hand_qty,counted_qty:null,avg_cost:_snap.average_cost});
   renderCountList();
   // Auto-focus the count input for the new row
   setTimeout(()=>{const inp=document.getElementById('pcc-'+prod.id);if(inp){inp.focus();}},60);
@@ -4748,7 +4770,8 @@ function pcUploadCSV(input) {
       if(existing){
         existing.counted_qty = countNum;
       } else {
-        countEntries.push({product_id:prod.id,name:prod.name,book_qty:prod.on_hand_qty||0,counted_qty:countNum,avg_cost:parseFloat(prod.average_cost)||0});
+        const _csvSnap=_pcSnapshot[prod.id]||{on_hand_qty:prod.on_hand_qty||0,average_cost:parseFloat(prod.average_cost)||0};
+        countEntries.push({product_id:prod.id,name:prod.name,book_qty:_csvSnap.on_hand_qty,counted_qty:countNum,avg_cost:_csvSnap.average_cost});
       }
       added++;
     }
@@ -6609,6 +6632,10 @@ function toast(msg,type=''){
     <button class="mc" onclick="closeM('mPC')">&#10005;</button>
     <div class="modal-title" style="margin-bottom:4px">&#128203; Physical Inventory Count</div>
 
+    <!-- Snapshot timestamp — shown once snapshot is taken -->
+    <div id="pc-snapshot-info" style="display:none;background:var(--gray-50);border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:var(--gray-500)">
+      &#128247; Book quantities locked from snapshot taken at <strong id="pc-snapshot-time"></strong> — variances are calculated against this point in time.
+    </div>
     <!-- DATE CONFIRMATION — prominent, required before anything else -->
     <div id="pc-date-banner" style="background:var(--amber);border-radius:12px;padding:16px 18px;margin-bottom:14px">
       <div style="font-size:13px;font-weight:700;color:#fff;margin-bottom:10px">
