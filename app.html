@@ -1050,8 +1050,8 @@ async function loadUserList() {
 
   if(!users.length){ el.innerHTML='<div class="tm">No users found</div>'; return; }
 
-  const roleColors = {admin:'var(--teal)',owner:'var(--teal)',read_only:'var(--amber)',viewer:'var(--amber)',bookkeeper:'var(--amber)'};
-  const roleLabels = {admin:'Admin',owner:'Owner',read_only:'View only',viewer:'View only',bookkeeper:'View only'};
+  const roleColors = {admin:'var(--teal)',manager:'var(--teal)',owner:'var(--teal)',read_only:'var(--amber)',viewer:'var(--amber)',bookkeeper:'var(--amber)',employee:'var(--amber)'};
+  const roleLabels = {admin:'Admin',manager:'Manager',owner:'Owner',read_only:'View only',viewer:'View only',bookkeeper:'View only',employee:'View only'};
 
   el.innerHTML = users.map(u => `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:0.5px solid var(--border);gap:10px;flex-wrap:wrap">
@@ -1064,16 +1064,16 @@ async function loadUserList() {
         ${u.id !== CU?.id ? `
         <select class="fs" style="font-size:12px;padding:4px 8px;width:auto" onchange="setUserRole('${u.id}',this.value)">
           <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
-          <option value="read_only" ${['read_only','viewer','bookkeeper'].includes(u.role)?'selected':''}>View only</option>
+          <option value="employee" ${['read_only','viewer','bookkeeper','employee'].includes(u.role)?'selected':''}>View only</option>
         </select>` : '<span style="font-size:11px;color:var(--gray-400)">(you)</span>'}
       </div>
     </div>`).join('');
 }
 
 async function setUserRole(userId, newRole) {
-  if(!confirm(`Change this user's role to "${newRole==='read_only'?'View only':'Admin'}"?
+  if(!confirm(`Change this user's role to "${newRole==='employee'?'View only':'Admin'}"?
 
-${newRole==='read_only'?'They will be able to see everything but cannot make any changes.':'They will have full access to add, edit, and delete.'}`)) {
+${newRole==='employee'?'They will be able to see everything but cannot make any changes.':'They will have full access to add, edit, and delete.'}`)) {
     await loadUserList(); return; // reset dropdown
   }
   const tok = await getAuthToken();
@@ -1118,7 +1118,7 @@ async function loadProf() {
   if(document.getElementById('se')) document.getElementById('se').value=CU.email;
   if(document.getElementById('sro')) document.getElementById('sro').value=rl;
   // Apply read-only mode for non-admin roles
-  window._isReadOnly = ['read_only','viewer','bookkeeper'].includes(rl);
+  window._isReadOnly = ['read_only','viewer','bookkeeper','employee'].includes(rl);
   if(window._isReadOnly){
     document.body.classList.add('ro');
   } else {
