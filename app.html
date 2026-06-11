@@ -659,7 +659,16 @@ body.ro #ro-badge{display:flex!important}
               <div class="ir"><div style="color:var(--gray-400)">Session</div><div class="tg" style="font-weight:500">Active</div></div>
               <div class="ir"><div style="color:var(--gray-400)">Audit logging</div><div class="tg" style="font-weight:500">Enabled</div></div>
               <div class="ir"><div style="color:var(--gray-400)">Database backups</div><div class="tg" style="font-weight:500">Supabase auto-backup</div></div>
-              <button class="btn btn-d btn-sm" style="margin-top:10px" onclick="doLogout()">Sign out</button>
+              <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+                <div style="font-size:13px;font-weight:600;margin-bottom:10px">Change Password</div>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <input class="fi" type="password" id="pw-new" placeholder="New password" autocomplete="new-password">
+                  <input class="fi" type="password" id="pw-confirm" placeholder="Confirm new password" autocomplete="new-password">
+                  <div id="pw-status" style="font-size:12px;display:none"></div>
+                  <button class="btn btn-p btn-sm ro-show" style="align-self:flex-start" onclick="changePassword()">&#128274; Update password</button>
+                </div>
+              </div>
+              <button class="btn btn-d btn-sm" style="margin-top:14px" onclick="doLogout()">Sign out</button>
             </div>
           </div>
         </div>
@@ -6062,6 +6071,37 @@ async function saveSup(id){
   const supResp=await fetch(SURL+'/rest/v1/suppliers?id=eq.'+id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:val})});
   if(!supResp.ok){toast('Error updating supplier','err');return;}
   await loadSups();loadSets();toast('Supplier updated!','ok');
+}
+
+async function changePassword(){
+  const newPw  = document.getElementById('pw-new')?.value||'';
+  const confirm = document.getElementById('pw-confirm')?.value||'';
+  const statusEl = document.getElementById('pw-status');
+
+  const show = (msg, color) => {
+    if(!statusEl) return;
+    statusEl.textContent = msg;
+    statusEl.style.color = color;
+    statusEl.style.display = 'block';
+  };
+
+  if(!newPw)          { show('Enter a new password','var(--red)'); return; }
+  if(newPw.length < 8){ show('Password must be at least 8 characters','var(--red)'); return; }
+  if(newPw !== confirm){ show('Passwords do not match','var(--red)'); return; }
+
+  show('Updating...','var(--gray-400)');
+
+  const { error } = await sb.auth.updateUser({ password: newPw });
+
+  if(error){
+    show('Error: '+error.message,'var(--red)');
+  } else {
+    show('✓ Password updated successfully','var(--green)');
+    document.getElementById('pw-new').value='';
+    document.getElementById('pw-confirm').value='';
+    toast('Password updated!','ok');
+    setTimeout(()=>{ if(statusEl) statusEl.style.display='none'; }, 4000);
+  }
 }
 
 async function savePro(){const nm=document.getElementById('sn').value.trim();if(!nm)return;const tok=await getAuthToken();await fetch(SURL+'/rest/v1/user_profiles?id=eq.'+CU.id,{method:'PATCH',headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({full_name:nm,updated_at:new Date().toISOString()})});toast('Profile updated!','ok');await loadProf();}
