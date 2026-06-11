@@ -2706,8 +2706,7 @@ async function saveProd() {
 
     // For new bulk/variety products — offer to create & link the individual product(s)
     if(savedId && (_prodType === 'bulk' || _prodType === 'variety')) {
-      const _unitCostHint = _prodType === 'bulk' ? (parseFloat(document.getElementById('plc').value)||0) : 0;
-      await maybeOpenIndivSetup(savedId, _prodType, pl.name, pl.category_id, _unitCostHint);
+      await maybeOpenIndivSetup(savedId, _prodType, pl.name, pl.category_id);
     }
 
   } catch(e) {
@@ -7068,7 +7067,7 @@ function stripPackSize(name) {
 
 // Called at end of saveProd() for bulk/variety products.
 // Checks if any product_components already exist; if not, opens the setup modal.
-async function maybeOpenIndivSetup(packProductId, prodType, prodName, categoryId, unitCostHint) {
+async function maybeOpenIndivSetup(packProductId, prodType, prodName, categoryId) {
   // Check if components already exist for this pack product
   try {
     const tok = await getAuthToken();
@@ -7090,7 +7089,7 @@ async function maybeOpenIndivSetup(packProductId, prodType, prodName, categoryId
     _isSlots = [{
       name: stripPackSize(prodName),
       barcode: '',
-      unitCost: unitCostHint || 0,
+      unitCost: 0,
       sellingPrice: 0,
       categoryId: categoryId || '',
       qtyPerPack: 1,   // filled by user (units per case)
@@ -7175,14 +7174,14 @@ function renderIndivSetupSlots() {
         <div class="fg">
           <label class="fl">Units per case</label>
           <input class="fi" type="number" id="is-upc-${i}" value="${s.qtyPerPack||1}" min="1"
-            oninput="_isSlots[${i}].qtyPerPack=Math.max(1,parseInt(this.value)||1);isUpdateCostHint(${i})">
+            oninput="_isSlots[${i}].qtyPerPack=Math.max(1,parseInt(this.value)||1)">
         </div>` : `
         <div class="fg">
           <label class="fl">Qty per pack</label>
           <input class="fi" type="number" id="is-upc-${i}" value="${s.qtyPerPack||1}" min="1" disabled style="opacity:.6">
         </div>`}
         <div class="fg">
-          <label class="fl">Unit cost <span id="is-cost-hint-${i}" style="font-weight:400;color:var(--gray-400)"></span></label>
+          <label class="fl">Unit cost ($)</label>
           <input class="fi" type="number" id="is-cost-${i}" value="${s.unitCost>0?s.unitCost.toFixed(4):''}"
             step="0.0001" min="0" placeholder="0.0000"
             oninput="_isSlots[${i}].unitCost=parseFloat(this.value)||0">
@@ -7200,22 +7199,7 @@ function renderIndivSetupSlots() {
       </div>
     </div>`).join('');
 
-  // Init cost hints for bulk
-  if (_isPackType === 'bulk') _isSlots.forEach((s, i) => isUpdateCostHint(i));
-}
-
-function isUpdateCostHint(i) {
-  // Show auto-calculated unit cost hint based on bulk unit cost ÷ units per case
-  const hintEl = document.getElementById('is-cost-hint-' + i);
-  if (!hintEl) return;
-  const upc = parseInt(document.getElementById('is-upc-' + i)?.value) || 1;
-  const bulkProd = AP.find(p => p.id === _isPackProductId || p.product_id === _isPackProductId);
-  if (bulkProd && bulkProd.last_cost > 0 && upc > 0) {
-    const hint = (bulkProd.last_cost / upc).toFixed(4);
-    hintEl.textContent = '(bulk ÷ ' + upc + ' = $' + hint + ')';
-  } else {
-    hintEl.textContent = '';
-  }
+  // (no cost hint init needed — unit cost is entered manually)
 }
 
 async function isLookupUPC(i) {
