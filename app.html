@@ -2911,7 +2911,7 @@ async function lookupBC() {
           } else if(oDiv) oDiv.innerHTML='';
         }
       }
-      rScans.unshift({barcode:bc, name:sp?.name||bc, status:sp?.stock_status||'OK'});
+      rScans.unshift({barcode:bc, name:sp?.name||bc, status:sp?.stock_status||'OK', product_id:sp?.id||null});
       if(rScans.length>10) rScans.pop();
       renderRsc();
       document.getElementById('si').value='';
@@ -2978,7 +2978,7 @@ async function lookupBC() {
       <button class="btn" data-pid="${prod.id}" onclick="openPD(this.dataset.pid)">View full record</button>
       <button class="btn" data-pid="${prod.id}" onclick="openEP(this.dataset.pid)">Edit product</button>
     </div>`;
-    rScans.unshift({barcode:bc,name:prod.name,status:prod.stock_status});
+    rScans.unshift({barcode:bc,name:prod.name,status:prod.stock_status,product_id:prod.id});
     if(rScans.length>10)rScans.pop();
     renderRsc();
   }
@@ -2987,8 +2987,8 @@ async function lookupBC() {
 
 function renderRsc() {
   document.getElementById('rsc').innerHTML=rScans.length?rScans.map(s=>`
-    <div style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:0.5px solid var(--border);font-size:13px">
-    <span>&#128230;</span><span style="flex:1;font-weight:500">${s.name}</span>
+    <div style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:0.5px solid var(--border);font-size:13px;${s.product_id?'cursor:pointer;':''}" ${s.product_id?`onclick="openPD('${s.product_id}')"`:''}>
+    <span>&#128230;</span><span style="flex:1;font-weight:500;${s.product_id?'color:var(--teal-dark);':''}">${s.name}</span>
     <span style="color:var(--gray-400);font-size:11px">${s.barcode}</span>
     <span class="badge ${s.status==='REORDER'?'b-red':'b-ok'}">${s.status}</span></div>`).join('')
     :'<div class="tm">No scans yet</div>';
@@ -3029,10 +3029,10 @@ function openAPfromUPC() {
   const d = window._lastUpcData;
   if(!d){ openAP(); return; }
   openAP().then(()=>{
+    setProdType('individual');
     document.getElementById('pb').value = d.barcode || '';
     document.getElementById('pn').value = d.title || '';
     document.getElementById('pbr').value = d.brand || '';
-    document.getElementById('pupc').value = d.unitsPerCase || 1;
     if(d.priceHint) document.getElementById('psp').value = d.priceHint.toFixed(2);
     if(d.image){
       document.getElementById('piurl').value = d.image;
@@ -4529,7 +4529,10 @@ async function openPC(){
   // Leave date blank — Rod must explicitly set it. Prevents accidental today-date posts.
   document.getElementById('pc-date').value='';
   document.getElementById('pc-date-confirm').style.display='none';
+  document.getElementById('pc-date-confirm').textContent='';
   document.getElementById('pc-date-banner').style.background='var(--amber)';
+  const _snapInfoReset=document.getElementById('pc-snapshot-info');
+  if(_snapInfoReset) _snapInfoReset.style.display='none';
   document.getElementById('pc-bc').value='';
   document.getElementById('pc-bc-err').textContent='';
   document.getElementById('pc-search-drop').style.display='none';
@@ -5403,7 +5406,7 @@ async function takeAuditSnapshot(){
       value:parseFloat(r.inventory_value||0),
       avg_cost:parseFloat(r.average_cost||0)
     })),
-    totalInventoryValue: (invRaw||[]).filter(r=>{ const p=prodsNow?.find?.(x=>x.id===r.product_id); return !p||p.product_type==='individual'; }).reduce((s,r)=>s+parseFloat(r.inventory_value||0),0)
+    totalInventoryValue: (invRaw||[]).filter(r=>{ const p=(prods||[]).find(x=>x.id===r.product_id); return !p||p.product_type==='individual'; }).reduce((s,r)=>s+parseFloat(r.inventory_value||0),0)
   };
 
   localStorage.setItem('vendentory_audit_snapshot', JSON.stringify(snapshot));
