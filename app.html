@@ -189,6 +189,29 @@ body.ro [onclick^="deleteSup"],body.ro [onclick^="openPC"],body.ro [onclick^="sa
 body.ro [onclick^="openAPfromUPC"],body.ro [onclick^="openAPfromScan"],body.ro [onclick^="saveAliasFromPrompt"],
 body.ro .ro-hide{display:none!important}
 body.ro #ro-badge{display:flex!important}
+/* ── HELP TOOLTIPS ── */
+.help-tip{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:var(--gray-100);color:var(--gray-600);font-size:10px;font-weight:700;cursor:pointer;border:none;font-family:var(--font-body);margin-left:6px;flex-shrink:0;vertical-align:middle;line-height:1;transition:background .12s}
+.help-tip:hover{background:var(--teal-light);color:var(--teal-dark)}
+.help-tip-wrap{position:relative;display:inline-flex;align-items:center}
+.help-tip-box{display:none;position:absolute;left:50%;transform:translateX(-50%);bottom:calc(100% + 8px);width:240px;background:var(--gray-900);color:#fff;font-size:12px;line-height:1.5;padding:10px 13px;border-radius:10px;z-index:600;box-shadow:0 6px 24px rgba(0,0,0,0.25);pointer-events:none}
+.help-tip-box::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:6px solid transparent;border-top-color:var(--gray-900)}
+.help-tip-wrap.tip-open .help-tip-box{display:block}
+/* ── FIRST-RUN WALKTHROUGH ── */
+#wt-overlay{position:fixed;inset:0;z-index:1000;pointer-events:none}
+#wt-overlay.wt-active{pointer-events:auto}
+#wt-backdrop{position:absolute;inset:0;background:rgba(0,0,0,0.55);opacity:0;transition:opacity .3s}
+#wt-overlay.wt-active #wt-backdrop{opacity:1}
+#wt-card{position:absolute;background:var(--white);border-radius:16px;padding:24px;width:300px;box-shadow:0 12px 48px rgba(0,0,0,0.28);transition:top .35s,left .35s,opacity .25s;opacity:0}
+#wt-overlay.wt-active #wt-card{opacity:1}
+#wt-card .wt-step-icon{font-size:28px;margin-bottom:8px}
+#wt-card .wt-step-title{font-family:var(--font-head);font-size:16px;font-weight:700;margin-bottom:6px;color:var(--gray-900)}
+#wt-card .wt-step-body{font-size:13px;color:var(--gray-600);line-height:1.55;margin-bottom:16px}
+#wt-card .wt-btns{display:flex;justify-content:space-between;align-items:center;gap:8px}
+#wt-card .wt-dots{display:flex;gap:5px}
+#wt-card .wt-dot{width:7px;height:7px;border-radius:50%;background:var(--gray-100);transition:background .2s}
+#wt-card .wt-dot.on{background:var(--teal)}
+#wt-spotlight{position:absolute;border-radius:10px;box-shadow:0 0 0 9999px rgba(0,0,0,0.55);transition:all .35s;pointer-events:none;display:none}
+#wt-overlay.wt-active #wt-spotlight{display:block}
 </style>
 </head>
 <body>
@@ -316,11 +339,11 @@ body.ro #ro-badge{display:flex!important}
           </div>
           <div class="g3">
             <div class="card">
-              <div class="card-header"><div class="card-title" style="margin:0">Low stock alerts</div><span style="font-size:12px;color:var(--teal-mid);cursor:pointer" onclick="nav('reports')">View all</span></div>
+              <div class="card-header"><div class="card-title" style="margin:0">Low stock alerts <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">Products below their reorder point. Set reorder levels on each product card to control when they appear here.</div></span></div><span style="font-size:12px;color:var(--teal-mid);cursor:pointer" onclick="nav('reports')">View all</span></div>
               <div id="dls"><div class="tm">Loading...</div></div>
             </div>
             <div class="card">
-              <div class="card-header"><div class="card-title" style="margin:0">Recent activity</div></div>
+              <div class="card-header"><div class="card-title" style="margin:0">Recent activity <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">The last purchases, sales imports, and stock adjustments entered — newest first.</div></span></div></div>
               <div id="dra"><div class="tm">Loading...</div></div>
             </div>
           </div>
@@ -340,7 +363,7 @@ body.ro #ro-badge{display:flex!important}
             </div>
             <div id="sres" style="display:none"></div>
             <div class="card" style="margin-top:14px">
-              <div class="card-title">Recent scans</div>
+              <div class="card-title">Recent scans <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">Your last scanned products this session. Tap any product to open its detail card.</div></span></div>
               <div id="rsc"><div class="tm">No scans yet</div></div>
             </div>
           </div>
@@ -368,7 +391,7 @@ body.ro #ro-badge{display:flex!important}
         <div class="page" id="page-purchases">
           <div style="max-width:840px">
             <div class="card" style="margin-bottom:14px">
-              <div class="card-title">Purchase header</div>
+              <div class="card-title">Purchase header <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">Fill in supplier, invoice number, and date first. Set status to "Ordered" to track incoming shipments, or "Received" to post inventory immediately.</div></span></div>
               <div class="g2">
                 <div class="fg"><label class="fl">Supplier</label><select class="fs" id="pus"></select></div>
                 <div class="fg"><label class="fl">Invoice number</label><input class="fi" id="pui" placeholder="Optional"></div>
@@ -381,7 +404,7 @@ body.ro #ro-badge{display:flex!important}
               <div class="fg"><label class="fl">Notes</label><input class="fi" id="pun" placeholder="Optional"></div>
             </div>
             <div class="card">
-              <div class="card-header"><div class="card-title" style="margin:0">Line items</div><button class="btn btn-sm" onclick="addPL()">+ Add line</button></div>
+              <div class="card-header"><div class="card-title" style="margin:0">Line items <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">One row per product. Enter cases and cost-per-case — units and unit cost calculate automatically. Or use AI Import Receipt to parse a PDF invoice.</div></span></div><button class="btn btn-sm" onclick="addPL()">+ Add line</button></div>
               <div class="pline plh" style="padding-bottom:6px"><div>Product</div><div>Cases</div><div>Cost/case</div><div>Units</div><div>Unit cost</div><div>Total</div><div></div></div>
               <div id="plines"></div>
               <div style="height:0.5px;background:var(--border);margin:12px 0"></div>
@@ -408,7 +431,7 @@ body.ro #ro-badge{display:flex!important}
             <!-- PURCHASE HISTORY -->
             <div class="card" style="margin-top:14px">
               <div class="card-header">
-                <div class="card-title" style="margin:0">Purchase history</div>
+                <div class="card-title" style="margin:0">Purchase history <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">All saved purchases. Filter by month. Click the detail icon to see line items. Ordered purchases show a Receive button — tap it to scan items in and post inventory.</div></span></div>
                 <div style="display:flex;gap:8px;align-items:center">
                   <input class="fi" type="month" id="ph-month" style="width:160px" onchange="loadPurHistory()">
                   <button class="btn btn-sm" onclick="document.getElementById('ph-month').value='';loadPurHistory()">All</button>
@@ -423,7 +446,7 @@ body.ro #ro-badge{display:flex!important}
         <div class="page" id="page-adjustments">
           <div style="max-width:460px">
             <div class="card">
-              <div class="card-title">Stock adjustment / write-off</div>
+              <div class="card-title">Stock adjustment / write-off <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">Use this to correct on-hand quantities. Enter a positive number to add units, negative to remove. Write-offs (damaged, expired, missing) are tracked for your shrinkage report.</div></span></div>
               <div class="fg">
                 <label class="fl">Product (search or scan barcode)</label>
                 <div style="display:flex;gap:8px">
@@ -453,17 +476,17 @@ body.ro #ro-badge{display:flex!important}
               <button class="btn btn-p" onclick="saveAdj()">Save adjustment</button>
             </div>
             <div class="card" style="margin-top:13px">
-              <div class="card-title">Recent adjustments</div>
+              <div class="card-title">Recent adjustments <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">All manual quantity corrections and write-offs, newest first. You can edit the date or delete an entry using the icons on each row.</div></span></div>
               <div id="raj"><div class="tm">Loading...</div></div>
             </div>
             <div class="card" style="margin-top:13px">
-              <div class="card-title">&#128203; Physical Inventory Count</div>
+              <div class="card-title">&#128203; Physical Inventory Count <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">Count every product on your shelves. The app compares your count to the book quantity and writes off any difference as shrinkage. Always set the count date before you start.</div></span></div>
               <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px;line-height:1.5">Scan or search each product, enter your counted quantity, and the app will write off any missing units as shrinkage — with a cost summary ready for your bookkeeper.</div>
               <button class="btn btn-p" style="width:100%;justify-content:center" onclick="openPC()">&#128203; Start Physical Count</button>
             </div>
             <div class="card" style="margin-top:13px">
               <div class="card-header">
-                <div class="card-title" style="margin-bottom:0">&#128200; Shrinkage &amp; Loss Summary</div>
+                <div class="card-title" style="margin-bottom:0">&#128200; Shrinkage &amp; Loss Summary <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">Total value of all write-offs and physical count variances in the selected period. Broken down by reason (damaged, expired, missing, etc.).</div></span></div>
                 <select class="fs" id="shrink-period" style="font-size:12px;padding:5px 8px;width:auto" onchange="loadShrinkSummary()">
                   <option value="30">Last 30 days</option>
                   <option value="90">Last 90 days</option>
@@ -474,7 +497,7 @@ body.ro #ro-badge{display:flex!important}
               <div id="shrink-summary"><div class="tm">Loading...</div></div>
             </div>
             <div class="card" style="margin-top:13px">
-              <div class="card-title">&#9881; Inventory Costing</div>
+              <div class="card-title">&#9881; Inventory Costing <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">WAC (Weighted Average Cost) is recalculated automatically when you receive purchases. Run this manually only if you suspect costs are wrong — it replays every receipt from the beginning.</div></span></div>
               <div style="font-size:13px;color:var(--gray-600);margin-bottom:10px;line-height:1.5">
                 Recalculates the Weighted Average Cost (WAC) for <strong>every active product</strong> by replaying all purchase receipts from oldest to newest. Use this to fix any products with incorrect costs that haven't been touched by a recent purchase.
               </div>
@@ -482,7 +505,7 @@ body.ro #ro-badge{display:flex!important}
               <button class="btn btn-p btn-sm" id="wac-recalc-btn" onclick="recalcAllWAC()">&#8635; Recalculate All WAC</button>
             </div>
             <div class="card" style="margin-top:13px">
-              <div class="card-title">&#128269; Inventory Audit</div>
+              <div class="card-title">&#128269; Inventory Audit <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">Checks every product for duplicate receipts, impossible quantities, and transaction mismatches. Run this before a physical count to make sure your books are clean.</div></span></div>
               <div style="font-size:13px;color:var(--gray-600);margin-bottom:10px;line-height:1.5">
                 Scans every product's transaction history for duplicate receipts, impossible quantities, and mismatches between the DB sum and what's shown on-hand. Run this before any physical count.
               </div>
@@ -497,7 +520,7 @@ body.ro #ro-badge{display:flex!important}
         <div class="page" id="page-imports">
           <div style="max-width:660px">
             <div class="card" style="margin-bottom:13px">
-              <div class="card-title">Import sales report</div>
+              <div class="card-title">Import sales report <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">Drop your weekly ParLevel CSV export here. The app matches product names automatically and deducts sold units from inventory. Set the date range before confirming.</div></span></div>
               <div class="dz" id="idz" onclick="document.getElementById('ifl').click()" ondragover="event.preventDefault();this.style.borderColor='var(--teal-mid)'" ondragleave="this.style.borderColor=''" ondrop="handleDrop(event)">
                 <div style="font-size:30px;margin-bottom:9px">&#128202;</div>
                 <div style="font-size:14px;font-weight:600;margin-bottom:3px">Drop your CSV or Excel sales file here</div>
@@ -523,13 +546,13 @@ body.ro #ro-badge{display:flex!important}
               </div>
             </div>
             <div class="card" style="margin-top:13px">
-              <div class="card-title">Import history</div>
+              <div class="card-title">Import history <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">Every sales import you've confirmed, with the date range it covered. You can delete an import to reverse its inventory deductions — use the Audit Snapshot first to be safe.</div></span></div>
               <div id="ih-gap"></div>
               <div id="ih"><div class="tm">Loading...</div></div>
             </div>
             <div class="card" style="margin-top:13px" id="audit-card">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-                <div class="card-title" style="margin:0">&#128203; Audit Snapshot</div>
+                <div class="card-title" style="margin:0">&#128203; Audit Snapshot <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">Take a snapshot of current on-hand quantities before deleting an import. After deleting, use Compare to verify inventory was restored correctly.</div></span></div>
                 <div style="display:flex;gap:8px">
                   <button class="btn btn-sm btn-p" onclick="takeAuditSnapshot()" id="audit-snap-btn">&#128247; Take snapshot</button>
                   <button class="btn btn-sm" onclick="openAuditCompare()" id="audit-compare-btn" style="display:none">&#9878; Compare</button>
@@ -650,7 +673,7 @@ body.ro #ro-badge{display:flex!important}
               <div class="ir"><div style="color:var(--gray-400)">Scan suffix</div><div style="font-weight:500">Enter (auto)</div></div>
             </div>
             <div class="card">
-              <div class="card-title">&#128100; User Access</div>
+              <div class="card-title">&#128100; User Access <span class="help-tip-wrap"><button class="help-tip" onclick="toggleTip(this)">?</button><div class="help-tip-box">Admin users can add, edit, and delete everything. View Only users (employee role) can see all data but cannot make any changes — ideal for your bookkeeper.</div></span></div>
               <div style="font-size:13px;color:var(--gray-600);margin-bottom:12px;line-height:1.5">Manage who can access Vendentory and what they can do. <strong>View only</strong> users see everything but cannot add, edit, or delete anything.</div>
               <div id="user-list"><div class="tm">Loading...</div></div>
               <button class="btn btn-sm" style="margin-top:10px" onclick="loadUserList()">&#8635; Refresh users</button>
@@ -670,6 +693,9 @@ body.ro #ro-badge{display:flex!important}
                 </div>
               </div>
               <button class="btn btn-d btn-sm" style="margin-top:14px" onclick="doLogout()">Sign out</button>
+              <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+                <button class="btn btn-sm" onclick="try{localStorage.removeItem('vendentory_tour_seen')}catch(e){}; _wtStep=0; wtShow();" style="font-size:12px;color:var(--gray-600)">&#10067; Restart tour</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1013,6 +1039,7 @@ function showApp() {
   // Always start on dashboard — Chrome session restore keeps sessionStorage alive
   // across close/reopen, so we no longer try to restore the last page.
   nav('dashboard');
+  maybeShowTour();
 }
 
 async function doLogin() {
@@ -6799,6 +6826,187 @@ if('serviceWorker' in navigator) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── HELP TOOLTIPS ──────────────────────────────────────────────────────────
+function toggleTip(btn) {
+  const wrap = btn.closest('.help-tip-wrap');
+  if (!wrap) return;
+  const isOpen = wrap.classList.contains('tip-open');
+  // Close all open tips first
+  document.querySelectorAll('.help-tip-wrap.tip-open').forEach(w => w.classList.remove('tip-open'));
+  if (!isOpen) wrap.classList.add('tip-open');
+}
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.help-tip-wrap')) {
+    document.querySelectorAll('.help-tip-wrap.tip-open').forEach(w => w.classList.remove('tip-open'));
+  }
+}, true);
+
+// ── FIRST-RUN WALKTHROUGH ───────────────────────────────────────────────────
+var _wtStep = 0;
+var _wtSteps = [
+  {
+    icon: '👋',
+    title: 'Welcome to Vendentory!',
+    body: 'This quick tour will walk you through the main sections. It only takes a minute. You can skip at any time.',
+    target: null,
+    page: null
+  },
+  {
+    icon: '📊',
+    title: 'Dashboard',
+    body: 'Your home base. See this month\'s sales, current inventory value, and products that need reordering — all at a glance.',
+    target: '.nav-item[data-page="dashboard"]',
+    page: 'dashboard'
+  },
+  {
+    icon: '📷',
+    title: 'Scan Product',
+    body: 'Scan a barcode with your iPhone camera, Bluetooth scanner, or USB dongle to instantly pull up any product\'s stock level, cost, and history.',
+    target: '.nav-item[data-page="scan"]',
+    page: null
+  },
+  {
+    icon: '📦',
+    title: 'Products',
+    body: 'Your full product catalog. Search, filter by category or status, and tap any product card to edit details, view transaction history, or set reorder levels.',
+    target: '.nav-item[data-page="products"]',
+    page: null
+  },
+  {
+    icon: '🛒',
+    title: 'Purchases',
+    body: 'Record incoming shipments from Amazon and Sam\'s Club. Use AI Import Receipt to scan a PDF invoice and have products matched automatically.',
+    target: '.nav-item[data-page="purchases"]',
+    page: null
+  },
+  {
+    icon: '⚖️',
+    title: 'Stock Control',
+    body: 'Fix inventory quantities with adjustments and write-offs. Run a Physical Count to reconcile your shelves against the books, and check for losses in the Shrinkage Summary.',
+    target: '.nav-item[data-page="adjustments"]',
+    page: null
+  },
+  {
+    icon: '📈',
+    title: 'Import Sales',
+    body: 'Drop your weekly ParLevel CSV export here. The app matches products and deducts sold units from inventory automatically.',
+    target: '.nav-item[data-page="imports"]',
+    page: null
+  },
+  {
+    icon: '📋',
+    title: 'Reports',
+    body: 'Weekly, monthly, and custom P&L, COGS, top sellers, and a Bookkeeper report ready to send to your accountant.',
+    target: '.nav-item[data-page="reports"]',
+    page: null
+  },
+  {
+    icon: '⚙️',
+    title: 'Settings',
+    body: 'Manage your profile, categories, suppliers, and user access. Your bookkeeper Michele has a view-only account she can log into from any browser.',
+    target: '.nav-item[data-page="settings"]',
+    page: null
+  },
+  {
+    icon: '❓',
+    title: 'Contextual Help',
+    body: 'See a ? button next to any card title? Tap it for a quick explanation of what that section does. You\'re all set!',
+    target: null,
+    page: null
+  }
+];
+
+function wtShow() {
+  const overlay = document.getElementById('wt-overlay');
+  if (!overlay) return;
+  overlay.classList.add('wt-active');
+  wtRender();
+}
+
+function wtRender() {
+  var step = _wtSteps[_wtStep];
+  if (!step) return;
+  document.getElementById('wt-icon').textContent = step.icon;
+  document.getElementById('wt-title').textContent = step.title;
+  document.getElementById('wt-body').textContent = step.body;
+
+  // Dots
+  var dots = '';
+  _wtSteps.forEach(function(_, i) {
+    dots += '<div class="wt-dot' + (i === _wtStep ? ' on' : '') + '"></div>';
+  });
+  document.getElementById('wt-dots').innerHTML = dots;
+
+  // Prev/Next buttons
+  var isLast = _wtStep === _wtSteps.length - 1;
+  document.getElementById('wt-prev').style.display = _wtStep > 0 ? '' : 'none';
+  document.getElementById('wt-next').textContent = isLast ? '✓ Done' : 'Next →';
+
+  // Spotlight + card position
+  var card = document.getElementById('wt-card');
+  var spotlight = document.getElementById('wt-spotlight');
+  if (step.target) {
+    var el = document.querySelector(step.target);
+    if (el) {
+      var r = el.getBoundingClientRect();
+      spotlight.style.top = (r.top - 4) + 'px';
+      spotlight.style.left = (r.left - 4) + 'px';
+      spotlight.style.width = (r.width + 8) + 'px';
+      spotlight.style.height = (r.height + 8) + 'px';
+      spotlight.style.display = 'block';
+      // Position card to right of sidebar target, or below if no room
+      var cardTop = Math.max(16, r.top - 20);
+      var cardLeft = r.right + 16;
+      if (cardLeft + 310 > window.innerWidth) cardLeft = Math.max(8, r.left - 316);
+      card.style.top = cardTop + 'px';
+      card.style.left = cardLeft + 'px';
+      card.style.transform = 'none';
+      card.style.position = 'absolute';
+    } else {
+      wtCenterCard(card, spotlight);
+    }
+  } else {
+    wtCenterCard(card, spotlight);
+  }
+}
+
+function wtCenterCard(card, spotlight) {
+  spotlight.style.display = 'none';
+  card.style.position = 'absolute';
+  card.style.top = '50%';
+  card.style.left = '50%';
+  card.style.transform = 'translate(-50%,-50%)';
+}
+
+function wtNext() {
+  if (_wtStep >= _wtSteps.length - 1) { wtDone(); return; }
+  _wtStep++;
+  wtRender();
+}
+
+function wtPrev() {
+  if (_wtStep <= 0) return;
+  _wtStep--;
+  wtRender();
+}
+
+function wtSkip() { wtDone(); }
+
+function wtDone() {
+  try { localStorage.setItem('vendentory_tour_seen', '1'); } catch(e) {}
+  var overlay = document.getElementById('wt-overlay');
+  if (overlay) overlay.classList.remove('wt-active');
+  _wtStep = 0;
+}
+
+function maybeShowTour() {
+  try {
+    if (!localStorage.getItem('vendentory_tour_seen')) {
+      setTimeout(wtShow, 800);
+    }
+  } catch(e) {}
+}
+
 function openM(id){const el=document.getElementById(id);if(el)el.style.display='flex';}
 function closeM(id){const el=document.getElementById(id);if(el)el.style.display='none';}
 var hideTimer=null;
@@ -6878,6 +7086,26 @@ function toast(msg,type=''){
 
     <!-- Report (shown after posting) -->
     <div id="pc-report" style="display:none;margin-top:14px"></div>
+  </div>
+</div>
+<!-- WALKTHROUGH OVERLAY -->
+<div id="wt-overlay">
+  <div id="wt-backdrop" onclick="wtSkip()"></div>
+  <div id="wt-spotlight"></div>
+  <div id="wt-card">
+    <div class="wt-step-icon" id="wt-icon"></div>
+    <div class="wt-step-title" id="wt-title"></div>
+    <div class="wt-step-body" id="wt-body"></div>
+    <div class="wt-btns">
+      <div class="wt-dots" id="wt-dots"></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" id="wt-prev" onclick="wtPrev()" style="display:none">← Back</button>
+        <button class="btn btn-p btn-sm" id="wt-next" onclick="wtNext()">Next →</button>
+      </div>
+    </div>
+    <div style="margin-top:12px;text-align:center">
+      <button onclick="wtSkip()" style="background:none;border:none;font-size:12px;color:var(--gray-400);cursor:pointer;font-family:var(--font-body)">Skip tour</button>
+    </div>
   </div>
 </div>
 </body>
