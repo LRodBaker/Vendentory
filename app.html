@@ -3241,11 +3241,198 @@ async function checkOverdueOrders(){
   } catch(e){}
 }
 
-function openReceiveOrder(id) {
-  if(confirm('Mark this order as received?\n\nThis will update inventory and cost for all items on this order.')) {
-    markPurReceived(id);
+// openReceiveOrder now routes to scan-to-receive
+function openReceiveOrder(id) { openSTR(id); }
+
+// ─── SCAN-TO-RECEIVE ─────────────────────────────────────────────────────────
+let _strPurId = null;     // purchase being received
+let _strLines = [];       // [{product_id,name,barcode,units_received,unit_cost,confirmed,line_id}]
+
+async function openSTR(purchaseId) {
+  _strPurId = purchaseId;
+  _strLines = [];
+
+  showL('Loading order...');
+  const tok = await getAuthToken();
+  const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok};
+
+  // Load purchase header
+  const purResp = await fetch(
+    SURL+'/rest/v1/purchases?id=eq.'+purchaseId+'&select=*,suppliers(name)',
+    {headers:wh}
+  );
+  const purs = purResp.ok ? await purResp.json() : [];
+  const pur = purs[0];
+  if(!pur){ hideL(); toast('Purchase not found','err'); return; }
+
+  // Load purchase lines with product barcode
+  const linesResp = await fetch(
+    SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+purchaseId
+      +'&select=id,product_id,units_received,unit_cost,products(id,name,barcode,average_cost)',
+    {headers:wh}
+  );
+  const lines = linesResp.ok ? await linesResp.json() : [];
+  hideL();
+
+  if(!lines.length){
+    toast('No line items on this order — add products first','err');
+    return;
   }
+
+  _strLines = lines.map(l=>({
+    line_id:    l.id,
+    product_id: l.product_id,
+    name:       l.products?.name || 'Unknown',
+    barcode:    l.products?.barcode || '',
+    units:      l.units_received,
+    unit_cost:  l.unit_cost,
+    confirmed:  false
+  }));
+
+  // Populate modal
+  document.getElementById('str-header').textContent =
+    (pur.suppliers?.name||'Unknown supplier') + ' · ' + fmtD(pur.purchase_date) +
+    (pur.invoice_number ? ' · Invoice: '+pur.invoice_number : '');
+  document.getElementById('str-bc').value = '';
+  document.getElementById('str-bc-err').style.display = 'none';
+  document.getElementById('str-search-drop').style.display = 'none';
+
+  strRenderLines();
+  openM('m-str');
+  setTimeout(()=>document.getElementById('str-bc').focus(), 300);
 }
+
+function closeSTR() {
+  closeM('m-str');
+  _strPurId = null;
+  _strLines = [];
+}
+
+function strRenderLines() {
+  const el = document.getElementById('str-lines');
+  const confirmed = _strLines.filter(l=>l.confirmed).length;
+  const total = _strLines.length;
+
+  document.getElementById('str-progress').textContent = confirmed + ' of ' + total + ' confirmed';
+  document.getElementById('str-post-btn').disabled = confirmed < total;
+
+  el.innerHTML = _strLines.map((l,i)=>`
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;margin-bottom:6px;
+      background:${l.confirmed?'var(--green-light)':'var(--gray-50)'};
+      border:1px solid ${l.confirmed?'var(--green)':'var(--border)'};
+      cursor:pointer" onclick="strToggleLine(${i})">
+      <div style="font-size:18px;flex-shrink:0">${l.confirmed?'&#9989;':'&#9744;'}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${l.name}</div>
+        <div style="font-size:11px;color:var(--gray-400);margin-top:1px">
+          ${l.units} units${l.barcode?' · Barcode: '+l.barcode:''}
+        </div>
+      </div>
+      <div style="font-size:13px;font-weight:700;color:${l.confirmed?'var(--green)':'var(--gray-400)'};flex-shrink:0">
+        ${l.confirmed?'&#10003; Confirmed':'Tap to confirm'}
+      </div>
+    </div>`).join('');
+}
+
+function strToggleLine(idx) {
+  if(!_strLines[idx]) return;
+  _strLines[idx].confirmed = !_strLines[idx].confirmed;
+  strRenderLines();
+  // Clear any error
+  const errEl = document.getElementById('str-bc-err');
+  if(errEl) errEl.style.display = 'none';
+}
+
+function strSearchInput() {
+  const q = document.getElementById('str-bc').value.toLowerCase().trim();
+  const drop = document.getElementById('str-search-drop');
+  if(!q){ drop.style.display='none'; return; }
+
+  // Match against unconfirmed lines by name or barcode
+  const matches = _strLines
+    .map((l,i)=>({...l,idx:i}))
+    .filter(l=>!l.confirmed && (
+      l.name.toLowerCase().includes(q) ||
+      (l.barcode && l.barcode.toLowerCase().includes(q))
+    ));
+
+  if(!matches.length){ drop.style.display='none'; return; }
+
+  drop.style.display = 'block';
+  drop.innerHTML = matches.map(l=>`
+    <div style="padding:9px 12px;cursor:pointer;font-size:13px;border-bottom:0.5px solid rgba(255,255,255,0.08);color:#fff"
+      onmousedown="strConfirmIdx(${l.idx})">
+      <strong>${l.name}</strong>
+      <span style="color:rgba(255,255,255,0.4);font-size:11px;margin-left:8px">${l.units} units</span>
+    </div>`).join('');
+}
+
+function strScanBarcode() {
+  const val = document.getElementById('str-bc').value.trim();
+  if(!val) return;
+
+  const errEl = document.getElementById('str-bc-err');
+  const drop = document.getElementById('str-search-drop');
+  drop.style.display = 'none';
+
+  // Try exact barcode match first
+  const bcMatch = _strLines.findIndex(l=>
+    !l.confirmed && l.barcode && l.barcode === val
+  );
+  if(bcMatch !== -1){
+    strConfirmIdx(bcMatch);
+    return;
+  }
+
+  // Try name match
+  const nameMatch = _strLines.findIndex(l=>
+    !l.confirmed && l.name.toLowerCase().includes(val.toLowerCase())
+  );
+  if(nameMatch !== -1){
+    strConfirmIdx(nameMatch);
+    return;
+  }
+
+  // Already confirmed?
+  const alreadyDone = _strLines.findIndex(l=>
+    l.confirmed && (l.barcode===val || l.name.toLowerCase().includes(val.toLowerCase()))
+  );
+  if(alreadyDone !== -1){
+    errEl.textContent = '"'+_strLines[alreadyDone].name+'" is already confirmed ✓';
+    errEl.style.display = 'block';
+    document.getElementById('str-bc').value = '';
+    return;
+  }
+
+  errEl.textContent = 'No matching product found for "'+val+'" — try tapping the item in the list below.';
+  errEl.style.display = 'block';
+}
+
+function strConfirmIdx(idx) {
+  _strLines[idx].confirmed = true;
+  document.getElementById('str-bc').value = '';
+  document.getElementById('str-search-drop').style.display = 'none';
+  document.getElementById('str-bc-err').style.display = 'none';
+  strRenderLines();
+  // Scroll confirmed item into view briefly
+  const items = document.getElementById('str-lines').children;
+  if(items[idx]) items[idx].scrollIntoView({behavior:'smooth',block:'nearest'});
+  // Refocus scan input
+  document.getElementById('str-bc').focus();
+}
+
+async function strPostReceive() {
+  const allConfirmed = _strLines.every(l=>l.confirmed);
+  if(!allConfirmed){ toast('Confirm all items before posting','err'); return; }
+
+  if(!confirm('Post receipt for all '+_strLines.length+' items? This will update inventory and close the order.')) return;
+
+  closeSTR();
+  // Delegate to existing markPurReceived — it handles transactions, WAC, etc.
+  await markPurReceived(_strPurId);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 
 async function markPurReceived(id){
   showL('Processing receipt...');
