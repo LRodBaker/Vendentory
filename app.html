@@ -3028,32 +3028,82 @@ function renderRsc() {
 
 function openAPfromScan(bc){openAP().then(()=>{document.getElementById('pb').value=bc;});}
 
-// ── UPC item database lookup (free tier, 100/day, no key needed) ─────────────
+// ── UPC lookup — chains multiple free databases, returns first hit ────────────
+// Sources: Open Food Facts → upcitemdb → UPCbuzz
 async function upcLookup(bc) {
+  // Normalize — strip non-digits, keep as string to preserve leading zeros
+  const normalized = (bc || '').replace(/\D/g, '');
+  if (!normalized) return null;
+
+  // ── 1. Open Food Facts — free, unlimited, no key ──────────────────────────
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(()=>ctrl.abort(), 8000);
-    const resp = await fetch('https://api.upcitemdb.com/prod/trial/lookup?upc='+encodeURIComponent(bc),
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const resp = await fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(normalized) + '.json',
       { signal: ctrl.signal });
     clearTimeout(timer);
-    if(!resp.ok) return null;
-    const json = await resp.json();
-    if(json.code !== 'OK' || !json.items || !json.items.length) return null;
-    const item = json.items[0];
-    // Parse pack size from title — e.g. "24 pk", "45 ct", "12 count", "50 pc"
-    const packMatch = (item.title||'').match(/(\d+)\s*(?:pk|pack|ct|count|piece|pc)/i);
-    const unitsPerCase = packMatch ? Math.min(Math.max(parseInt(packMatch[1]),1),999) : 1;
-    return {
-      barcode: bc,
-      title: item.title||'',
-      brand: item.brand||'',
-      image: (item.images&&item.images[0]) ? item.images[0] : null,
-      unitsPerCase,
-      priceHint: item.lowest_recorded_price ? parseFloat(item.lowest_recorded_price) : null
-    };
-  } catch(e) {
-    return null; // timeout or network error — fall back to manual
-  }
+    if (resp.ok) {
+      const json = await resp.json();
+      if (json.status === 1 && json.product) {
+        const p = json.product;
+        const title = p.product_name_en || p.product_name || p.abbreviated_product_name || '';
+        const brand = p.brands ? p.brands.split(',')[0].trim() : '';
+        const image = p.image_front_url || p.image_url || null;
+        if (title) return { barcode: normalized, title, brand, image, unitsPerCase: 1, priceHint: null };
+      }
+    }
+  } catch(e) { /* try next */ }
+
+  // ── 2. upcitemdb — free tier, 100/day ─────────────────────────────────────
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const resp = await fetch('https://api.upcitemdb.com/prod/trial/lookup?upc=' + encodeURIComponent(normalized),
+      { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (resp.ok) {
+      const json = await resp.json();
+      if (json.code === 'OK' && json.items && json.items.length) {
+        const item = json.items[0];
+        const packMatch = (item.title || '').match(/(\d+)\s*(?:pk|pack|ct|count|piece|pc)/i);
+        const unitsPerCase = packMatch ? Math.min(Math.max(parseInt(packMatch[1]), 1), 999) : 1;
+        return {
+          barcode: normalized,
+          title: item.title || '',
+          brand: item.brand || '',
+          image: (item.images && item.images[0]) ? item.images[0] : null,
+          unitsPerCase,
+          priceHint: item.lowest_recorded_price ? parseFloat(item.lowest_recorded_price) : null
+        };
+      }
+    }
+  } catch(e) { /* try next */ }
+
+  // ── 3. UPCbuzz — free, no key ─────────────────────────────────────────────
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const resp = await fetch('https://api.upcbuzz.com/lookup?upc=' + encodeURIComponent(normalized),
+      { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (resp.ok) {
+      const json = await resp.json();
+      const item = Array.isArray(json) ? json[0] : json;
+      const title = item && (item.name || item.title || item.product_name || '');
+      if (title) {
+        return {
+          barcode: normalized,
+          title,
+          brand: (item && (item.brand || item.manufacturer)) || '',
+          image: (item && (item.image || (item.images && item.images[0]))) || null,
+          unitsPerCase: 1,
+          priceHint: null
+        };
+      }
+    }
+  } catch(e) { /* all sources exhausted */ }
+
+  return null; // not found in any database
 }
 
 // ── Pre-fill Add Product form from UPC lookup result ─────────────────────────
@@ -7203,17 +7253,27 @@ function renderIndivSetupSlots() {
 }
 
 async function isLookupUPC(i) {
-  const bc = (document.getElementById('is-bc-' + i)?.value || '').trim();
-  if (!bc) { toast('Enter a barcode first', 'warn'); return; }
+  const bcRaw = (document.getElementById('is-bc-' + i)?.value || '').trim();
+  if (!bcRaw) { toast('Enter a barcode first', 'warn'); return; }
+  // Normalize — strip non-digits, preserve as string (keeps leading zeros)
+  const bc = bcRaw.replace(/\D/g, '') || bcRaw;
+  // Update the input to show normalized value
+  const bcEl = document.getElementById('is-bc-' + i);
+  if (bcEl) { bcEl.value = bc; _isSlots[i].barcode = bc; }
   const statusEl = document.getElementById('is-upc-status-' + i);
   const btn = document.getElementById('is-lkup-' + i);
   if (statusEl) statusEl.innerHTML = '<span style="color:var(--gray-400)">Looking up…</span>';
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   try {
-    // ── Step 1: Check your own product list first ──────────────────────────
-    let existingProd = AP.find(p => p.barcode === bc && p.product_type === 'individual');
+    // ── Step 1: Check your own product list first ─────────────────────────
+    // Normalize stored barcodes the same way to handle leading-zero mismatches
+    let existingProd = AP.find(p =>
+      p.product_type === 'individual' &&
+      p.barcode &&
+      (p.barcode === bc || p.barcode.replace(/\D/g,'') === bc || bc.replace(/\D/g,'') === p.barcode.replace(/\D/g,''))
+    );
 
-    // Also check alternate barcodes table if not found by primary barcode
+    // Also check alternate barcodes table
     if (!existingProd) {
       try {
         const altR = await fetch(
