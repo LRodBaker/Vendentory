@@ -7210,30 +7210,65 @@ async function isLookupUPC(i) {
   if (statusEl) statusEl.innerHTML = '<span style="color:var(--gray-400)">Looking up…</span>';
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   try {
+    // ── Step 1: Check your own product list first ──────────────────────────
+    let existingProd = AP.find(p => p.barcode === bc && p.product_type === 'individual');
+
+    // Also check alternate barcodes table if not found by primary barcode
+    if (!existingProd) {
+      try {
+        const altR = await fetch(
+          SURL + '/rest/v1/product_barcodes?barcode=eq.' + encodeURIComponent(bc) + '&select=product_id',
+          { headers: { 'apikey': SKEY, 'Authorization': 'Bearer ' + SKEY } }
+        );
+        if (altR.ok) {
+          const altRows = await altR.json();
+          if (altRows.length) existingProd = AP.find(p => p.id === altRows[0].product_id && p.product_type === 'individual');
+        }
+      } catch(e) {}
+    }
+
+    if (existingProd) {
+      // Already in system — offer to link it instead of creating a duplicate
+      _isSlots[i]._linkToExisting = existingProd.id;
+      const nameEl = document.getElementById('is-name-' + i);
+      if (nameEl) { nameEl.value = existingProd.name; _isSlots[i].name = existingProd.name; }
+      const brandEl = document.getElementById('is-brand-' + i);
+      if (brandEl) brandEl.value = existingProd.brand || '';
+      const imgWrap = document.getElementById('is-img-wrap-' + i);
+      if (imgWrap && existingProd.image_url) {
+        imgWrap.innerHTML = `<img src="${existingProd.image_url}" style="width:100%;height:100%;object-fit:contain;border-radius:8px" onerror="this.parentElement.innerHTML='📦'">`;
+      }
+      const costEl = document.getElementById('is-cost-' + i);
+      if (costEl && existingProd.average_cost > 0) costEl.value = parseFloat(existingProd.average_cost).toFixed(4);
+      const priceEl = document.getElementById('is-price-' + i);
+      if (priceEl && existingProd.selling_price > 0) priceEl.value = parseFloat(existingProd.selling_price).toFixed(2);
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--teal-dark)">✓ Already in your system — will link to <strong>' + existingProd.name + '</strong> instead of creating a new one</span>';
+      return;
+    }
+
+    // ── Step 2: Not in system — try external UPC database ─────────────────
     const data = await upcLookup(bc);
     if (data) {
       _isSlots[i]._upcData = data;
-      // Auto-fill name only if blank or still the stripped default
+      _isSlots[i]._linkToExisting = null;
       const nameEl = document.getElementById('is-name-' + i);
       if (nameEl && (!nameEl.value.trim() || nameEl.value === _isSlots[i].name)) {
         nameEl.value = data.title || nameEl.value;
         _isSlots[i].name = nameEl.value;
       }
-      // Brand
       const brandEl = document.getElementById('is-brand-' + i);
       if (brandEl && data.brand) brandEl.value = data.brand;
-      // Image
       const imgWrap = document.getElementById('is-img-wrap-' + i);
       if (imgWrap && data.image) {
         imgWrap.innerHTML = `<img src="${data.image}" style="width:100%;height:100%;object-fit:contain;border-radius:8px" onerror="this.parentElement.innerHTML='📦'">`;
       }
-      // Sell price hint
       if (data.priceHint) {
         const priceEl = document.getElementById('is-price-' + i);
         if (priceEl && !priceEl.value) priceEl.value = data.priceHint.toFixed(2);
       }
       if (statusEl) statusEl.innerHTML = '<span style="color:var(--teal-dark)">✓ Found: ' + (data.title||bc) + '</span>';
     } else {
+      _isSlots[i]._linkToExisting = null;
       if (statusEl) statusEl.innerHTML = '<span style="color:var(--amber)">Not found in database — fill in manually</span>';
     }
   } catch(e) {
@@ -7286,7 +7321,18 @@ async function saveIndivSetup() {
   const compRows = [];
   for (let i = 0; i < _isSlots.length; i++) {
     const s = _isSlots[i];
-    // Build product payload
+
+    // ── Already exists in system — just link it, don't create a duplicate ──
+    if (s._linkToExisting) {
+      compRows.push({
+        pack_product_id: _isPackProductId,
+        component_product_id: s._linkToExisting,
+        qty_per_pack: s.qtyPerPack
+      });
+      continue;
+    }
+
+    // ── New product — create it then link ──────────────────────────────────
     const prodPayload = {
       name: s.name,
       barcode: s.barcode || null,
@@ -7365,8 +7411,13 @@ async function saveIndivSetup() {
   hideL();
   closeM('m-indiv-setup');
   renderProds();
-  const noun = compRows.length === 1 ? 'product' : 'products';
-  toast(compRows.length + ' individual ' + noun + ' created and linked ✓', 'ok');
+  const created = _isSlots.filter(s => !s._linkToExisting).length;
+  const linked  = _isSlots.filter(s =>  s._linkToExisting).length;
+  let msg = '';
+  if (created && linked) msg = created + ' created, ' + linked + ' linked ✓';
+  else if (created)      msg = created + ' individual product' + (created > 1 ? 's' : '') + ' created and linked ✓';
+  else                   msg = linked  + ' existing product' +  (linked  > 1 ? 's' : '') + ' linked ✓';
+  toast(msg, 'ok');
   saveBtn.disabled = false; saveBtn.textContent = '✓ Create & link';
 }
 // ─────────────────────────────────────────────────────────────────────────────
