@@ -4076,6 +4076,31 @@ async function savePur() {
   const status = document.getElementById('pustat').value;
   const vl=PL.filter(l=>l.product_id&&l.units>0);
   if(!vl.length){toast('Add at least one product line','err');return;}
+
+  // ── DUPLICATE INVOICE CHECK — must run BEFORE creating any DB records ──────
+  const invoiceNum = document.getElementById('pui').value?.trim();
+  if(invoiceNum && !_editPurId) {
+    showL('Checking for duplicate invoice...');
+    const tok0=await getAuthToken();
+    const dupChk = await fetch(
+      SURL+'/rest/v1/purchases?invoice_number=eq.'+encodeURIComponent(invoiceNum)+'&select=id,purchase_date,supplier_id&limit=1',
+      {headers:{'apikey':SKEY,'Authorization':'Bearer '+tok0}}
+    );
+    if(dupChk.ok) {
+      const dups = await dupChk.json();
+      if(dups.length > 0) {
+        const d = dups[0];
+        hideL();
+        const msg = `\u26A0 Invoice "${invoiceNum}" was already imported on ${fmtD(d.purchase_date)}.\n\nImporting it again will double-count inventory and costs.\n\nClick OK only if this is a different order with the same number. Click Cancel to stop.`;
+        if(!confirm(msg)) {
+          toast('Import cancelled \u2014 duplicate invoice number','warn');
+          return;
+        }
+      }
+    }
+  }
+  // ── END DUPLICATE INVOICE CHECK ───────────────────────────────────────────
+
   showL(_editPurId?'Updating purchase...':'Saving purchase...');
   const sub=vl.reduce((s,l)=>s+l.total,0);
   const sh=parseFloat(document.getElementById('push').value)||0;
@@ -4111,27 +4136,7 @@ async function savePur() {
     body:JSON.stringify(vl.map(l=>({purchase_id:purId,product_id:l.product_id,cases:l.cases,cost_per_case:l.cost_per_case,units_received:l.units,unit_cost:l.unit_cost,line_total:l.total})))
   });
 
-  // ── Duplicate invoice check ─────────────────────────────────────────────
-  const invoiceNum = document.getElementById('pui').value?.trim();
-  if(invoiceNum && !_editPurId) {
-    const dupChk = await fetch(
-      SURL+'/rest/v1/purchases?invoice_number=eq.'+encodeURIComponent(invoiceNum)+'&select=id,purchase_date,suppliers(name)&limit=1',
-      {headers:wh}
-    );
-    if(dupChk.ok) {
-      const dups = await dupChk.json();
-      if(dups.length > 0) {
-        const d = dups[0];
-        const msg = `⚠ Invoice "${invoiceNum}" was already imported on ${fmtD(d.purchase_date)} from ${d.suppliers?.name||'unknown supplier'}.\n\nImporting it again will double-count inventory and costs.\n\nClick OK only if this is a different order with the same number. Click Cancel to stop.`;
-        if(!confirm(msg)) {
-          hideL();
-          toast('Import cancelled — duplicate invoice number','warn');
-          return;
-        }
-      }
-    }
-  }
-  // ─────────────────────────────────────────────────────────────────────────
+
 
   const invNote = 'Invoice: '+(document.getElementById('pui').value||'—');
   const invTxns = [];
@@ -5149,8 +5154,38 @@ function fndKey(obj,cands){return cands.find(k=>k in obj)||Object.keys(obj)[0]||
 async function confImport(){
   if(_roBlock('confImport'))return;
   if(!impRows.length)return;
-  showL('Importing sales data...');
   const sd=document.getElementById('isd').value,ed=document.getElementById('ied').value;
+
+  // ── DUPLICATE DATE RANGE GUARD ──────────────────────────────────────────────
+  // Block import if any existing sales_import record overlaps this date range.
+  // Overlap condition: existing.start <= new.end AND existing.end >= new.start
+  if(sd&&ed){
+    showL('Checking for duplicate imports...');
+    const tok0=await getAuthToken();
+    const dupChk=await fetch(
+      SURL+'/rest/v1/sales_imports?report_start_date=lte.'+ed+'&report_end_date=gte.'+sd+'&select=id,report_start_date,report_end_date,imported_at',
+      {headers:{'apikey':SKEY,'Authorization':'Bearer '+tok0}}
+    );
+    if(dupChk.ok){
+      const existing=await dupChk.json();
+      if(existing&&existing.length>0){
+        hideL();
+        const dupList=existing.map(r=>'  \u2022 '+fmtD(r.report_start_date)+' \u2192 '+fmtD(r.report_end_date)+' (imported '+fmtD(r.imported_at)+')').join('\n');
+        const proceed=confirm(
+          '\u26D4 DUPLICATE IMPORT WARNING\n\n'+
+          'A sales import already exists that overlaps this date range ('+sd+' to '+ed+'):\n\n'+
+          dupList+'\n\n'+
+          'Importing again will DOUBLE-COUNT sales and drain inventory incorrectly.\n\n'+
+          'Click Cancel to stop (recommended).\n'+
+          'Click OK only if you are certain this is not a duplicate.'
+        );
+        if(!proceed){toast('Import cancelled \u2014 duplicate date range detected','warn');return;}
+      }
+    }
+  }
+  // ── END DUPLICATE GUARD ─────────────────────────────────────────────────────
+
+  showL('Importing sales data...');
   const tok2=await getAuthToken();
   const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
   const irResp = await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
