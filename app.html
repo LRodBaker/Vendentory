@@ -726,10 +726,13 @@ body.ro #ro-badge{display:flex!important}
 
     <!-- Scan input -->
     <div style="position:relative;margin-bottom:10px">
-      <input id="str-bc" type="text" inputmode="none" class="fi"
-        placeholder="&#128247; Scan a barcode — or tap an item below to confirm it"
-        style="font-size:14px;padding:10px 12px"
-        oninput="strSearch()" onkeydown="if(event.key==='Enter'){event.preventDefault();strScanSubmit();}">
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="str-bc" type="text" inputmode="text" class="fi"
+          placeholder="Type or scan a barcode — or tap an item below"
+          style="font-size:14px;padding:10px 12px;flex:1"
+          oninput="strSearch()" onkeydown="if(event.key==='Enter'){event.preventDefault();strScanSubmit();}">
+        <button class="btn btn-p" onclick="startCam('str-receive')" style="padding:10px 14px;font-size:18px;flex-shrink:0" title="Scan with camera">&#128247;</button>
+      </div>
       <div id="str-search-drop" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--surface);border:1px solid var(--border);border-radius:8px;z-index:10;max-height:160px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.1)"></div>
     </div>
     <div id="str-bc-err" style="display:none;font-size:12px;color:var(--red);margin-bottom:8px;padding:6px 10px;background:var(--red-light);border-radius:6px"></div>
@@ -2861,6 +2864,9 @@ async function startCam(ctx){
         if(camCtx==='count'){
           document.getElementById('pc-bc').value=decodedText;
           pcLookupBC();
+        } else if(camCtx==='str-receive'){
+          document.getElementById('str-bc').value=decodedText;
+          strScanSubmit();
         } else if(camCtx==='indiv-setup'){
           // Fill the barcode field for the active slot and trigger UPC lookup
           if(_isCamSlot >= 0) {
