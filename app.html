@@ -3584,12 +3584,13 @@ function strConfirmIdx(idx) {
   document.getElementById('str-search-drop').style.display = 'none';
   document.getElementById('str-bc-err').style.display = 'none';
   strRenderLines();
-  // Scroll confirmed item into view briefly
   const items = document.getElementById('str-lines').children;
   if(items[idx]) items[idx].scrollIntoView({behavior:'smooth',block:'nearest'});
-  // Refocus scan input
   document.getElementById('str-bc').focus();
 }
+
+// Alias — called from camera scan and Enter key
+function strScanSubmit() { strScanBarcode(); }
 
 async function strPostReceive() {
   const allConfirmed = _strLines.every(l=>l.confirmed);
@@ -3606,56 +3607,60 @@ async function strPostReceive() {
 
 async function markPurReceived(id){
   showL('Processing receipt...');
-  const tok=await getAuthToken();
-  const wh={'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+  try {
+    const tok=await getAuthToken();
+    const wh={'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
 
-  // Guard: check if inventory transactions already exist for this purchase.
-  // If so, this purchase was already received (via savePur) — posting again would double-count.
-  const existCheck=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+id+'&select=id&limit=1',{headers:wh});
-  const existRows=existCheck.ok?await existCheck.json():[];
-  if(existRows.length>0){
-    // Already has transactions — just flip status to received without re-posting inventory
+    // Guard: check if inventory transactions already exist for this purchase.
+    const existCheck=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+id+'&select=id&limit=1',{headers:wh});
+    const existRows=existCheck.ok?await existCheck.json():[];
+    if(existRows.length>0){
+      await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString()})});
+      hideL();
+      toast('Order marked received!','ok');
+      await loadProds2(); loadPurHistory(); checkOverdueOrders();
+      return;
+    }
+
+    // Load the purchase lines
+    const {data:lines}=await dbFetch('purchase_lines',{select:'*',filters:{'purchase_id':'eq.'+id}});
+    if(!lines||!lines.length){hideL();toast('No lines found on this purchase','err');return;}
+    const invNote='Received order '+id.slice(0,8);
+    const invTxns=[];const wacUpdates=[];
+    for(const l of lines){
+      const compResp=await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
+      const comps=compResp.ok?await compResp.json():[];
+      if(comps.length){
+        const tip=comps.reduce((s,x)=>s+x.qty_per_pack,0);
+        for(const c of comps){
+          const tu = tip > 0 ? Math.round(l.units_received * (c.qty_per_pack / tip)) : l.units_received;
+          const uc = l.unit_cost;
+          invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',quantity_change:tu,warehouse_quantity_change:tu,unit_cost:uc,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
+          wacUpdates.push({product_id:c.component_product_id,units:tu,unit_cost:uc});
+        }
+      } else {
+        invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units_received,warehouse_quantity_change:l.units_received,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
+        wacUpdates.push({product_id:l.product_id,units:l.units_received,unit_cost:l.unit_cost});
+      }
+    }
+    if(invTxns.length){
+      const txnResp=await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
+      if(!txnResp.ok){hideL();toast('Error posting inventory transactions — please try again','err');return;}
+    }
+    // Replay WAC — run in parallel for speed, catch individual failures without aborting
+    const wacProductIds=[...new Set(wacUpdates.map(u=>u.product_id))];
+    await Promise.allSettled(wacProductIds.map(pid=>replayWAC(pid,wh)));
     await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString()})});
     hideL();
-    toast('Order marked received!','ok');
-    await loadProds2(); loadPurHistory(); checkOverdueOrders();
-    return;
+    toast('Order received! Inventory updated.','ok');
+    await loadProds2();
+    loadPurHistory();
+    checkOverdueOrders();
+  } catch(e) {
+    hideL();
+    toast('Error receiving order: '+e.message,'err');
+    console.error('markPurReceived error:',e);
   }
-
-  // Load the purchase lines
-  const {data:lines}=await dbFetch('purchase_lines',{select:'*',filters:{'purchase_id':'eq.'+id}});
-  if(!lines||!lines.length){hideL();toast('No lines found on this purchase','err');return;}
-  const invNote='Received order '+id.slice(0,8);
-  const invTxns=[];const wacUpdates=[];
-  for(const l of lines){
-    const compResp=await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
-    const comps=compResp.ok?await compResp.json():[];
-    if(comps.length){
-      // l.units_received is already the individual unit count — never multiply by qty_per_pack again.
-      // For bulk (1 component): all units go straight through at l.unit_cost.
-      // For variety (multiple components): split proportionally by qty_per_pack ratio.
-      const tip=comps.reduce((s,x)=>s+x.qty_per_pack,0);
-      for(const c of comps){
-        const tu = tip > 0 ? Math.round(l.units_received * (c.qty_per_pack / tip)) : l.units_received;
-        const uc = l.unit_cost; // already per individual unit
-        invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',quantity_change:tu,warehouse_quantity_change:tu,unit_cost:uc,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
-        wacUpdates.push({product_id:c.component_product_id,units:tu,unit_cost:uc});
-      }
-    } else {
-      invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units_received,warehouse_quantity_change:l.units_received,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
-      wacUpdates.push({product_id:l.product_id,units:l.units_received,unit_cost:l.unit_cost});
-    }
-  }
-  if(invTxns.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
-  // Use replayWAC (full purchase history replay) — same as savePur(), prevents incremental drift
-  const wacProductIds=[...new Set(wacUpdates.map(u=>u.product_id))];
-  for(const pid of wacProductIds){ await replayWAC(pid,wh); }
-  await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString()})});
-  hideL();
-  toast('Order marked received! Inventory updated.','ok');
-  await loadProds2();
-  loadPurHistory();
-  checkOverdueOrders();
 }
 
 // ── AI PURCHASE IMPORT ───────────────────────────────────────────────────────
