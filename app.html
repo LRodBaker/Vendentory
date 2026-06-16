@@ -3638,6 +3638,9 @@ RULES:
 5. receipt_total = the final grand total charged as shown on the receipt.
 6. CRITICAL — "lines" must contain ONLY actual purchased products. Never include tax, sales tax, shipping, handling, fees, tips, discounts, or any non-product charge as a line item. Those belong ONLY in the top-level tax/shipping/extra_costs fields.
 7. If a line on the receipt is clearly a fee, tax, or shipping charge — put it in the correct header field and do NOT add it to lines.
+8. AMAZON RECEIPTS — Amazon PDFs often show quantity as a small number or badge next to the product image (e.g. a superscript "2" or "Qty: 2" near the item thumbnail). Look carefully for these — do not assume qty=1 if the line_total is more than the unit price. Always check: if line_total divided by unit_price is greater than 1, set qty to that result.
+9. MATH VALIDATION — For every line item, verify: qty x unit_cost = line_total. If they do not match, use the line_total and unit_cost to back-calculate qty (qty = line_total divided by unit_cost, rounded to nearest whole number). Never leave a line where the math does not balance. If you cannot determine qty from the math, flag confidence as "low".
+10. QUANTITY DOUBLE-CHECK — After parsing all lines, verify that the sum of all line_totals plus tax plus shipping plus extra_costs equals receipt_total. If it does not, re-examine each line for missed quantities before returning results.
 
 PRODUCT LIST (name | id | type | units_per_case):
 ${prodContext}
