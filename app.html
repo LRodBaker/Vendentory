@@ -3400,7 +3400,10 @@ async function checkOverdueOrders(){
 }
 
 // openReceiveOrder now routes to scan-to-receive
-function openReceiveOrder(id) { openSTR(id); }
+function openReceiveOrder(id) {
+  if(!id||id==='null'||id==='undefined'){toast('Could not determine order ID — please refresh and try again','err');return;}
+  openSTR(id);
+}
 
 // ─── SCAN-TO-RECEIVE ─────────────────────────────────────────────────────────
 let _strPurId = null;     // purchase being received
@@ -3598,9 +3601,10 @@ async function strPostReceive() {
 
   if(!confirm('Post receipt for all '+_strLines.length+' items? This will update inventory and close the order.')) return;
 
+  // Capture ID BEFORE closeSTR() nulls _strPurId
+  const purId = _strPurId;
   closeSTR();
-  // Delegate to existing markPurReceived — it handles transactions, WAC, etc.
-  await markPurReceived(_strPurId);
+  await markPurReceived(purId);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
