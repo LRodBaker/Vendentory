@@ -2858,9 +2858,9 @@ async function startCam(ctx){
     await _html5Scanner.start(
       {facingMode:'environment'},
       config,
-      (decodedText)=>{
+      async (decodedText)=>{
         // Got a barcode!
-        stopCam();
+        await stopCam();
         if(camCtx==='count'){
           document.getElementById('pc-bc').value=decodedText;
           pcLookupBC();
@@ -2889,10 +2889,10 @@ async function startCam(ctx){
   }
 }
 
-function stopCam(){
+async function stopCam(){
   if(_html5Scanner){
-    _html5Scanner.stop().catch(()=>{});
-    _html5Scanner.clear();
+    try{ await _html5Scanner.stop(); }catch(e){}
+    try{ _html5Scanner.clear(); }catch(e){}
     _html5Scanner=null;
   }
   document.getElementById('cam-modal').style.display='none';
