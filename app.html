@@ -3849,7 +3849,7 @@ async function loadPurHistory(){
             ?`<button class="btn btn-sm btn-p" data-pid="${p.id}" data-action="receive-pur">&#10003; Receive order</button>`
             :`<span style="font-size:11px;color:var(--green);font-weight:600;display:flex;align-items:center;gap:3px">&#10003; Received</span>`
           }
-          <button class="btn btn-sm" data-pid="${p.id}" data-action="edit-pur" title="Edit">&#9998; Edit</button>
+          <button class="btn btn-sm" data-pid="${p.id}" data-action="edit-pur" title="${isOrdered?'Edit this order — change quantities or remove items before receiving. Inventory will not post until you mark it received.':'Edit this receipt — adjust quantities if an item was missing, backordered, or refunded. Inventory will be reversed and re-posted with your changes.'}">&#9998; Edit</button>
           <button class="btn btn-sm" data-pid="${p.id}" data-action="detail-pur">&#9658; Details</button>
           <button class="btn btn-sm btn-d" data-pid="${p.id}" data-plabel="${(p.suppliers?.name||'this purchase').replace(/"/g,'&quot;')}" data-action="del-pur" title="Delete">&#128465;</button>
         </div>
