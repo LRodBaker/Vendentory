@@ -396,7 +396,7 @@ body.ro #ro-badge{display:flex!important}
                 <div class="fg"><label class="fl">Supplier</label><select class="fs" id="pus"></select></div>
                 <div class="fg"><label class="fl">Invoice number</label><input class="fi" id="pui" placeholder="Optional"></div>
                 <div class="fg"><label class="fl">Date</label><input class="fi" type="date" id="pud"></div>
-                <div class="fg"><label class="fl">Status</label><select class="fs" id="pustat" onchange="updPurSaveBtn()"><option value="ordered">Ordered</option><option value="received">Received</option></select></div>
+                <div class="fg"><label class="fl">Status</label><select class="fs" id="pustat" onchange="updPurSaveBtn()"><option value="ordered">Ordered — save now, receive later</option><option value="received">Received — post inventory now</option></select><div id="pustat-hint" style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4"></div></div>
                 <div class="fg"><label class="fl">Shipping ($)</label><input class="fi" type="number" id="push" value="0" step="0.01" oninput="updPT()"></div>
                 <div class="fg"><label class="fl">Tax ($)</label><input class="fi" type="number" id="putx" value="0" step="0.01" oninput="updPT()"></div>
                 <div class="fg"><label class="fl">Extra costs ($)</label><input class="fi" type="number" id="puex" value="0" step="0.01" oninput="updPT()" placeholder="Tips, fees, etc."></div>
@@ -3323,6 +3323,12 @@ function updPurSaveBtn(){
   const s=document.getElementById('pustat').value;
   const btn=document.getElementById('savePurBtn');
   if(btn) btn.textContent=_editPurId?(s==='ordered'?'✏ Update order':'✏ Update & re-receive'):(s==='ordered'?'Save order':'Save & receive purchase');
+  // Update hint text under the status dropdown
+  const hint=document.getElementById('pustat-hint');
+  if(hint){
+    if(s==='ordered') hint.textContent='Inventory will NOT update yet. Go to the back room, scan items in, then mark received to post inventory.';
+    else hint.textContent='Inventory will update immediately when you save.';
+  }
   // Show/hide cancel-edit button
   let cancelBtn=document.getElementById('cancelEditPurBtn');
   if(_editPurId&&!cancelBtn){cancelBtn=document.createElement('button');cancelBtn.id='cancelEditPurBtn';cancelBtn.className='btn';cancelBtn.textContent='Cancel edit';cancelBtn.onclick=()=>{clrPur();toast('Edit cancelled','ok');};btn.insertAdjacentElement('afterend',cancelBtn);}
