@@ -715,6 +715,43 @@ body.ro #ro-badge{display:flex!important}
   </div>
 </div>
 
+<!-- MODAL: Scan-to-Receive Order -->
+<div class="modal-bg" id="m-str" style="display:none">
+  <div class="modal" style="max-width:600px;max-height:90vh;display:flex;flex-direction:column">
+    <div class="modal-title">&#128230; Receive Order</div>
+    <button class="mc" onclick="closeSTR()">&#10005;</button>
+
+    <!-- Order info -->
+    <div id="str-header" style="font-size:13px;color:var(--gray-400);margin-bottom:14px;font-weight:500"></div>
+
+    <!-- Scan input -->
+    <div style="position:relative;margin-bottom:10px">
+      <input id="str-bc" type="text" inputmode="none" class="fi"
+        placeholder="&#128247; Scan a barcode — or tap an item below to confirm it"
+        style="font-size:14px;padding:10px 12px"
+        oninput="strSearch()" onkeydown="if(event.key==='Enter'){event.preventDefault();strScanSubmit();}">
+      <div id="str-search-drop" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--surface);border:1px solid var(--border);border-radius:8px;z-index:10;max-height:160px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.1)"></div>
+    </div>
+    <div id="str-bc-err" style="display:none;font-size:12px;color:var(--red);margin-bottom:8px;padding:6px 10px;background:var(--red-light);border-radius:6px"></div>
+
+    <!-- Progress -->
+    <div id="str-progress" style="font-size:12px;color:var(--gray-400);margin-bottom:10px"></div>
+
+    <!-- Line items -->
+    <div id="str-lines" style="flex:1;overflow-y:auto;min-height:0;border:1px solid var(--border);border-radius:8px;padding:4px 0;margin-bottom:14px"></div>
+
+    <!-- Actions -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;align-items:center">
+      <button class="btn" onclick="strConfirmAll()" style="font-size:13px">&#10003;&#10003; Confirm all items</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="closeSTR()">Cancel</button>
+        <button class="btn btn-p" id="str-post-btn" onclick="strPostReceive()" disabled style="opacity:0.4">Post receipt &amp; close order</button>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--gray-400);margin-top:8px">Tap each item or scan its barcode to confirm it arrived. Click "Confirm all" if everything came in. Inventory updates when you post.</div>
+  </div>
+</div>
+
 <!-- MODAL: Audit Compare -->
 <div class="modal-bg" id="m-audit" style="display:none">
   <div class="modal" style="max-width:720px;max-height:85vh;overflow-y:auto">
@@ -3429,7 +3466,8 @@ function strRenderLines() {
   const total = _strLines.length;
 
   document.getElementById('str-progress').textContent = confirmed + ' of ' + total + ' confirmed';
-  document.getElementById('str-post-btn').disabled = confirmed < total;
+  const postBtn=document.getElementById('str-post-btn');
+  if(postBtn){postBtn.disabled=confirmed<total;postBtn.style.opacity=confirmed<total?'0.4':'1';}
 
   el.innerHTML = _strLines.map((l,i)=>`
     <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;margin-bottom:6px;
@@ -3456,6 +3494,17 @@ function strToggleLine(idx) {
   // Clear any error
   const errEl = document.getElementById('str-bc-err');
   if(errEl) errEl.style.display = 'none';
+}
+
+function strSearch() { strSearchInput(); }
+
+function strConfirmAll() {
+  _strLines.forEach(l=>l.confirmed=true);
+  strRenderLines();
+  document.getElementById('str-bc-err').style.display='none';
+  // Enable post button
+  const btn=document.getElementById('str-post-btn');
+  if(btn){btn.disabled=false;btn.style.opacity='1';}
 }
 
 function strSearchInput() {
