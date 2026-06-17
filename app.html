@@ -396,7 +396,7 @@ body.ro #ro-badge{display:flex!important}
                 <div class="fg"><label class="fl">Supplier</label><select class="fs" id="pus"></select></div>
                 <div class="fg"><label class="fl">Invoice number</label><input class="fi" id="pui" placeholder="Optional"></div>
                 <div class="fg"><label class="fl">Date</label><input class="fi" type="date" id="pud"></div>
-                <div class="fg"><label class="fl">Status</label><select class="fs" id="pustat" onchange="updPurSaveBtn()"><option value="ordered">Ordered — save now, receive later</option><option value="received">Received — post inventory now</option></select><div id="pustat-hint" style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4"></div></div>
+                <div class="fg"><label class="fl">Status</label><select class="fs" id="pustat" onchange="updPurSaveBtn()"><option value="ordered">Ordered</option><option value="received">Received</option></select></div>
                 <div class="fg"><label class="fl">Shipping ($)</label><input class="fi" type="number" id="push" value="0" step="0.01" oninput="updPT()"></div>
                 <div class="fg"><label class="fl">Tax ($)</label><input class="fi" type="number" id="putx" value="0" step="0.01" oninput="updPT()"></div>
                 <div class="fg"><label class="fl">Extra costs ($)</label><input class="fi" type="number" id="puex" value="0" step="0.01" oninput="updPT()" placeholder="Tips, fees, etc."></div>
@@ -712,46 +712,6 @@ body.ro #ro-badge{display:flex!important}
     <div id="cam-reader" style="width:100%;border-radius:12px;overflow:hidden"></div>
     <div class="cam-status" id="cam-status" style="color:rgba(255,255,255,0.8);text-align:center;padding:12px 0;font-size:13px"></div>
     <div style="text-align:center;color:rgba(255,255,255,0.4);font-size:12px;padding-bottom:16px">Point camera at any barcode — it detects automatically</div>
-  </div>
-</div>
-
-<!-- MODAL: Scan-to-Receive Order -->
-<div class="modal-bg" id="m-str" style="display:none">
-  <div class="modal" style="max-width:600px;max-height:90vh;display:flex;flex-direction:column">
-    <div class="modal-title">&#128230; Receive Order</div>
-    <button class="mc" onclick="closeSTR()">&#10005;</button>
-
-    <!-- Order info -->
-    <div id="str-header" style="font-size:13px;color:var(--gray-400);margin-bottom:14px;font-weight:500"></div>
-
-    <!-- Scan input -->
-    <div style="position:relative;margin-bottom:10px">
-      <div style="display:flex;gap:8px;align-items:center">
-        <input id="str-bc" type="text" inputmode="text" class="fi"
-          placeholder="Type or scan a barcode — or tap an item below"
-          style="font-size:14px;padding:10px 12px;flex:1"
-          oninput="strSearch()" onkeydown="if(event.key==='Enter'){event.preventDefault();strScanSubmit();}">
-        <button class="btn btn-p" onclick="startCam('str-receive')" style="padding:10px 14px;font-size:18px;flex-shrink:0" title="Scan with camera">&#128247;</button>
-      </div>
-      <div id="str-search-drop" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--surface);border:1px solid var(--border);border-radius:8px;z-index:10;max-height:160px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.1)"></div>
-    </div>
-    <div id="str-bc-err" style="display:none;font-size:12px;color:var(--red);margin-bottom:8px;padding:6px 10px;background:var(--red-light);border-radius:6px"></div>
-
-    <!-- Progress -->
-    <div id="str-progress" style="font-size:12px;color:var(--gray-400);margin-bottom:10px"></div>
-
-    <!-- Line items -->
-    <div id="str-lines" style="flex:1;overflow-y:auto;min-height:0;border:1px solid var(--border);border-radius:8px;padding:4px 0;margin-bottom:14px"></div>
-
-    <!-- Actions -->
-    <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;align-items:center">
-      <button class="btn" onclick="strConfirmAll()" style="font-size:13px">&#10003;&#10003; Confirm all items</button>
-      <div style="display:flex;gap:8px">
-        <button class="btn" onclick="closeSTR()">Cancel</button>
-        <button class="btn btn-p" id="str-post-btn" onclick="strPostReceive()" disabled style="opacity:0.4">Post receipt &amp; close order</button>
-      </div>
-    </div>
-    <div style="font-size:11px;color:var(--gray-400);margin-top:8px">Tap each item or scan its barcode to confirm it arrived. Click "Confirm all" if everything came in. Inventory updates when you post.</div>
   </div>
 </div>
 
@@ -2858,15 +2818,12 @@ async function startCam(ctx){
     await _html5Scanner.start(
       {facingMode:'environment'},
       config,
-      async (decodedText)=>{
+      (decodedText)=>{
         // Got a barcode!
-        await stopCam();
+        stopCam();
         if(camCtx==='count'){
           document.getElementById('pc-bc').value=decodedText;
           pcLookupBC();
-        } else if(camCtx==='str-receive'){
-          document.getElementById('str-bc').value=decodedText;
-          strScanSubmit();
         } else if(camCtx==='indiv-setup'){
           // Fill the barcode field for the active slot and trigger UPC lookup
           if(_isCamSlot >= 0) {
@@ -2889,10 +2846,10 @@ async function startCam(ctx){
   }
 }
 
-async function stopCam(){
+function stopCam(){
   if(_html5Scanner){
-    try{ await _html5Scanner.stop(); }catch(e){}
-    try{ _html5Scanner.clear(); }catch(e){}
+    _html5Scanner.stop().catch(()=>{});
+    _html5Scanner.clear();
     _html5Scanner=null;
   }
   document.getElementById('cam-modal').style.display='none';
@@ -3366,12 +3323,6 @@ function updPurSaveBtn(){
   const s=document.getElementById('pustat').value;
   const btn=document.getElementById('savePurBtn');
   if(btn) btn.textContent=_editPurId?(s==='ordered'?'✏ Update order':'✏ Update & re-receive'):(s==='ordered'?'Save order':'Save & receive purchase');
-  // Update hint text under the status dropdown
-  const hint=document.getElementById('pustat-hint');
-  if(hint){
-    if(s==='ordered') hint.textContent='Inventory will NOT update yet. Go to the back room, scan items in, then mark received to post inventory.';
-    else hint.textContent='Inventory will update immediately when you save.';
-  }
   // Show/hide cancel-edit button
   let cancelBtn=document.getElementById('cancelEditPurBtn');
   if(_editPurId&&!cancelBtn){cancelBtn=document.createElement('button');cancelBtn.id='cancelEditPurBtn';cancelBtn.className='btn';cancelBtn.textContent='Cancel edit';cancelBtn.onclick=()=>{clrPur();toast('Edit cancelled','ok');};btn.insertAdjacentElement('afterend',cancelBtn);}
@@ -3400,10 +3351,7 @@ async function checkOverdueOrders(){
 }
 
 // openReceiveOrder now routes to scan-to-receive
-function openReceiveOrder(id) {
-  if(!id||id==='null'||id==='undefined'){toast('Could not determine order ID — please refresh and try again','err');return;}
-  openSTR(id);
-}
+function openReceiveOrder(id) { openSTR(id); }
 
 // ─── SCAN-TO-RECEIVE ─────────────────────────────────────────────────────────
 let _strPurId = null;     // purchase being received
@@ -3475,8 +3423,7 @@ function strRenderLines() {
   const total = _strLines.length;
 
   document.getElementById('str-progress').textContent = confirmed + ' of ' + total + ' confirmed';
-  const postBtn=document.getElementById('str-post-btn');
-  if(postBtn){postBtn.disabled=confirmed<total;postBtn.style.opacity=confirmed<total?'0.4':'1';}
+  document.getElementById('str-post-btn').disabled = confirmed < total;
 
   el.innerHTML = _strLines.map((l,i)=>`
     <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;margin-bottom:6px;
@@ -3503,17 +3450,6 @@ function strToggleLine(idx) {
   // Clear any error
   const errEl = document.getElementById('str-bc-err');
   if(errEl) errEl.style.display = 'none';
-}
-
-function strSearch() { strSearchInput(); }
-
-function strConfirmAll() {
-  _strLines.forEach(l=>l.confirmed=true);
-  strRenderLines();
-  document.getElementById('str-bc-err').style.display='none';
-  // Enable post button
-  const btn=document.getElementById('str-post-btn');
-  if(btn){btn.disabled=false;btn.style.opacity='1';}
 }
 
 function strSearchInput() {
@@ -3587,13 +3523,12 @@ function strConfirmIdx(idx) {
   document.getElementById('str-search-drop').style.display = 'none';
   document.getElementById('str-bc-err').style.display = 'none';
   strRenderLines();
+  // Scroll confirmed item into view briefly
   const items = document.getElementById('str-lines').children;
   if(items[idx]) items[idx].scrollIntoView({behavior:'smooth',block:'nearest'});
+  // Refocus scan input
   document.getElementById('str-bc').focus();
 }
-
-// Alias — called from camera scan and Enter key
-function strScanSubmit() { strScanBarcode(); }
 
 async function strPostReceive() {
   const allConfirmed = _strLines.every(l=>l.confirmed);
@@ -3601,70 +3536,65 @@ async function strPostReceive() {
 
   if(!confirm('Post receipt for all '+_strLines.length+' items? This will update inventory and close the order.')) return;
 
-  // Capture ID BEFORE closeSTR() nulls _strPurId
-  const purId = _strPurId;
   closeSTR();
-  await markPurReceived(purId);
+  // Delegate to existing markPurReceived — it handles transactions, WAC, etc.
+  await markPurReceived(_strPurId);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
 
 async function markPurReceived(id){
   showL('Processing receipt...');
-  try {
-    const tok=await getAuthToken();
-    const wh={'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+  const tok=await getAuthToken();
+  const wh={'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
 
-    // Guard: check if inventory transactions already exist for this purchase.
-    const existCheck=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+id+'&select=id&limit=1',{headers:wh});
-    const existRows=existCheck.ok?await existCheck.json():[];
-    if(existRows.length>0){
-      await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString()})});
-      hideL();
-      toast('Order marked received!','ok');
-      await loadProds2(); loadPurHistory(); checkOverdueOrders();
-      return;
-    }
-
-    // Load the purchase lines
-    const {data:lines}=await dbFetch('purchase_lines',{select:'*',filters:{'purchase_id':'eq.'+id}});
-    if(!lines||!lines.length){hideL();toast('No lines found on this purchase','err');return;}
-    const invNote='Received order '+id.slice(0,8);
-    const invTxns=[];const wacUpdates=[];
-    for(const l of lines){
-      const compResp=await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
-      const comps=compResp.ok?await compResp.json():[];
-      if(comps.length){
-        const tip=comps.reduce((s,x)=>s+x.qty_per_pack,0);
-        for(const c of comps){
-          const tu = tip > 0 ? Math.round(l.units_received * (c.qty_per_pack / tip)) : l.units_received;
-          const uc = l.unit_cost;
-          invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',quantity_change:tu,warehouse_quantity_change:tu,unit_cost:uc,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
-          wacUpdates.push({product_id:c.component_product_id,units:tu,unit_cost:uc});
-        }
-      } else {
-        invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units_received,warehouse_quantity_change:l.units_received,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
-        wacUpdates.push({product_id:l.product_id,units:l.units_received,unit_cost:l.unit_cost});
-      }
-    }
-    if(invTxns.length){
-      const txnResp=await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
-      if(!txnResp.ok){hideL();toast('Error posting inventory transactions — please try again','err');return;}
-    }
-    // Replay WAC — run in parallel for speed, catch individual failures without aborting
-    const wacProductIds=[...new Set(wacUpdates.map(u=>u.product_id))];
-    await Promise.allSettled(wacProductIds.map(pid=>replayWAC(pid,wh)));
+  // Guard: check if inventory transactions already exist for this purchase.
+  // If so, this purchase was already received (via savePur) — posting again would double-count.
+  const existCheck=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+id+'&select=id&limit=1',{headers:wh});
+  const existRows=existCheck.ok?await existCheck.json():[];
+  if(existRows.length>0){
+    // Already has transactions — just flip status to received without re-posting inventory
     await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString()})});
     hideL();
-    toast('Order received! Inventory updated.','ok');
-    await loadProds2();
-    loadPurHistory();
-    checkOverdueOrders();
-  } catch(e) {
-    hideL();
-    toast('Error receiving order: '+e.message,'err');
-    console.error('markPurReceived error:',e);
+    toast('Order marked received!','ok');
+    await loadProds2(); loadPurHistory(); checkOverdueOrders();
+    return;
   }
+
+  // Load the purchase lines
+  const {data:lines}=await dbFetch('purchase_lines',{select:'*',filters:{'purchase_id':'eq.'+id}});
+  if(!lines||!lines.length){hideL();toast('No lines found on this purchase','err');return;}
+  const invNote='Received order '+id.slice(0,8);
+  const invTxns=[];const wacUpdates=[];
+  for(const l of lines){
+    const compResp=await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
+    const comps=compResp.ok?await compResp.json():[];
+    if(comps.length){
+      // l.units_received is already the individual unit count — never multiply by qty_per_pack again.
+      // For bulk (1 component): all units go straight through at l.unit_cost.
+      // For variety (multiple components): split proportionally by qty_per_pack ratio.
+      const tip=comps.reduce((s,x)=>s+x.qty_per_pack,0);
+      for(const c of comps){
+        const tu = tip > 0 ? Math.round(l.units_received * (c.qty_per_pack / tip)) : l.units_received;
+        const uc = l.unit_cost; // already per individual unit
+        invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',quantity_change:tu,warehouse_quantity_change:tu,unit_cost:uc,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
+        wacUpdates.push({product_id:c.component_product_id,units:tu,unit_cost:uc});
+      }
+    } else {
+      invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units_received,warehouse_quantity_change:l.units_received,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
+      wacUpdates.push({product_id:l.product_id,units:l.units_received,unit_cost:l.unit_cost});
+    }
+  }
+  if(invTxns.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
+  // Use replayWAC (full purchase history replay) — same as savePur(), prevents incremental drift
+  const wacProductIds=[...new Set(wacUpdates.map(u=>u.product_id))];
+  for(const pid of wacProductIds){ await replayWAC(pid,wh); }
+  await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString()})});
+  hideL();
+  toast('Order marked received! Inventory updated.','ok');
+  await loadProds2();
+  loadPurHistory();
+  checkOverdueOrders();
 }
 
 // ── AI PURCHASE IMPORT ───────────────────────────────────────────────────────
@@ -3702,9 +3632,6 @@ RULES:
 5. receipt_total = the final grand total charged as shown on the receipt.
 6. CRITICAL — "lines" must contain ONLY actual purchased products. Never include tax, sales tax, shipping, handling, fees, tips, discounts, or any non-product charge as a line item. Those belong ONLY in the top-level tax/shipping/extra_costs fields.
 7. If a line on the receipt is clearly a fee, tax, or shipping charge — put it in the correct header field and do NOT add it to lines.
-8. AMAZON RECEIPTS — Amazon PDFs often show quantity as a small number or badge next to the product image (e.g. a superscript "2" or "Qty: 2" near the item thumbnail). Look carefully for these — do not assume qty=1 if the line_total is more than the unit price. Always check: if line_total divided by unit_price is greater than 1, set qty to that result.
-9. MATH VALIDATION — For every line item, verify: qty x unit_cost = line_total. If they do not match, use the line_total and unit_cost to back-calculate qty (qty = line_total divided by unit_cost, rounded to nearest whole number). Never leave a line where the math does not balance. If you cannot determine qty from the math, flag confidence as "low".
-10. QUANTITY DOUBLE-CHECK — After parsing all lines, verify that the sum of all line_totals plus tax plus shipping plus extra_costs equals receipt_total. If it does not, re-examine each line for missed quantities before returning results.
 
 PRODUCT LIST (name | id | type | units_per_case):
 ${prodContext}
@@ -3913,7 +3840,7 @@ async function loadPurHistory(){
             ?`<button class="btn btn-sm btn-p" data-pid="${p.id}" data-action="receive-pur">&#10003; Receive order</button>`
             :`<span style="font-size:11px;color:var(--green);font-weight:600;display:flex;align-items:center;gap:3px">&#10003; Received</span>`
           }
-          <button class="btn btn-sm" data-pid="${p.id}" data-action="edit-pur" title="${isOrdered?'Edit this order — change quantities or remove items before receiving. Inventory will not post until you mark it received.':'Edit this receipt — adjust quantities if an item was missing, backordered, or refunded. Inventory will be reversed and re-posted with your changes.'}">&#9998; Edit</button>
+          <button class="btn btn-sm" data-pid="${p.id}" data-action="edit-pur" title="Edit">&#9998; Edit</button>
           <button class="btn btn-sm" data-pid="${p.id}" data-action="detail-pur">&#9658; Details</button>
           <button class="btn btn-sm btn-d" data-pid="${p.id}" data-plabel="${(p.suppliers?.name||'this purchase').replace(/"/g,'&quot;')}" data-action="del-pur" title="Delete">&#128465;</button>
         </div>
@@ -4149,31 +4076,6 @@ async function savePur() {
   const status = document.getElementById('pustat').value;
   const vl=PL.filter(l=>l.product_id&&l.units>0);
   if(!vl.length){toast('Add at least one product line','err');return;}
-
-  // ── DUPLICATE INVOICE CHECK — must run BEFORE creating any DB records ──────
-  const invoiceNum = document.getElementById('pui').value?.trim();
-  if(invoiceNum && !_editPurId) {
-    showL('Checking for duplicate invoice...');
-    const tok0=await getAuthToken();
-    const dupChk = await fetch(
-      SURL+'/rest/v1/purchases?invoice_number=eq.'+encodeURIComponent(invoiceNum)+'&select=id,purchase_date,supplier_id&limit=1',
-      {headers:{'apikey':SKEY,'Authorization':'Bearer '+tok0}}
-    );
-    if(dupChk.ok) {
-      const dups = await dupChk.json();
-      if(dups.length > 0) {
-        const d = dups[0];
-        hideL();
-        const msg = `\u26A0 Invoice "${invoiceNum}" was already imported on ${fmtD(d.purchase_date)}.\n\nImporting it again will double-count inventory and costs.\n\nClick OK only if this is a different order with the same number. Click Cancel to stop.`;
-        if(!confirm(msg)) {
-          toast('Import cancelled \u2014 duplicate invoice number','warn');
-          return;
-        }
-      }
-    }
-  }
-  // ── END DUPLICATE INVOICE CHECK ───────────────────────────────────────────
-
   showL(_editPurId?'Updating purchase...':'Saving purchase...');
   const sub=vl.reduce((s,l)=>s+l.total,0);
   const sh=parseFloat(document.getElementById('push').value)||0;
@@ -4209,7 +4111,27 @@ async function savePur() {
     body:JSON.stringify(vl.map(l=>({purchase_id:purId,product_id:l.product_id,cases:l.cases,cost_per_case:l.cost_per_case,units_received:l.units,unit_cost:l.unit_cost,line_total:l.total})))
   });
 
-
+  // ── Duplicate invoice check ─────────────────────────────────────────────
+  const invoiceNum = document.getElementById('pui').value?.trim();
+  if(invoiceNum && !_editPurId) {
+    const dupChk = await fetch(
+      SURL+'/rest/v1/purchases?invoice_number=eq.'+encodeURIComponent(invoiceNum)+'&select=id,purchase_date,suppliers(name)&limit=1',
+      {headers:wh}
+    );
+    if(dupChk.ok) {
+      const dups = await dupChk.json();
+      if(dups.length > 0) {
+        const d = dups[0];
+        const msg = `⚠ Invoice "${invoiceNum}" was already imported on ${fmtD(d.purchase_date)} from ${d.suppliers?.name||'unknown supplier'}.\n\nImporting it again will double-count inventory and costs.\n\nClick OK only if this is a different order with the same number. Click Cancel to stop.`;
+        if(!confirm(msg)) {
+          hideL();
+          toast('Import cancelled — duplicate invoice number','warn');
+          return;
+        }
+      }
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   const invNote = 'Invoice: '+(document.getElementById('pui').value||'—');
   const invTxns = [];
@@ -5227,38 +5149,8 @@ function fndKey(obj,cands){return cands.find(k=>k in obj)||Object.keys(obj)[0]||
 async function confImport(){
   if(_roBlock('confImport'))return;
   if(!impRows.length)return;
-  const sd=document.getElementById('isd').value,ed=document.getElementById('ied').value;
-
-  // ── DUPLICATE DATE RANGE GUARD ──────────────────────────────────────────────
-  // Block import if any existing sales_import record overlaps this date range.
-  // Overlap condition: existing.start <= new.end AND existing.end >= new.start
-  if(sd&&ed){
-    showL('Checking for duplicate imports...');
-    const tok0=await getAuthToken();
-    const dupChk=await fetch(
-      SURL+'/rest/v1/sales_imports?report_start_date=lte.'+ed+'&report_end_date=gte.'+sd+'&select=id,report_start_date,report_end_date,imported_at',
-      {headers:{'apikey':SKEY,'Authorization':'Bearer '+tok0}}
-    );
-    if(dupChk.ok){
-      const existing=await dupChk.json();
-      if(existing&&existing.length>0){
-        hideL();
-        const dupList=existing.map(r=>'  \u2022 '+fmtD(r.report_start_date)+' \u2192 '+fmtD(r.report_end_date)+' (imported '+fmtD(r.imported_at)+')').join('\n');
-        const proceed=confirm(
-          '\u26D4 DUPLICATE IMPORT WARNING\n\n'+
-          'A sales import already exists that overlaps this date range ('+sd+' to '+ed+'):\n\n'+
-          dupList+'\n\n'+
-          'Importing again will DOUBLE-COUNT sales and drain inventory incorrectly.\n\n'+
-          'Click Cancel to stop (recommended).\n'+
-          'Click OK only if you are certain this is not a duplicate.'
-        );
-        if(!proceed){toast('Import cancelled \u2014 duplicate date range detected','warn');return;}
-      }
-    }
-  }
-  // ── END DUPLICATE GUARD ─────────────────────────────────────────────────────
-
   showL('Importing sales data...');
+  const sd=document.getElementById('isd').value,ed=document.getElementById('ied').value;
   const tok2=await getAuthToken();
   const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
   const irResp = await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
