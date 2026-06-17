@@ -3629,6 +3629,34 @@ async function markPurReceived(id){
     // Load the purchase lines
     const {data:lines}=await dbFetch('purchase_lines',{select:'*',filters:{'purchase_id':'eq.'+id}});
     if(!lines||!lines.length){hideL();toast('No lines found on this purchase','err');return;}
+
+    // ── PRE-COUNT WALL: PURCHASE RECEIPT ──────────────────────────────────────
+    // If this purchase's date is before the last physical count, the count already
+    // captured those units physically. Posting inventory would inflate on-hand.
+    // We still mark it received for bookkeeping/WAC purposes — just skip inv txns.
+    const {data:purHdr}=await dbFetch('purchases',{select:'purchase_date',filters:{'id':'eq.'+id}});
+    const purDate=purHdr&&purHdr[0]?purHdr[0].purchase_date:null;
+    const lastCount=await getLastCountDate();
+    const preCount = !!(purDate && lastCount && purDate < lastCount);
+    if(preCount){
+      // WAC still updates — cost history matters even for pre-count purchases
+      // But inventory transactions are skipped — count is the truth
+      await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString()})});
+      const wacProductIds=[];
+      for(const l of lines){
+        const compResp=await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
+        const comps=compResp.ok?await compResp.json():[];
+        if(comps.length){comps.forEach(c=>wacProductIds.push(c.component_product_id));}
+        else{wacProductIds.push(l.product_id);}
+      }
+      await Promise.allSettled([...new Set(wacProductIds)].map(pid=>replayWAC(pid,wh)));
+      hideL();
+      toast('\u26A0 Purchase dated '+purDate+' is before your last count ('+lastCount+'). Marked received for bookkeeping — inventory NOT adjusted (count is the baseline).','warn');
+      await loadProds2(); loadPurHistory(); checkOverdueOrders();
+      return;
+    }
+    // ── END PRE-COUNT WALL ────────────────────────────────────────────────────
+
     const invNote='Received order '+id.slice(0,8);
     const invTxns=[];const wacUpdates=[];
     for(const l of lines){
@@ -4215,8 +4243,19 @@ async function savePur() {
   const invTxns = [];
   const wacUpdates = [];
 
-  // Only update inventory if status is 'received' — not for ordered-only records
-  if(status === 'received') for(const l of vl) {
+  // ── PRE-COUNT WALL: SAVE & RECEIVE ──────────────────────────────────────────
+  // If the purchase date is before the last physical count, skip inventory txns.
+  // The count is the baseline — this purchase affects books/WAC only.
+  const purDateVal = document.getElementById('pud').value;
+  const lastCountVal = await getLastCountDate();
+  const purIsPreCount = !!(status === 'received' && purDateVal && lastCountVal && purDateVal < lastCountVal);
+  if(purIsPreCount){
+    toast('\u26A0 Purchase date '+purDateVal+' is before your last count ('+lastCountVal+'). Saved for bookkeeping — inventory NOT adjusted (count is the baseline).','warn');
+  }
+  // ── END PRE-COUNT WALL ────────────────────────────────────────────────────────
+
+  // Only update inventory if status is 'received' AND not pre-count — not for ordered-only records
+  if(status === 'received' && !purIsPreCount) for(const l of vl) {
     const prod = AP.find(p => p.id === l.product_id || p.product_id === l.product_id);
     // Check for base product links (works for variety packs AND regular bulk products)
     const compResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
@@ -4931,7 +4970,33 @@ async function postCountResults(){
     return;
   }
 
-  showL('Posting '+ transactions.length +' adjustment'+(transactions.length!==1?'s':'')+'...');
+  // ── 10% VARIANCE WARNING ─────────────────────────────────────────────────────
+  // Flag any product where the count differs from book by more than 10%.
+  // Only warn when book_qty > 0 to avoid division-by-zero on new products.
+  const bigVariances = filled.filter(e => {
+    if (e.book_qty === 0) return false;
+    const pct = Math.abs((e.counted_qty - e.book_qty) / e.book_qty);
+    return pct > 0.10;
+  });
+  if (bigVariances.length > 0) {
+    const lines = bigVariances.map(e => {
+      const diff = e.counted_qty - e.book_qty;
+      const pct = Math.round(Math.abs(diff / e.book_qty) * 100);
+      const dir = diff > 0 ? 'HIGH \u2b06 (possible missing purchase or sales report)' : 'LOW \u2b07 (possible shrinkage or missing sales)';
+      return '  \u2022 ' + e.name + ': book ' + e.book_qty + ', counted ' + e.counted_qty + ' (' + (diff > 0 ? '+' : '') + diff + ', ' + pct + '% ' + dir + ')';
+    }).join('\n');
+    const proceed = confirm(
+      '\u26A0 VARIANCE WARNING \u2014 ' + bigVariances.length + ' product' + (bigVariances.length !== 1 ? 's' : '') + ' differ by more than 10% from expected:\n\n' +
+      lines + '\n\n' +
+      'Possible causes:\n' +
+      '  HIGH: A purchase or receipt was never entered in Vendentory.\n' +
+      '  LOW:  Spoilage, theft, or a missing sales report.\n\n' +
+      'Click OK to post the count anyway (difference records as write-off or adjustment).\n' +
+      'Click Cancel to go back and double-check your numbers.'
+    );
+    if (!proceed) { toast('Count not posted \u2014 please review your numbers', 'warn'); return; }
+  }
+  // ── END VARIANCE WARNING ──────────────────────────────────────────────────────
   const tok=await getAuthToken();
   const resp=await fetch(SURL+'/rest/v1/inventory_transactions',{
     method:'POST',
@@ -4950,6 +5015,8 @@ async function postCountResults(){
   await loadProds2();
   loadRAJ();
   loadShrinkSummary();
+  // Refresh the last count date cache so pre-count walls use the new date immediately
+  invalidateLastCountDate();
   toast('Count posted! Inventory updated.','ok');
   pcShowReport(filled,countDate,transactions,null);
 }
@@ -5224,6 +5291,38 @@ function parseCSV(text){
 
 function fndKey(obj,cands){return cands.find(k=>k in obj)||Object.keys(obj)[0]||'';}
 
+// ── LAST PHYSICAL COUNT DATE HELPER ─────────────────────────────────────────
+// Returns the most recent physical count date as a string 'YYYY-MM-DD', or null.
+// Cached in _lastCountDate for the session to avoid repeated DB hits.
+let _lastCountDate = undefined; // undefined = not yet loaded; null = none exists
+async function getLastCountDate() {
+  if (_lastCountDate !== undefined) return _lastCountDate;
+  try {
+    const tok = await getAuthToken();
+    const resp = await fetch(
+      SURL + '/rest/v1/inventory_transactions?transaction_type=eq.quantity_adjustment&notes=like.Physical+count+%25&order=transaction_date.desc&limit=1&select=transaction_date',
+      { headers: { 'apikey': SKEY, 'Authorization': 'Bearer ' + tok } }
+    );
+    if (resp.ok) {
+      const rows = await resp.json();
+      if (rows && rows.length > 0) {
+        // Extract just the date portion YYYY-MM-DD
+        _lastCountDate = rows[0].transaction_date.slice(0, 10);
+      } else {
+        _lastCountDate = null;
+      }
+    } else {
+      _lastCountDate = null;
+    }
+  } catch(e) {
+    _lastCountDate = null;
+  }
+  return _lastCountDate;
+}
+// Call this after any physical count is posted so the cache refreshes next time.
+function invalidateLastCountDate() { _lastCountDate = undefined; }
+// ── END LAST COUNT DATE HELPER ───────────────────────────────────────────────
+
 async function confImport(){
   if(_roBlock('confImport'))return;
   if(!impRows.length)return;
@@ -5258,7 +5357,43 @@ async function confImport(){
   }
   // ── END DUPLICATE GUARD ─────────────────────────────────────────────────────
 
-  showL('Importing sales data...');
+  // ── PRE-COUNT WALL: SALES IMPORT ────────────────────────────────────────────
+  // If ANY part of the import date range falls before the last physical count,
+  // the count already absorbed those sales. Posting them again would drain
+  // inventory incorrectly. Block with a hard stop.
+  if (sd) {
+    const lastCount = await getLastCountDate();
+    if (lastCount && sd < lastCount) {
+      hideL();
+      toast(
+        '\u26D4 Import blocked — this report covers ' + sd + ' to ' + (ed || sd) +
+        ', which is before your last physical count on ' + lastCount + '. ' +
+        'Those sales are already reflected in your count baseline. ' +
+        'Importing them would reduce on-hand incorrectly.',
+        'err'
+      );
+      return;
+    }
+    // Warn (but allow) if import END date is before count — partial overlap
+    if (lastCount && ed && ed < lastCount) {
+      hideL();
+      const proceed = confirm(
+        '\u26A0 PARTIAL PRE-COUNT OVERLAP\n\n' +
+        'This import ends on ' + ed + ', before your last physical count on ' + lastCount + '.\n\n' +
+        'The count baseline already reflects sales up to that date.\n\n' +
+        'Importing this will likely reduce on-hand incorrectly.\n\n' +
+        'Click Cancel to stop (strongly recommended).\n' +
+        'Click OK only if you are certain this covers post-count activity.'
+      );
+      if (!proceed) { toast('Import cancelled \u2014 pre-count date range', 'warn'); return; }
+      showL('Importing sales data...');
+    } else {
+      showL('Importing sales data...');
+    }
+  } else {
+    showL('Importing sales data...');
+  }
+  // ── END PRE-COUNT WALL ───────────────────────────────────────────────────────
   const tok2=await getAuthToken();
   const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
   const irResp = await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
