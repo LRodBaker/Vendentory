@@ -3650,21 +3650,46 @@ async function markPurReceived(id){
     const lastCount=await getLastCountDate();
     const preCount = !!(purDate && lastCount && purDate < lastCount);
     if(preCount){
-      // WAC still updates — cost history matters even for pre-count purchases
-      // But inventory transactions are skipped — count is the truth
-      await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString()})});
-      const wacProductIds=[];
-      for(const l of lines){
-        const compResp=await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
-        const comps=compResp.ok?await compResp.json():[];
-        if(comps.length){comps.forEach(c=>wacProductIds.push(c.component_product_id));}
-        else{wacProductIds.push(l.product_id);}
-      }
-      await Promise.allSettled([...new Set(wacProductIds)].map(pid=>replayWAC(pid,wh)));
+      // Ask the user — don't assume. They may have received goods that were
+      // NOT included in the physical count and need inventory posted.
       hideL();
-      toast('\u26A0 Purchase dated '+purDate+' is before your last count ('+lastCount+'). Marked received for bookkeeping — inventory NOT adjusted (count is the baseline).','warn');
-      await loadProds2(); loadPurHistory(); checkOverdueOrders();
-      return;
+      const answer = await showImportDecision(
+        '📦 Pre-Count Purchase',
+        `<div style="margin-bottom:12px">This purchase is dated <strong>${fmtD(purDate)}</strong>, before your last count on <strong>${fmtD(lastCount)}</strong>.</div>
+        <div style="margin-bottom:12px">Were these items included in your <strong>${fmtD(lastCount)}</strong> physical count?</div>
+        <div style="background:var(--gray-50);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--gray-600)">
+          <strong>Yes</strong> — inventory stays as counted. Bookkeeping and WAC updated only.<br><br>
+          <strong>No</strong> — items arrived after or were missed in the count. Inventory will be increased.
+        </div>`,
+        [
+          {label:'✅ Yes — items were in my count (bookkeeping only)', value:'yes', style:''},
+          {label:'📦 No — items were NOT in my count (post to inventory)', value:'no', style:'btn-p'}
+        ]
+      );
+      if(answer === 'yes'){
+        // Bookkeeping + WAC only — inventory NOT adjusted
+        showL('Updating bookkeeping...');
+        await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString()})});
+        const wacProductIds=[];
+        for(const l of lines){
+          const compResp=await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
+          const comps=compResp.ok?await compResp.json():[];
+          if(comps.length){comps.forEach(c=>wacProductIds.push(c.component_product_id));}
+          else{wacProductIds.push(l.product_id);}
+        }
+        await Promise.allSettled([...new Set(wacProductIds)].map(pid=>replayWAC(pid,wh)));
+        hideL();
+        toast('\u26A0 Purchase dated '+purDate+' marked received — bookkeeping updated, inventory unchanged (items were in your '+lastCount+' count).','warn');
+        await loadProds2(); loadPurHistory(); checkOverdueOrders();
+        return;
+      } else if(answer === 'no'){
+        // Fall through to normal inventory posting below
+        showL('Processing receipt...');
+      } else {
+        // User closed modal — cancel
+        toast('Receipt cancelled','warn');
+        return;
+      }
     }
     // ── END PRE-COUNT WALL ────────────────────────────────────────────────────
 
