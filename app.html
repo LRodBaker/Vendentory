@@ -1380,7 +1380,7 @@ async function loadDash() {
     negBanner.style.display='none';
   }
 
-  const low=AP.filter(p=>p.stock_status==='REORDER'||p.on_hand_qty<=p.reorder_point).slice(0,5);
+  const low=AP.filter(p=>p.product_type==='individual'&&(p.stock_status==='REORDER'||p.on_hand_qty<=p.reorder_point)).slice(0,5);
   document.getElementById('dls').innerHTML=low.length?low.map(p=>`
     <div class="lr-row"><div style="font-size:14px">&#128230;</div>
     <div style="flex:1"><div style="font-size:13px;font-weight:500">${p.name}</div>
@@ -3731,7 +3731,7 @@ async function markPurReceived(id){
     hideL();
     toast('Order received! Inventory updated.','ok');
     await loadProds2();
-    loadPurHistory();
+    await loadPurHistory();
     checkOverdueOrders();
   } catch(e) {
     hideL();
@@ -4638,7 +4638,7 @@ async function srchAdj(){
   const q=document.getElementById('aps').value.toLowerCase();
   const dd=document.getElementById('add');
   if(!q||q.length<2){dd.style.display='none';return;}
-  const m=AP.filter(p=>p.name.toLowerCase().includes(q)||(p.barcode||'').includes(q)).slice(0,8);
+  const m=AP.filter(p=>p.product_type==='individual'&&p.is_active!==false&&(p.name.toLowerCase().includes(q)||(p.barcode||'').includes(q))).slice(0,8);
   if(!m.length){dd.style.display='none';return;}
   dd.style.display='block';
   dd.innerHTML=m.map(p=>`<div style="padding:9px 12px;cursor:pointer;font-size:13px;border-bottom:0.5px solid var(--border)" onmousedown="selAdj('${p.product_id}','${p.name.replace(/'/g,"\\'")}',${p.on_hand_qty})">${p.name} <span style="color:var(--gray-400);font-size:11px">(${p.on_hand_qty} in stock)</span></div>`).join('');
@@ -5616,7 +5616,7 @@ async function confImport(){
     if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
 
     // Insert full sales_lines for new period
-    const cand=AP.filter(p=>(p.product_type||'')!=='bulk');
+    const cand=AP.filter(p=>(p.product_type||'')==='individual'&&p.is_active!==false);
     const lines=[];
     const invTxnsBatch=[];
     for(const {rn,u,s,ap2} of incomingRows){
@@ -5689,7 +5689,7 @@ async function confImport(){
     if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
     const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
     if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
-    const cand=AP.filter(p=>(p.product_type||'')!=='bulk');
+    const cand=AP.filter(p=>(p.product_type||'')==='individual'&&p.is_active!==false);
     const lines=[];
     for(const {rn,u,s,ap2} of incomingRows){
       const rnl=rn.toLowerCase();
@@ -5737,7 +5737,7 @@ async function confImport(){
     if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
     const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
     if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
-    const cand=AP.filter(p=>(p.product_type||'')!=='bulk');
+    const cand=AP.filter(p=>(p.product_type||'')==='individual'&&p.is_active!==false);
     const lines=[];
     for(const {rn,u,s,ap2} of incomingRows){
       const rnl=rn.toLowerCase();
@@ -5764,7 +5764,7 @@ async function confImport(){
   if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
   const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
   if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
-  const cand=AP.filter(p=>(p.product_type||'')!=='bulk');
+  const cand=AP.filter(p=>(p.product_type||'')==='individual'&&p.is_active!==false);
   const lines=[];
   const invTxnsBatch=[];
   for(const {rn,u,s,ap2} of incomingRows){
@@ -5826,7 +5826,7 @@ function showUnmatchedModal(unmatched) {
         <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
           <select class="fs" style="font-size:12px;padding:4px 8px;flex:1;min-width:160px" id="um-sel-${i}">
             <option value="">Select product...</option>
-            ${AP.filter(p=>p.product_type!=='bulk'&&p.is_active!==false).map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}
+            ${AP.filter(p=>p.product_type==='individual'&&p.is_active!==false).map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}
           </select>
           <button class="btn btn-sm btn-p" onclick="fixUnmatchedFromSel(${i},'${esc}')">&#128295; Fix &amp; apply</button>
           <button class="btn btn-sm" onclick="closeM('m-unmatched');openAP()">+ New product</button>
@@ -6492,7 +6492,7 @@ function renderSalesRpt(rows,label){
 function loadInvRpt(){
   const tv=AP.filter(p=>p.product_type==='individual').reduce((s,p)=>s+(parseFloat(p.inventory_value)||0),0);
   window._invRptData={products:AP,tv};
-  document.getElementById('rc').innerHTML=rHdr([['Total value',fmt(tv)],['Products',AP.length],['Need reorder',AP.filter(p=>p.stock_status==='REORDER').length],['Active',AP.filter(p=>p.is_active).length]])+
+  document.getElementById('rc').innerHTML=rHdr([['Total value',fmt(tv)],['Products',AP.filter(p=>p.product_type==='individual').length],['Need reorder',AP.filter(p=>p.product_type==='individual'&&p.stock_status==='REORDER').length],['Active',AP.filter(p=>p.product_type==='individual'&&p.is_active).length]])+
     `<div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
         <div>
