@@ -5627,7 +5627,7 @@ async function confImport(){
     showL('Importing for bookkeeping only...');
     const tok2=await getAuthToken();
     const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
-    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'bookkeeping_only',imported_by:CU?.id})});
+    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft-bookkeeping',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
     if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
     const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
     if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
@@ -5675,7 +5675,7 @@ async function confImport(){
     showL('Importing for bookkeeping only...');
     const tok2=await getAuthToken();
     const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
-    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'bookkeeping_only',imported_by:CU?.id})});
+    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft-bookkeeping',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
     if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
     const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
     if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
