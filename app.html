@@ -766,6 +766,16 @@ body.ro #ro-badge{display:flex!important}
 </div>
 
 <!-- MODAL: Unmatched Products -->
+<!-- MODAL: Import Decision (replaces confirm() for straddling/overlap cases) -->
+<div class="modal-bg" id="m-import-decision" style="display:none">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-title" id="m-import-decision-title">Import Decision</div>
+    <button class="mc" onclick="_importDecisionResolve&&_importDecisionResolve('cancel');closeM('m-import-decision')">&#10005;</button>
+    <div id="m-import-decision-body" style="font-size:13px;line-height:1.6;color:var(--gray-600);margin-bottom:18px"></div>
+    <div id="m-import-decision-buttons" style="display:flex;flex-direction:column;gap:8px"></div>
+  </div>
+</div>
+
 <div class="modal-bg" id="m-unmatched" style="display:none">
   <div class="modal" style="max-width:600px;max-height:80vh;overflow-y:auto">
     <div class="modal-title">&#9888; Unmatched Products</div>
@@ -5391,6 +5401,26 @@ async function getLastCountDate() {
 function invalidateLastCountDate() { _lastCountDate = undefined; }
 // ── END LAST COUNT DATE HELPER ───────────────────────────────────────────────
 
+// ── IMPORT DECISION MODAL ───────────────────────────────────────────────────
+// Replaces browser confirm() for import overlap/straddling decisions.
+// Returns a Promise that resolves to the button value the user clicked.
+let _importDecisionResolve = null;
+function showImportDecision(title, bodyHTML, buttons) {
+  // buttons = [{label, value, style}]
+  return new Promise(resolve => {
+    _importDecisionResolve = resolve;
+    document.getElementById('m-import-decision-title').textContent = title;
+    document.getElementById('m-import-decision-body').innerHTML = bodyHTML;
+    const btnEl = document.getElementById('m-import-decision-buttons');
+    btnEl.innerHTML = buttons.map(b =>
+      `<button class="btn ${b.style||''}" style="width:100%;justify-content:center;padding:11px"
+        onclick="_importDecisionResolve&&_importDecisionResolve('${b.value}');closeM('m-import-decision')">${b.label}</button>`
+    ).join('');
+    openM('m-import-decision');
+  });
+}
+// ── END IMPORT DECISION MODAL ────────────────────────────────────────────────
+
 async function confImport(){
   if(_roBlock('confImport'))return;
   if(!impRows.length)return;
@@ -5489,18 +5519,28 @@ async function confImport(){
       return;
     }
 
-    const proceed=confirm(
-      '\u{1F4CA} EXTEND IMPORT\n\n'+
-      'Existing: '+oldLabel+'\n'+
-      'New report: '+newLabel+'\n\n'+
-      'Vendentory found '+totalDelta+' new units sold in the extended period.\n\n'+
-      'This will:\n'+
-      '  \u2022 Delete the existing '+oldLabel+' import\n'+
-      '  \u2022 Create a new '+newLabel+' import record\n'+
-      '  \u2022 Post '+totalDelta+' delta units to inventory\n\n'+
-      'Click OK to proceed.'
+    const proceed = await showImportDecision(
+      '📊 Extend Import?',
+      `<div style="margin-bottom:12px">
+        <div style="color:var(--gray-400);font-size:12px;margin-bottom:4px">EXISTING IMPORT</div>
+        <div style="font-weight:600">${oldLabel}</div>
+      </div>
+      <div style="margin-bottom:12px">
+        <div style="color:var(--gray-400);font-size:12px;margin-bottom:4px">NEW REPORT</div>
+        <div style="font-weight:600">${newLabel}</div>
+      </div>
+      <div style="background:var(--teal-light);border-radius:8px;padding:10px 12px;margin-bottom:12px">
+        Vendentory found <strong>${totalDelta} new units</strong> sold in the extended period.
+      </div>
+      <div style="font-size:12px;color:var(--gray-400)">
+        This will delete the existing import, create a new record covering the full period, and post only the ${totalDelta} delta units to inventory.
+      </div>`,
+      [
+        {label:'✅ Yes — extend import & post ' + totalDelta + ' units to inventory', value:'ok', style:'btn-p'},
+        {label:'Cancel', value:'cancel', style:''}
+      ]
     );
-    if(!proceed){ toast('Import cancelled','warn'); return; }
+    if(proceed !== 'ok'){ toast('Import cancelled','warn'); return; }
 
     // Delete old import atomically (inventory_transactions → sales_lines → sales_imports)
     showL('Replacing old import...');
@@ -5554,29 +5594,34 @@ async function confImport(){
 
     // Special case: straddles count date with no clean existing import to delta against
     if(sd && lastCount && sd < lastCount && ed && ed >= lastCount){
-      const proceed=confirm(
-        '\u26A0\uFE0F STRADDLING IMPORT\n\n'+
-        'This report covers '+fmtD(sd)+' \u2192 '+fmtD(ed)+' but your last count was '+fmtD(lastCount)+'.\n\n'+
-        'Existing overlapping imports:\n'+dupList+'\n\n'+
-        'Vendentory can\'t automatically split pre-count from post-count sales in a weekly summary.\n\n'+
-        'OPTIONS:\n'+
-        '  \u2022 Click OK to import for BOOKKEEPING ONLY (no inventory impact)\n'+
-        '  \u2022 Click Cancel and import only the post-count days ('+fmtD(lastCount)+' \u2192 '+fmtD(ed)+') for inventory\n'
+      const proceed = await showImportDecision(
+        '⚠️ Straddling Import',
+        `<div style="margin-bottom:10px">This report covers <strong>${fmtD(sd)} → ${fmtD(ed)}</strong> but your last count was <strong>${fmtD(lastCount)}</strong>.</div>
+        <div style="margin-bottom:10px">Existing overlapping imports:<br>${existingImports.map(r=>'<strong>'+fmtD(r.report_start_date)+' → '+fmtD(r.report_end_date)+'</strong>').join('<br>')}</div>
+        <div style="background:var(--amber-light);border-radius:8px;padding:10px 12px;font-size:12px">
+          ParLevel weekly reports show totals — Vendentory can't automatically split pre-count from post-count sales. Choose an option below.
+        </div>`,
+        [
+          {label:'📖 Import for bookkeeping only (no inventory impact)', value:'bookkeeping', style:''},
+          {label:'Cancel — I\'ll import ' + fmtD(lastCount) + ' → ' + fmtD(ed) + ' separately', value:'cancel', style:''}
+        ]
       );
-      if(!proceed){toast('Import cancelled \u2014 import only the post-count date range for inventory','warn');return;}
+      if(proceed !== 'bookkeeping'){toast('Import cancelled \u2014 import only the post-count date range for inventory','warn');return;}
       // Bookkeeping-only path — falls through to normal import with no inventory transactions
     } else {
-      const proceed=confirm(
-        '\u26D4 OVERLAPPING IMPORT\n\n'+
-        'These existing imports overlap with '+fmtD(sd)+' \u2192 '+fmtD(ed)+':\n\n'+
-        dupList+'\n\n'+
-        'Vendentory can\'t safely compute a delta because the date ranges don\'t align cleanly.\n\n'+
-        'OPTIONS:\n'+
-        '  \u2022 Delete the overlapping imports first, then re-import\n'+
-        '  \u2022 Click OK to import for BOOKKEEPING ONLY (no inventory impact)\n'+
-        '  \u2022 Click Cancel to stop'
+      const proceed = await showImportDecision(
+        '⛔ Overlapping Import',
+        `<div style="margin-bottom:10px">These existing imports overlap with <strong>${fmtD(sd)} → ${fmtD(ed)}</strong>:</div>
+        <div style="margin-bottom:12px">${existingImports.map(r=>'<strong>'+fmtD(r.report_start_date)+' → '+fmtD(r.report_end_date)+'</strong>').join('<br>')}</div>
+        <div style="background:var(--amber-light);border-radius:8px;padding:10px 12px;font-size:12px">
+          Vendentory can't safely compute a delta because the date ranges don't align cleanly. Delete the overlapping imports first, then re-import — or import for bookkeeping only.
+        </div>`,
+        [
+          {label:'📖 Import for bookkeeping only (no inventory impact)', value:'bookkeeping', style:''},
+          {label:'Cancel — I\'ll resolve the overlap first', value:'cancel', style:''}
+        ]
       );
-      if(!proceed){toast('Import cancelled \u2014 resolve overlapping imports first','warn');return;}
+      if(proceed !== 'bookkeeping'){toast('Import cancelled \u2014 resolve overlapping imports first','warn');return;}
     }
     // Bookkeeping-only: proceed to normal import but skip inventory transactions
     showL('Importing for bookkeeping only...');
@@ -5611,15 +5656,21 @@ async function confImport(){
   // Also handles straddling import with no existing overlap (asks user)
   if(sd && lastCount && sd < lastCount && ed && ed >= lastCount){
     hideL();
-    const proceed=confirm(
-      '\u26A0\uFE0F STRADDLING IMPORT\n\n'+
-      'This report covers '+fmtD(sd)+' \u2192 '+fmtD(ed)+' but your last count was '+fmtD(lastCount)+'.\n\n'+
-      'Vendentory can\'t automatically split pre-count from post-count sales in a weekly summary.\n\n'+
-      'OPTIONS:\n'+
-      '  \u2022 Click OK to import for BOOKKEEPING ONLY (no inventory impact)\n'+
-      '  \u2022 Click Cancel and import only the post-count days ('+fmtD(lastCount)+' \u2192 '+fmtD(ed)+') for inventory\n'
+    const proceed = await showImportDecision(
+      '⚠️ Straddling Import',
+      `<div style="margin-bottom:10px">This report covers <strong>${fmtD(sd)} → ${fmtD(ed)}</strong> but your last count was <strong>${fmtD(lastCount)}</strong>.</div>
+      <div style="background:var(--amber-light);border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:10px">
+        ParLevel weekly reports show totals — Vendentory can't automatically split pre-count from post-count sales.
+      </div>
+      <div style="font-size:12px;color:var(--gray-400)">
+        For accurate inventory, import only the post-count days (<strong>${fmtD(lastCount)} → ${fmtD(ed)}</strong>) as a separate report.
+      </div>`,
+      [
+        {label:'📖 Import for bookkeeping only (no inventory impact)', value:'bookkeeping', style:''},
+        {label:'Cancel — I\'ll import ' + fmtD(lastCount) + ' → ' + fmtD(ed) + ' for inventory', value:'cancel', style:''}
+      ]
     );
-    if(!proceed){toast('Import cancelled \u2014 import only the post-count date range for inventory','warn');return;}
+    if(proceed !== 'bookkeeping'){toast('Import cancelled \u2014 import only the post-count date range for inventory','warn');return;}
     // Bookkeeping-only path
     showL('Importing for bookkeeping only...');
     const tok2=await getAuthToken();
