@@ -4672,6 +4672,30 @@ async function saveAdj(){
   if(!adjP){toast('Select a product first','err');return;}
   const qty=parseInt(document.getElementById('aq').value)||0;
   if(!qty){toast('Enter a quantity change','err');return;}
+
+  // ── LARGE ADJUSTMENT WARNING ─────────────────────────────────────────────────
+  // Warn before posting any adjustment greater than 10 units in either direction.
+  // Protects against accidental typos (e.g. typing 500 instead of 50).
+  if(Math.abs(qty) > 10){
+    const sign = qty > 0 ? '+' : '';
+    const newQty = adjP.on_hand_qty + qty;
+    const answer = await showImportDecision(
+      '⚠️ Large Adjustment',
+      `<div style="margin-bottom:12px">You're about to adjust <strong>${adjP.name}</strong> by <strong>${sign}${qty} units</strong>.</div>
+      <div style="background:var(--amber-light);border-radius:8px;padding:10px 12px;margin-bottom:12px">
+        <div>Current on-hand: <strong>${adjP.on_hand_qty} units</strong></div>
+        <div>After adjustment: <strong>${newQty} units</strong></div>
+      </div>
+      <div style="font-size:12px;color:var(--gray-400)">Large adjustments can be hard to reverse. Make sure this number is correct before proceeding.</div>`,
+      [
+        {label:`✅ Yes — adjust by ${sign}${qty} units`, value:'ok', style:'btn-p'},
+        {label:'Cancel — let me check the number', value:'cancel', style:''}
+      ]
+    );
+    if(answer !== 'ok'){ toast('Adjustment cancelled','warn'); return; }
+  }
+  // ── END LARGE ADJUSTMENT WARNING ─────────────────────────────────────────────
+
   showL('Saving...');
   const tok=await getAuthToken();
   const adjResp=await fetch(SURL+'/rest/v1/inventory_transactions',{
