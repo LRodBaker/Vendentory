@@ -5181,20 +5181,50 @@ function pcUploadCSV(input) {
     const header = splitCSVRow(lines[0]).map(h=>h.toLowerCase().replace(/"/g,'').trim());
     const nameIdx  = header.findIndex(h=>h.includes('product')||h==='name');
     const bcIdx    = header.findIndex(h=>h.includes('barcode'));
-    const countIdx = header.findIndex(h=>h==='count'||h.includes('count'));
-    if(countIdx === -1){ toast('CSV must have a "Count" column','err'); return; }
+
+    // ── FLEXIBLE COUNT COLUMN DETECTION ────────────────────────────────────────
+    // Accept any of these formats (in priority order):
+    //   1. A column named exactly 'count'
+    //   2. A column named 'total on-hand' or 'total on hand' or 'total'
+    //   3. Separate 'machine count' + 'stock room' columns — summed automatically
+    // This lets Rod upload his Excel count sheet directly without reformatting.
+    const countIdx     = header.findIndex(h=>h==='count');
+    const totalIdx     = header.findIndex(h=>h==='total on-hand'||h==='total on hand'||h==='total');
+    const machineIdx   = header.findIndex(h=>h==='machine count'||h==='machine');
+    const stockroomIdx = header.findIndex(h=>h==='stock room'||h==='stockroom'||h==='stock');
+    const useSplit     = machineIdx !== -1 && stockroomIdx !== -1;
+
+    if(countIdx === -1 && totalIdx === -1 && !useSplit){
+      toast('CSV must have a "Count", "Total On-Hand", or "Machine Count"+"Stock Room" column','err');
+      return;
+    }
+    // ── END COLUMN DETECTION ───────────────────────────────────────────────────
 
     let added=0, skipped=0, notFound=0;
     const notFoundNames=[];
 
     for(let i=1; i<lines.length; i++){
       const cols = splitCSVRow(lines[i]).map(c=>c.replace(/^"|"$/g,'').trim());
-      const countVal = cols[countIdx];
+
+      // Resolve count value based on detected format
+      let countVal;
+      if(countIdx !== -1){
+        countVal = cols[countIdx];
+      } else if(totalIdx !== -1){
+        countVal = cols[totalIdx];
+      } else {
+        // Machine + Stock Room — parse each and sum; strips non-numeric chars like "48+"
+        const m = parseFloat((cols[machineIdx]||'').replace(/[^0-9.]/g,''))||0;
+        const s = parseFloat((cols[stockroomIdx]||'').replace(/[^0-9.]/g,''))||0;
+        countVal = String(m + s);
+      }
+
       if(countVal===''||countVal===undefined||countVal===null) { skipped++; continue; } // blank = skip
 
       const nameRaw  = nameIdx  !== -1 ? cols[nameIdx]  : '';
       const bcRaw    = bcIdx    !== -1 ? cols[bcIdx]    : '';
-      const countNum = Math.max(0, parseInt(countVal)||0);
+      // Strip non-numeric chars so values like "48+" don't parse as 0
+      const countNum = Math.max(0, parseInt((countVal||'').replace(/[^0-9]/g,''))||0);
 
       // Match product: try barcode first (exact), then name (case-insensitive)
       let prod = null;
