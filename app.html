@@ -5396,115 +5396,290 @@ async function confImport(){
   if(!impRows.length)return;
   const sd=document.getElementById('isd').value,ed=document.getElementById('ied').value;
 
-  // ── DUPLICATE DATE RANGE GUARD ──────────────────────────────────────────────
-  // Block import if any existing sales_import record overlaps this date range.
-  // Overlap condition: existing.start <= new.end AND existing.end >= new.start
+  // ── SMART IMPORT ENGINE ─────────────────────────────────────────────────────
+  // Handles four cases automatically:
+  //   CASE 1 — No overlap, fully post-count          → normal import
+  //   CASE 2 — Clean extension (same start, later end) → delta import (replaces old)
+  //   CASE 3 — Messy overlap (can't compute clean delta) → ask user
+  //   CASE 4 — Fully pre-count                       → hard block
+  // ────────────────────────────────────────────────────────────────────────────
+
+  showL('Checking import history...');
+  const tok0=await getAuthToken();
+  const lastCount = await getLastCountDate();
+
+  // ── CASE 4: Fully pre-count — hard block ────────────────────────────────────
+  if(sd && lastCount && ed && ed < lastCount){
+    hideL();
+    toast('\u26D4 Import blocked \u2014 this report ends on '+ed+' which is before your last count on '+lastCount+'. Those sales are already in your count baseline.','err');
+    return;
+  }
+  if(sd && lastCount && sd < lastCount && (!ed || ed < lastCount)){
+    hideL();
+    toast('\u26D4 Import blocked \u2014 this report covers '+sd+' to '+(ed||sd)+', which is before your last count on '+lastCount+'. Those sales are already reflected in your count baseline.','err');
+    return;
+  }
+  // ────────────────────────────────────────────────────────────────────────────
+
+  // Fetch any overlapping imports
+  let existingImports=[];
   if(sd&&ed){
-    showL('Checking for duplicate imports...');
-    const tok0=await getAuthToken();
     const dupChk=await fetch(
       SURL+'/rest/v1/sales_imports?report_start_date=lte.'+ed+'&report_end_date=gte.'+sd+'&select=id,report_start_date,report_end_date,imported_at',
       {headers:{'apikey':SKEY,'Authorization':'Bearer '+tok0}}
     );
-    if(dupChk.ok){
-      const existing=await dupChk.json();
-      if(existing&&existing.length>0){
-        hideL();
-        const dupList=existing.map(r=>'  \u2022 '+fmtD(r.report_start_date)+' \u2192 '+fmtD(r.report_end_date)+' (imported '+fmtD(r.imported_at)+')').join('\n');
-        const proceed=confirm(
-          '\u26D4 DUPLICATE IMPORT WARNING\n\n'+
-          'A sales import already exists that overlaps this date range ('+sd+' to '+ed+'):\n\n'+
-          dupList+'\n\n'+
-          'Importing again will DOUBLE-COUNT sales and drain inventory incorrectly.\n\n'+
-          'Click Cancel to stop (recommended).\n'+
-          'Click OK only if you are certain this is not a duplicate.'
-        );
-        if(!proceed){toast('Import cancelled \u2014 duplicate date range detected','warn');return;}
-      }
-    }
+    if(dupChk.ok) existingImports=await dupChk.json()||[];
   }
-  // ── END DUPLICATE GUARD ─────────────────────────────────────────────────────
 
-  // ── PRE-COUNT WALL: SALES IMPORT ────────────────────────────────────────────
-  // If ANY part of the import date range falls before the last physical count,
-  // the count already absorbed those sales. Posting them again would drain
-  // inventory incorrectly. Block with a hard stop.
-  if (sd) {
-    const lastCount = await getLastCountDate();
-    if (lastCount && sd < lastCount) {
-      hideL();
-      toast(
-        '\u26D4 Import blocked — this report covers ' + sd + ' to ' + (ed || sd) +
-        ', which is before your last physical count on ' + lastCount + '. ' +
-        'Those sales are already reflected in your count baseline. ' +
-        'Importing them would reduce on-hand incorrectly.',
-        'err'
-      );
-      return;
-    }
-    // Warn (but allow) if import END date is before count — partial overlap
-    if (lastCount && ed && ed < lastCount) {
-      hideL();
-      const proceed = confirm(
-        '\u26A0 PARTIAL PRE-COUNT OVERLAP\n\n' +
-        'This import ends on ' + ed + ', before your last physical count on ' + lastCount + '.\n\n' +
-        'The count baseline already reflects sales up to that date.\n\n' +
-        'Importing this will likely reduce on-hand incorrectly.\n\n' +
-        'Click Cancel to stop (strongly recommended).\n' +
-        'Click OK only if you are certain this covers post-count activity.'
-      );
-      if (!proceed) { toast('Import cancelled \u2014 pre-count date range', 'warn'); return; }
-      showL('Importing sales data...');
-    } else {
-      showL('Importing sales data...');
-    }
-  } else {
-    showL('Importing sales data...');
-  }
-  // ── END PRE-COUNT WALL ───────────────────────────────────────────────────────
-  const tok2=await getAuthToken();
-  const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
-  const irResp = await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
-  if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
-  const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
-  if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
+  // Parse the incoming rows now (needed for delta calculation)
   const pf=fndKey(impRows[0],['Product','product','Item','Name','name']);
   const uf=fndKey(impRows[0],['Units','units','Qty','qty','Quantity']);
   const sf2=fndKey(impRows[0],['Sales','sales','Revenue','Amount']);
   const af=fndKey(impRows[0],['Avg Price','avg price','AvgPrice']);
-  const lines=[];
-  const invTxnsBatch=[];
+
+  // Build a map of incoming units by raw product name
+  const incomingUnits={};
+  const incomingRows=[];
   for(const row of impRows){
     const rn=(row[pf]||'').trim();
     if(!rn||rn.toLowerCase().includes('total'))continue;
     const u=parseFloat((row[uf]||'0').replace(/[^0-9.-]/g,''))||0;
     const s=parseFloat((row[sf2]||'0').replace(/[^0-9.-]/g,''))||0;
     const ap2=parseFloat((row[af]||'0').replace(/[^0-9.-]/g,''))||0;
-    const rnl=rn.toLowerCase();
-    // Sales come only from individually-sold items, never bulk receiving conduits
+    incomingUnits[rn.toLowerCase()]=u;
+    incomingRows.push({rn,u,s,ap2});
+  }
+
+  // ── CASE 2: Clean extension — same start date, later end date ───────────────
+  const cleanExt = existingImports.length===1 &&
+                   existingImports[0].report_start_date===sd &&
+                   existingImports[0].report_end_date < ed;
+
+  if(cleanExt){
+    const old=existingImports[0];
+    hideL();
+
+    // Fetch existing sales_lines to compute delta
+    showL('Computing delta from existing import...');
+    const tok1=await getAuthToken();
+    const slResp=await fetch(
+      SURL+'/rest/v1/sales_lines?sales_import_id=eq.'+old.id+'&select=raw_product_name,units_sold',
+      {headers:{'apikey':SKEY,'Authorization':'Bearer '+tok1}}
+    );
+    const oldLines=slResp.ok?await slResp.json():[];
+    const oldUnits={};
+    oldLines.forEach(l=>{ oldUnits[(l.raw_product_name||'').toLowerCase()]=parseInt(l.units_sold||0); });
+
+    // Calculate delta per product
+    const deltaMap={};
+    let totalDelta=0;
+    incomingRows.forEach(({rn,u})=>{
+      const rnl=rn.toLowerCase();
+      const oldU=oldUnits[rnl]||0;
+      const delta=Math.round(u)-oldU;
+      if(delta>0){ deltaMap[rnl]=delta; totalDelta+=delta; }
+    });
+
+    hideL();
+    const oldLabel=fmtD(old.report_start_date)+' \u2192 '+fmtD(old.report_end_date);
+    const newLabel=fmtD(sd)+' \u2192 '+fmtD(ed);
+
+    if(totalDelta===0){
+      toast('No new sales found \u2014 existing import already covers this period.','warn');
+      return;
+    }
+
+    const proceed=confirm(
+      '\u{1F4CA} EXTEND IMPORT\n\n'+
+      'Existing: '+oldLabel+'\n'+
+      'New report: '+newLabel+'\n\n'+
+      'Vendentory found '+totalDelta+' new units sold in the extended period.\n\n'+
+      'This will:\n'+
+      '  \u2022 Delete the existing '+oldLabel+' import\n'+
+      '  \u2022 Create a new '+newLabel+' import record\n'+
+      '  \u2022 Post '+totalDelta+' delta units to inventory\n\n'+
+      'Click OK to proceed.'
+    );
+    if(!proceed){ toast('Import cancelled','warn'); return; }
+
+    // Delete old import atomically (inventory_transactions → sales_lines → sales_imports)
+    showL('Replacing old import...');
+    const tok2=await getAuthToken();
+    const dh={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json','Prefer':'return=minimal'};
+    await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.import&reference_id=eq.'+old.id,{method:'DELETE',headers:dh});
+    await fetch(SURL+'/rest/v1/sales_lines?sales_import_id=eq.'+old.id,{method:'DELETE',headers:dh});
+    await fetch(SURL+'/rest/v1/sales_imports?id=eq.'+old.id,{method:'DELETE',headers:dh});
+
+    // Create new import record
+    const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
+    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
+    if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
+    const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
+    if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
+
+    // Insert full sales_lines for new period
     const cand=AP.filter(p=>(p.product_type||'')!=='bulk');
-    // 1. Exact alias match (highest priority)
+    const lines=[];
+    const invTxnsBatch=[];
+    for(const {rn,u,s,ap2} of incomingRows){
+      const rnl=rn.toLowerCase();
+      let matched=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
+      if(!matched) matched=cand.find(p=>p.name.toLowerCase()===rnl);
+      if(!matched) matched=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+      const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
+      lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
+      // Only post DELTA units to inventory (not full week totals)
+      const delta=deltaMap[rnl]||0;
+      if(matched&&delta>0){
+        invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',quantity_change:-delta,warehouse_quantity_change:-delta,reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed+' (delta from '+old.report_end_date+')',created_by:CU?.id});
+      }
+    }
+    if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
+    if(invTxnsBatch.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(invTxnsBatch)});
+    hideL();
+    const unmatched=lines.filter(l=>!l.product_id);
+    await loadProds2();
+    loadIH();
+    toast('\u2705 Extended '+oldLabel+' \u2192 '+newLabel+' \u2014 '+totalDelta+' new units posted to inventory'+(unmatched.length?' \u00B7 '+unmatched.length+' unmatched':''),'ok');
+    cancImport();
+    if(unmatched.length) showUnmatchedModal(unmatched);
+    return;
+  }
+  // ── END CASE 2 ───────────────────────────────────────────────────────────────
+
+  // ── CASE 3: Messy overlap — can't compute clean delta ───────────────────────
+  if(existingImports.length>0 && !cleanExt){
+    hideL();
+    const dupList=existingImports.map(r=>'  \u2022 '+fmtD(r.report_start_date)+' \u2192 '+fmtD(r.report_end_date)).join('\n');
+
+    // Special case: straddles count date with no clean existing import to delta against
+    if(sd && lastCount && sd < lastCount && ed && ed >= lastCount){
+      const proceed=confirm(
+        '\u26A0\uFE0F STRADDLING IMPORT\n\n'+
+        'This report covers '+fmtD(sd)+' \u2192 '+fmtD(ed)+' but your last count was '+fmtD(lastCount)+'.\n\n'+
+        'Existing overlapping imports:\n'+dupList+'\n\n'+
+        'Vendentory can\'t automatically split pre-count from post-count sales in a weekly summary.\n\n'+
+        'OPTIONS:\n'+
+        '  \u2022 Click OK to import for BOOKKEEPING ONLY (no inventory impact)\n'+
+        '  \u2022 Click Cancel and import only the post-count days ('+fmtD(lastCount)+' \u2192 '+fmtD(ed)+') for inventory\n'
+      );
+      if(!proceed){toast('Import cancelled \u2014 import only the post-count date range for inventory','warn');return;}
+      // Bookkeeping-only path — falls through to normal import with no inventory transactions
+    } else {
+      const proceed=confirm(
+        '\u26D4 OVERLAPPING IMPORT\n\n'+
+        'These existing imports overlap with '+fmtD(sd)+' \u2192 '+fmtD(ed)+':\n\n'+
+        dupList+'\n\n'+
+        'Vendentory can\'t safely compute a delta because the date ranges don\'t align cleanly.\n\n'+
+        'OPTIONS:\n'+
+        '  \u2022 Delete the overlapping imports first, then re-import\n'+
+        '  \u2022 Click OK to import for BOOKKEEPING ONLY (no inventory impact)\n'+
+        '  \u2022 Click Cancel to stop'
+      );
+      if(!proceed){toast('Import cancelled \u2014 resolve overlapping imports first','warn');return;}
+    }
+    // Bookkeeping-only: proceed to normal import but skip inventory transactions
+    showL('Importing for bookkeeping only...');
+    const tok2=await getAuthToken();
+    const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
+    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'bookkeeping_only',imported_by:CU?.id})});
+    if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
+    const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
+    if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
+    const cand=AP.filter(p=>(p.product_type||'')!=='bulk');
+    const lines=[];
+    for(const {rn,u,s,ap2} of incomingRows){
+      const rnl=rn.toLowerCase();
+      let matched=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
+      if(!matched) matched=cand.find(p=>p.name.toLowerCase()===rnl);
+      if(!matched) matched=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+      const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
+      lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
+    }
+    if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
+    hideL();
+    const unmatched=lines.filter(l=>!l.product_id);
+    loadIH();
+    toast('\u{1F4D6} Bookkeeping import complete \u2014 '+lines.length+' items recorded, inventory unchanged'+(unmatched.length?' \u00B7 '+unmatched.length+' unmatched':''),'ok');
+    cancImport();
+    if(unmatched.length) showUnmatchedModal(unmatched);
+    return;
+  }
+  // ── END CASE 3 ───────────────────────────────────────────────────────────────
+
+  // ── CASE 1: No overlap — normal import ───────────────────────────────────────
+  // Also handles straddling import with no existing overlap (asks user)
+  if(sd && lastCount && sd < lastCount && ed && ed >= lastCount){
+    hideL();
+    const proceed=confirm(
+      '\u26A0\uFE0F STRADDLING IMPORT\n\n'+
+      'This report covers '+fmtD(sd)+' \u2192 '+fmtD(ed)+' but your last count was '+fmtD(lastCount)+'.\n\n'+
+      'Vendentory can\'t automatically split pre-count from post-count sales in a weekly summary.\n\n'+
+      'OPTIONS:\n'+
+      '  \u2022 Click OK to import for BOOKKEEPING ONLY (no inventory impact)\n'+
+      '  \u2022 Click Cancel and import only the post-count days ('+fmtD(lastCount)+' \u2192 '+fmtD(ed)+') for inventory\n'
+    );
+    if(!proceed){toast('Import cancelled \u2014 import only the post-count date range for inventory','warn');return;}
+    // Bookkeeping-only path
+    showL('Importing for bookkeeping only...');
+    const tok2=await getAuthToken();
+    const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
+    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'bookkeeping_only',imported_by:CU?.id})});
+    if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
+    const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
+    if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
+    const cand=AP.filter(p=>(p.product_type||'')!=='bulk');
+    const lines=[];
+    for(const {rn,u,s,ap2} of incomingRows){
+      const rnl=rn.toLowerCase();
+      let matched=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
+      if(!matched) matched=cand.find(p=>p.name.toLowerCase()===rnl);
+      if(!matched) matched=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+      const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
+      lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
+    }
+    if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
+    hideL();
+    const unmatched=lines.filter(l=>!l.product_id);
+    loadIH();
+    toast('\u{1F4D6} Bookkeeping import complete \u2014 '+lines.length+' items recorded, inventory unchanged'+(unmatched.length?' \u00B7 '+unmatched.length+' unmatched':''),'ok');
+    cancImport();
+    if(unmatched.length) showUnmatchedModal(unmatched);
+    return;
+  }
+
+  showL('Importing sales data...');
+  const tok2=await getAuthToken();
+  const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
+  const irResp = await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
+  if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
+  const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
+  if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
+  const cand=AP.filter(p=>(p.product_type||'')!=='bulk');
+  const lines=[];
+  const invTxnsBatch=[];
+  for(const {rn,u,s,ap2} of incomingRows){
+    const rnl=rn.toLowerCase();
     let matched=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
-    // 2. Exact product name match
     if(!matched) matched=cand.find(p=>p.name.toLowerCase()===rnl);
-    // 3. Fuzzy: product name contains import name or vice versa
     if(!matched) matched=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
     const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
     lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
     if(matched&&u>0)invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
   }
-  // Batch insert all at once instead of one-by-one
+  // Batch insert all at once
   if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
   if(invTxnsBatch.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(invTxnsBatch)});
   hideL();
   const unmatched=lines.filter(l=>!l.product_id);
   const totalUnits=invTxnsBatch.reduce((s,t)=>s+Math.abs(t.quantity_change),0);
-  // Reload inventory immediately so on-hand reflects consumed units
   await loadProds2();
   loadIH();
-  toast('Import complete! '+lines.length+' items · '+totalUnits+' units consumed'+(unmatched.length?' · '+unmatched.length+' unmatched':''),'ok');
+  toast('\u2705 Import complete \u2014 '+lines.length+' items \u00B7 '+totalUnits+' units consumed'+(unmatched.length?' \u00B7 '+unmatched.length+' unmatched':''),'ok');
   cancImport();
   if(unmatched.length) showUnmatchedModal(unmatched);
+  // ── END CASE 1 ───────────────────────────────────────────────────────────────
+  // ── END SMART IMPORT ENGINE ──────────────────────────────────────────────────
 }
 
 // Store unmatched lines for retroactive fix
