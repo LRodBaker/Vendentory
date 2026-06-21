@@ -9,6 +9,7 @@
 <title>Vendentory</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Syne:wght@600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
 // Inline Supabase loader — tries multiple CDNs in order
 (function(){
@@ -5159,76 +5160,65 @@ function pcUploadCSV(input) {
     if(banner){banner.style.background='var(--red)';setTimeout(()=>{banner.style.background='var(--amber)';},3000);}
     toast('Set the count date before uploading — you can change it after but do it now','warn');
   }
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const text = e.target.result;
-    const lines = text.split(/\r?\n/).filter(l=>l.trim());
-    if(lines.length < 2){ toast('CSV appears empty','err'); return; }
+  // ── FILE TYPE DETECTION ────────────────────────────────────────────────────
+  // Accept both CSV and Excel (.xlsx/.xls) files.
+  // Excel files are parsed with SheetJS into an array of row objects,
+  // then fed into the same column detection and matching logic as CSV.
+  const isExcel = /\.(xlsx|xls)$/i.test(file.name);
 
-    // Parse header row to find column indices
-    function splitCSVRow(row) {
-      const result = []; let cur = ''; let inQ = false;
-      for(let i=0; i<row.length; i++){
-        const ch = row[i];
-        if(ch==='"'){ inQ=!inQ; }
-        else if(ch===','&&!inQ){ result.push(cur.trim()); cur=''; }
-        else { cur+=ch; }
-      }
-      result.push(cur.trim());
-      return result;
-    }
+  function processRows(rowObjects) {
+    // rowObjects = [{colName: value, ...}, ...] — same shape SheetJS and CSV both produce
+    if(!rowObjects || rowObjects.length < 1){ toast('File appears empty','err'); return; }
 
-    const header = splitCSVRow(lines[0]).map(h=>h.toLowerCase().replace(/"/g,'').trim());
-    const nameIdx  = header.findIndex(h=>h.includes('product')||h==='name');
-    const bcIdx    = header.findIndex(h=>h.includes('barcode'));
+    const header = Object.keys(rowObjects[0]).map(h=>h.toLowerCase().trim());
 
-    // ── FLEXIBLE COUNT COLUMN DETECTION ────────────────────────────────────────
+    // ── FLEXIBLE COUNT COLUMN DETECTION ──────────────────────────────────────
     // Accept any of these formats (in priority order):
     //   1. A column named exactly 'count'
-    //   2. A column named 'total on-hand' or 'total on hand' or 'total'
+    //   2. A column named 'total on-hand' or 'total on hand'
     //   3. Separate 'machine count' + 'stock room' columns — summed automatically
-    // This lets Rod upload his Excel count sheet directly without reformatting.
-    const countIdx     = header.findIndex(h=>h==='count');
-    const totalIdx     = header.findIndex(h=>h==='total on-hand'||h==='total on hand'||h==='total');
-    const machineIdx   = header.findIndex(h=>h==='machine count'||h==='machine');
-    const stockroomIdx = header.findIndex(h=>h==='stock room'||h==='stockroom'||h==='stock');
-    const useSplit     = machineIdx !== -1 && stockroomIdx !== -1;
+    // Accepts CSV or Excel without any reformatting required.
+    const countKey     = Object.keys(rowObjects[0]).find(k=>k.toLowerCase().trim()==='count');
+    const totalKey     = Object.keys(rowObjects[0]).find(k=>{const l=k.toLowerCase().trim();return l==='total on-hand'||l==='total on hand'||l==='total';});
+    const machineKey   = Object.keys(rowObjects[0]).find(k=>{const l=k.toLowerCase().trim();return l==='machine count'||l==='machine';});
+    const stockroomKey = Object.keys(rowObjects[0]).find(k=>{const l=k.toLowerCase().trim();return l==='stock room'||l==='stockroom'||l==='stock';});
+    const nameKey      = Object.keys(rowObjects[0]).find(k=>{const l=k.toLowerCase().trim();return l.includes('product')||l==='name';});
+    const bcKey        = Object.keys(rowObjects[0]).find(k=>k.toLowerCase().trim().includes('barcode'));
+    const useSplit     = machineKey && stockroomKey;
 
-    if(countIdx === -1 && totalIdx === -1 && !useSplit){
-      toast('CSV must have a "Count", "Total On-Hand", or "Machine Count"+"Stock Room" column','err');
+    if(!countKey && !totalKey && !useSplit){
+      toast('File must have a "Count", "Total On-Hand", or "Machine Count"+"Stock Room" column','err');
       return;
     }
-    // ── END COLUMN DETECTION ───────────────────────────────────────────────────
+    // ── END COLUMN DETECTION ─────────────────────────────────────────────────
 
     let added=0, skipped=0, notFound=0;
     const notFoundNames=[];
 
-    for(let i=1; i<lines.length; i++){
-      const cols = splitCSVRow(lines[i]).map(c=>c.replace(/^"|"$/g,'').trim());
-
+    for(const row of rowObjects){
       // Resolve count value based on detected format
       let countVal;
-      if(countIdx !== -1){
-        countVal = cols[countIdx];
-      } else if(totalIdx !== -1){
-        countVal = cols[totalIdx];
+      if(countKey){
+        countVal = String(row[countKey]??'').trim();
+      } else if(totalKey){
+        countVal = String(row[totalKey]??'').trim();
       } else {
         // Machine + Stock Room — parse each and sum; strips non-numeric chars like "48+"
-        const m = parseFloat((cols[machineIdx]||'').replace(/[^0-9.]/g,''))||0;
-        const s = parseFloat((cols[stockroomIdx]||'').replace(/[^0-9.]/g,''))||0;
+        const m = parseFloat(String(row[machineKey]??'').replace(/[^0-9.]/g,''))||0;
+        const s = parseFloat(String(row[stockroomKey]??'').replace(/[^0-9.]/g,''))||0;
         countVal = String(m + s);
       }
 
-      if(countVal===''||countVal===undefined||countVal===null) { skipped++; continue; } // blank = skip
+      if(countVal===''||countVal==='undefined'||countVal==='null') { skipped++; continue; }
 
-      const nameRaw  = nameIdx  !== -1 ? cols[nameIdx]  : '';
-      const bcRaw    = bcIdx    !== -1 ? cols[bcIdx]    : '';
+      const nameRaw = nameKey ? String(row[nameKey]??'').trim() : '';
+      const bcRaw   = bcKey   ? String(row[bcKey]??'').replace(/\D/g,'') : '';
       // Strip non-numeric chars so values like "48+" don't parse as 0
       const countNum = Math.max(0, parseInt((countVal||'').replace(/[^0-9]/g,''))||0);
 
       // Match product: try barcode first (exact), then name (case-insensitive)
       let prod = null;
-      if(bcRaw) prod = AP.find(p=>p.barcode===bcRaw && p.product_type!=='bulk' && p.is_active!==false);
+      if(bcRaw) prod = AP.find(p=>p.barcode&&p.barcode.replace(/\D/g,'')===bcRaw && p.product_type!=='bulk' && p.is_active!==false);
       if(!prod && nameRaw) {
         const nameLow = nameRaw.toLowerCase();
         prod = AP.find(p=>p.name.toLowerCase()===nameLow && p.product_type!=='bulk' && p.is_active!==false);
@@ -5251,15 +5241,63 @@ function pcUploadCSV(input) {
     }
 
     renderCountList();
-    let msg = added+' product'+(added!==1?'s':'')+' loaded from CSV';
+    let msg = added+' product'+(added!==1?'s':'')+' loaded from file';
     if(skipped) msg += ' · '+skipped+' blank rows skipped';
     if(notFound) msg += ' · '+notFound+' not matched';
     toast(msg, notFound>0?'warn':'ok');
     if(notFound>0 && notFoundNames.length){
-      console.warn('Vendentory CSV upload — unmatched rows:', notFoundNames);
+      console.warn('Vendentory count upload — unmatched rows:', notFoundNames);
     }
-  };
-  reader.readAsText(file);
+  }
+
+  if(isExcel){
+    // Parse xlsx/xls with SheetJS — reads formula results (data_only equivalent)
+    if(typeof XLSX === 'undefined'){ toast('Excel reader not loaded yet — try again in a moment','err'); return; }
+    const reader = new FileReader();
+    reader.onload = function(e){
+      try {
+        const wb = XLSX.read(e.target.result, {type:'array', cellFormula:false, cellNF:false});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        // sheet_to_json with header:1 gives arrays; with defval:'' fills blanks
+        const rowObjects = XLSX.utils.sheet_to_json(ws, {defval:''});
+        processRows(rowObjects);
+      } catch(err){
+        toast('Could not read Excel file — try saving as CSV','err');
+        console.error('SheetJS error:', err);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  } else {
+    // CSV path — unchanged behaviour
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const text = e.target.result;
+      // Parse CSV into row objects matching SheetJS output shape
+      function splitCSVRow(row) {
+        const result = []; let cur = ''; let inQ = false;
+        for(let i=0; i<row.length; i++){
+          const ch = row[i];
+          if(ch==='"'){ inQ=!inQ; }
+          else if(ch===','&&!inQ){ result.push(cur.trim()); cur=''; }
+          else { cur+=ch; }
+        }
+        result.push(cur.trim());
+        return result;
+      }
+      const lines = text.split(/\r?\n/).filter(l=>l.trim());
+      if(lines.length < 2){ toast('CSV appears empty','err'); return; }
+      const hdrs = splitCSVRow(lines[0]).map(h=>h.replace(/"/g,'').trim());
+      const rowObjects = lines.slice(1).map(line=>{
+        const cols = splitCSVRow(line).map(c=>c.replace(/^"|"$/g,'').trim());
+        const obj = {};
+        hdrs.forEach((h,i)=>{ obj[h] = cols[i]||''; });
+        return obj;
+      }).filter(r=>Object.values(r).some(v=>v));
+      processRows(rowObjects);
+    };
+    reader.readAsText(file);
+  }
+  // ── END FILE TYPE HANDLING ─────────────────────────────────────────────────
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -7828,7 +7866,7 @@ function toast(msg,type=''){
       <button class="btn btn-sm" style="flex:1" onclick="downloadCountSheet()">&#11015; Download Count Sheet (CSV)</button>
       <label class="btn btn-sm" style="flex:1;cursor:pointer;justify-content:center">
         &#11014; Upload Filled CSV
-        <input type="file" accept=".csv" style="display:none" onchange="pcUploadCSV(this)">
+        <input type="file" accept=".csv,.xlsx,.xls" style="display:none" onchange="pcUploadCSV(this)">
       </label>
     </div>
 
