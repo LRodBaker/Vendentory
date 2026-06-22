@@ -5048,22 +5048,40 @@ async function postCountResults(){
     return pct > 0.10;
   });
   if (bigVariances.length > 0) {
-    const lines = bigVariances.map(e => {
+    const varRows = bigVariances.map(e => {
       const diff = e.counted_qty - e.book_qty;
       const pct = Math.round(Math.abs(diff / e.book_qty) * 100);
-      const dir = diff > 0 ? 'HIGH \u2b06 (possible missing purchase or sales report)' : 'LOW \u2b07 (possible shrinkage or missing sales)';
-      return '  \u2022 ' + e.name + ': book ' + e.book_qty + ', counted ' + e.counted_qty + ' (' + (diff > 0 ? '+' : '') + diff + ', ' + pct + '% ' + dir + ')';
-    }).join('\n');
-    const proceed = confirm(
-      '\u26A0 VARIANCE WARNING \u2014 ' + bigVariances.length + ' product' + (bigVariances.length !== 1 ? 's' : '') + ' differ by more than 10% from expected:\n\n' +
-      lines + '\n\n' +
-      'Possible causes:\n' +
-      '  HIGH: A purchase or receipt was never entered in Vendentory.\n' +
-      '  LOW:  Spoilage, theft, or a missing sales report.\n\n' +
-      'Click OK to post the count anyway (difference records as write-off or adjustment).\n' +
-      'Click Cancel to go back and double-check your numbers.'
+      const isHigh = diff > 0;
+      const color = isHigh ? 'var(--amber)' : 'var(--red-mid)';
+      const arrow = isHigh ? '\u2b06' : '\u2b07';
+      const tip = isHigh ? 'Possible missing purchase' : 'Possible shrinkage or missing sales';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:0.5px solid var(--border);font-size:13px;gap:8px">
+        <span style="font-weight:500">${e.name}</span>
+        <span style="color:${color};font-weight:700;white-space:nowrap">${isHigh?'+':''}${diff} (${pct}% ${arrow})</span>
+      </div>
+      <div style="font-size:11px;color:var(--gray-400);padding-bottom:4px">${tip} &mdash; book ${e.book_qty}, counted ${e.counted_qty}</div>`;
+    }).join('');
+    const bodyHTML = `
+      <div style="margin-bottom:10px;font-size:13px">
+        <strong>${bigVariances.length} product${bigVariances.length !== 1 ? 's' : ''}</strong> differ from the book quantity by more than 10%:
+      </div>
+      <div style="background:var(--gray-50);border-radius:8px;padding:10px 12px;margin-bottom:12px;max-height:220px;overflow-y:auto">
+        ${varRows}
+      </div>
+      <div style="font-size:12px;color:var(--gray-500)">
+        <strong>HIGH \u2b06</strong> — possible missing purchase or receipt not entered.<br>
+        <strong>LOW \u2b07</strong> — possible spoilage, theft, or missing sales report.<br><br>
+        Post anyway to record the difference as a write-off or adjustment.
+      </div>`;
+    const proceed = await showImportDecision(
+      '\u26A0\ufe0f Variance Warning',
+      bodyHTML,
+      [
+        {label: 'Post count anyway', value: 'post', style: 'btn-p'},
+        {label: 'Go back and review', value: 'cancel', style: ''}
+      ]
     );
-    if (!proceed) { toast('Count not posted \u2014 please review your numbers', 'warn'); return; }
+    if (proceed !== 'post') { toast('Count not posted \u2014 please review your numbers', 'warn'); return; }
   }
   // ── END VARIANCE WARNING ──────────────────────────────────────────────────────
   const tok=await getAuthToken();
