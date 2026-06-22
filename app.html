@@ -4793,12 +4793,12 @@ function handleDrop(e){e.preventDefault();document.getElementById('idz').style.b
 async function openPC(){
   countEntries=[];
   _pcSnapshot={};
-  // Default date to today
-  // Leave date blank — Rod must explicitly set it. Prevents accidental today-date posts.
-  document.getElementById('pc-date').value='';
-  document.getElementById('pc-date-confirm').style.display='none';
-  document.getElementById('pc-date-confirm').textContent='';
-  document.getElementById('pc-date-banner').style.background='var(--amber)';
+  // Auto-fill today's date — Rod can change it if the count was done on a different day.
+  const _todayStr = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
+  document.getElementById('pc-date').value = _todayStr;
+  document.getElementById('pc-date-confirm').style.display='block';
+  document.getElementById('pc-date-confirm').textContent='\u2713 Count date set to '+_todayStr;
+  document.getElementById('pc-date-banner').style.background='var(--green)';
   const _snapInfoReset=document.getElementById('pc-snapshot-info');
   if(_snapInfoReset) _snapInfoReset.style.display='none';
   document.getElementById('pc-bc').value='';
@@ -5176,13 +5176,34 @@ function pcCopyReport(){
     if(btn){btn.textContent='&#10003; Copied!';setTimeout(()=>{btn.innerHTML='&#128203; Copy for Bookkeeper';},2500);}
     toast('Report copied to clipboard','ok');
   }).catch(()=>{
-    // Fallback: show the text in a textarea
+    // Fallback: try execCommand first
     const ta=document.createElement('textarea');
     ta.value=window._pcCopyText;
     ta.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0';
     document.body.appendChild(ta);ta.select();
-    try{document.execCommand('copy');toast('Report copied to clipboard','ok');}catch(e){toast('Could not copy — select text above manually','err');}
+    let copied=false;
+    try{copied=document.execCommand('copy');}catch(e){}
     document.body.removeChild(ta);
+    if(copied){
+      toast('Report copied to clipboard','ok');
+    } else {
+      // Last resort: show a selectable textarea in the report area (works on iOS Safari)
+      const rpt=document.getElementById('pc-report');
+      if(rpt){
+        const existing=document.getElementById('pc-copy-fallback');
+        if(existing){existing.remove();}
+        const fallback=document.createElement('div');
+        fallback.id='pc-copy-fallback';
+        fallback.style.cssText='margin-top:10px;';
+        fallback.innerHTML='<div style="font-size:12px;color:var(--gray-500);margin-bottom:6px">&#128203; Tap below, Select All, then Copy:</div>'
+          +'<textarea readonly style="width:100%;height:180px;font-size:11px;font-family:monospace;border:1px solid var(--border);border-radius:6px;padding:8px;box-sizing:border-box" onclick="this.select()">'
+          +window._pcCopyText.replace(/</g,'&lt;')+'</textarea>';
+        rpt.appendChild(fallback);
+        toast('Tap the text box below to select and copy','warn');
+      } else {
+        toast('Could not copy — please screenshot the report instead','err');
+      }
+    }
   });
 }
 
@@ -5193,13 +5214,14 @@ function downloadCountSheet() {
   const prods = AP.filter(p => p.product_type !== 'bulk' && p.product_type !== 'variety' && p.is_active !== false)
     .sort((a,b) => a.name.localeCompare(b.name));
   if(!prods.length){ toast('No active individual products found','err'); return; }
-  const rows = [['Product Name','Barcode','Book Qty','Count']];
+  const rows = [['Product Name','Barcode','Book Qty','Machine Count','Stock Room']];
   for(const p of prods){
     rows.push([
       '"'+p.name.replace(/"/g,'""')+'"',
       p.barcode||'',
       p.on_hand_qty||0,
-      '' // blank — Rod fills this in
+      '', // Machine Count — Rod fills in
+      ''  // Stock Room — Rod fills in (summed automatically on upload)
     ]);
   }
   const csv = rows.map(r=>r.join(',')).join('\n');
@@ -8115,7 +8137,7 @@ function toast(msg,type=''){
         </div>
       </div>
       <div style="font-size:12px;color:rgba(255,255,255,0.85);margin-top:8px">
-        This date will be stamped on every transaction. Today is auto-filled — change it if the count was done on a different day.
+        Today's date is pre-filled. Change it if the count was actually performed on a different day — this date is stamped on every transaction.
       </div>
     </div>
 
@@ -8143,7 +8165,7 @@ function toast(msg,type=''){
     <!-- Action buttons -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <button class="btn" onclick="closeM('mPC')">Cancel</button>
-      <button class="btn btn-p" id="pc-post-btn" disabled onclick="postCountResults()">&#10003; Post Write-offs &amp; Generate Report</button>
+      <button class="btn btn-p" id="pc-post-btn" disabled onclick="postCountResults()">&#10003; Save Count &amp; Post Adjustments</button>
     </div>
     <!-- CSV helpers -->
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
