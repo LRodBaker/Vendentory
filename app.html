@@ -1169,11 +1169,16 @@ async function loadUserList() {
 }
 
 async function setUserRole(userId, newRole) {
-  if(!confirm(`Change this user's role to "${newRole==='employee'?'View only':'Admin'}"?
-
-${newRole==='employee'?'They will be able to see everything but cannot make any changes.':'They will have full access to add, edit, and delete.'}`)) {
-    await loadUserList(); return; // reset dropdown
-  }
+  const roleConfirm = await showImportDecision(
+    'Change User Role',
+    `<div style="font-size:13px;margin-bottom:8px">Change this user's role to <strong>${newRole==='employee'?'View only':'Admin'}</strong>?</div>
+     <div style="font-size:12px;color:var(--gray-500)">${newRole==='employee'?'They will be able to see everything but cannot make any changes.':'They will have full access to add, edit, and delete.'}</div>`,
+    [
+      {label: 'Yes, change role', value: 'ok', style: 'btn-p'},
+      {label: 'Cancel', value: 'cancel', style: ''}
+    ]
+  );
+  if(roleConfirm !== 'ok') { await loadUserList(); return; }
   const tok = await getAuthToken();
   const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'};
   const resp = await fetch(SURL+'/rest/v1/user_profiles?id=eq.'+userId, {
@@ -1537,9 +1542,16 @@ async function pdSetManualCost(productId) {
   const prod = AP.find(p=>p.id===productId||p.product_id===productId);
   if(!prod) { toast('Product not found','err'); return; }
 
-  if(!confirm(`Set WAC for "${prod.name}" to ${fmt(cost)} per unit?
-
-This updates the average cost used for COGS calculations going forward.`)) return;
+  const wacConfirm = await showImportDecision(
+    'Set Product Cost',
+    `<div style="font-size:13px;margin-bottom:8px">Set WAC for <strong>${prod.name}</strong> to <strong>${fmt(cost)}</strong> per unit?</div>
+     <div style="font-size:12px;color:var(--gray-500)">This updates the average cost used for COGS calculations going forward.</div>`,
+    [
+      {label: 'Yes, update cost', value: 'ok', style: 'btn-p'},
+      {label: 'Cancel', value: 'cancel', style: ''}
+    ]
+  );
+  if(wacConfirm !== 'ok') return;
 
   showL('Updating cost...');
   const tok = await getAuthToken();
@@ -1749,11 +1761,16 @@ async function pdSaveTxnDate(txnId) {
 async function pdDeleteTxn(txnId, txnType, qty) {
   const typeLabel = {write_off:'write-off', quantity_adjustment:'adjustment', opening_balance:'opening balance'}[txnType] || txnType;
   const qtyLabel = qty > 0 ? `+${qty}` : `${qty}`;
-  if(!confirm(`Delete this ${typeLabel} (${qtyLabel} units)?
-
-This will adjust on-hand quantity accordingly. Run Recalculate All WAC after if needed.
-
-This cannot be undone.`)) return;
+  const delTxnConfirm = await showImportDecision(
+    'Delete Transaction',
+    `<div style="font-size:13px;margin-bottom:8px">Delete this <strong>${typeLabel}</strong> (${qtyLabel} units)?</div>
+     <div style="font-size:12px;color:var(--gray-500);line-height:1.6">This will adjust on-hand quantity accordingly. Run <strong>Recalculate All WAC</strong> after if needed.<br><br>This cannot be undone.</div>`,
+    [
+      {label: 'Delete', value: 'ok', style: 'btn-p'},
+      {label: 'Cancel', value: 'cancel', style: ''}
+    ]
+  );
+  if(delTxnConfirm !== 'ok') return;
 
   const tok = await getAuthToken();
   const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
