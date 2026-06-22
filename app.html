@@ -5229,9 +5229,9 @@ function pcCopyReport(){
 // Exports all active individual products A→Z with a blank Count column.
 // Rod fills it in manually, then uploads it back via pcUploadCSV.
 function downloadCountSheet() {
-  const prods = AP.filter(p => p.product_type !== 'bulk' && p.product_type !== 'variety' && p.is_active !== false)
+  const prods = AP.filter(p => p.product_type !== 'bulk' && p.is_active !== false)
     .sort((a,b) => a.name.localeCompare(b.name));
-  if(!prods.length){ toast('No active individual products found','err'); return; }
+  if(!prods.length){ toast('No active products found','err'); return; }
   const rows = [['Product Name','Barcode','Book Qty','Machine Count','Stock Room']];
   for(const p of prods){
     rows.push([
