@@ -5248,247 +5248,64 @@ function pcCopyReport(){
 }
 
 // ─── DOWNLOAD BLANK COUNT SHEET (XLSX) ───────────────────────────────────────────
-// Produces a clean Excel/Google Sheets compatible workbook:
-//   • Machine Count and Stock Room are blank — fill in by hand
-//   • Total column has =D+E formula — auto-calculates as you type
-//   • Barcodes stored as text — no scientific notation
-//   • No sheet protection (causes Excel repair warnings, ignored by Google Sheets)
+// Produces a clean .xlsx compatible with Excel and Google Sheets.
+// Machine Count + Stock Room are blank. Total auto-calculates, shows blank when zero.
 function downloadCountSheet() {
   if(typeof XLSX === 'undefined'){ toast('Excel library not loaded — please refresh','err'); return; }
   const prods = AP.filter(p => p.product_type !== 'bulk' && p.is_active !== false)
     .sort((a,b) => a.name.localeCompare(b.name));
   if(!prods.length){ toast('No active products found','err'); return; }
 
-  const wb = XLSX.utils.book_new();
-
-  // Build header row + data rows
-  // Machine Count (col D) and Stock Room (col E) are intentionally empty strings
-  // Total (col F) gets a formula written separately below
-  const wsData = [['Product Name','Barcode','Book Qty','Machine Count','Stock Room','Total']];
+  // Build rows — Total column seeded with 0 (overwritten with formula below)
+  const rows = [['Product Name','Barcode','Book Qty','Machine Count','Stock Room','Total']];
   for(const p of prods){
-    wsData.push([
-      p.name || '',
-      p.barcode ? String(p.barcode) : '',
+    rows.push([
+      String(p.name || ''),
+      String(p.barcode || ''),
       typeof p.on_hand_qty === 'number' ? p.on_hand_qty : 0,
-      '',  // Machine Count — blank, Rod fills in
-      '',  // Stock Room — blank, Rod fills in
-      ''   // Total — formula written below
+      '',  // Machine Count — blank
+      '',  // Stock Room — blank
+      0    // Total placeholder — replaced with formula below
     ]);
   }
 
-  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  const ws = XLSX.utils.aoa_to_sheet(rows);
 
-  // Force barcodes to text type so long numbers never become scientific notation
-  for(let r = 1; r < wsData.length; r++){
-    const ref = XLSX.utils.encode_cell({r, c:1});
-    if(wsData[r][1]){
-      ws[ref] = { t:'s', v:String(wsData[r][1]), z:'@' };
-    }
+  // Extend !ref to cover all 6 columns (aoa_to_sheet may stop at last non-empty)
+  ws['!ref'] = XLSX.utils.encode_range({s:{r:0,c:0}, e:{r:rows.length-1, c:5}});
+
+  // Force barcodes to text so long numbers never become scientific notation
+  for(let r = 1; r < rows.length; r++){
+    const bc = rows[r][1];
+    if(bc){ ws[XLSX.utils.encode_cell({r,c:1})] = {t:'s', v:bc}; }
   }
 
-  // Write Total formula for each data row
-  // IF both D and E are empty — show blank
-  // If only one has a value — show that value
-  // If both have values — sum them
-  for(let r = 1; r < wsData.length; r++){
-    const row = r + 1; // Excel rows are 1-indexed; row 1 is the header
-    const ref = XLSX.utils.encode_cell({r, c:5});
-    const d = 'D' + row;
-    const e = 'E' + row;
-    ws[ref] = { t:'n', f:'IF(AND(' + d + '="",' + e + '=""),"",IF(' + d + '="",' + e + ',IF(' + e + '="",' + d + ',' + d + '+' + e + ')))' };
+  // Total column: formula sums D+E treating blanks as 0.
+  // Number format hides the zero so the cell looks blank until Rod enters counts.
+  // t:'n' and v:0 are required — SheetJS drops formula-only cells on parse.
+  for(let r = 1; r < rows.length; r++){
+    const row = r + 1;
+    ws[XLSX.utils.encode_cell({r,c:5})] = {
+      t:'n', v:0,
+      f:'IF(D'+row+'<>"",VALUE(D'+row+'),0)+IF(E'+row+'<>"",VALUE(E'+row+'),0)',
+      z:'#,##0;-#,##0;""'  // positive; negative; blank-for-zero
+    };
   }
 
-  // Column widths
   ws['!cols'] = [
-    {wch:42}, // A: Product Name
-    {wch:16}, // B: Barcode
-    {wch:10}, // C: Book Qty
-    {wch:14}, // D: Machine Count
-    {wch:12}, // E: Stock Room
-    {wch:10}, // F: Total
+    {wch:42}, // A Product Name
+    {wch:16}, // B Barcode
+    {wch:10}, // C Book Qty
+    {wch:14}, // D Machine Count
+    {wch:12}, // E Stock Room
+    {wch:10}, // F Total
   ];
 
-  // Set print range to the data columns only
-  ws['!ref'] = XLSX.utils.encode_range({
-    s:{r:0, c:0},
-    e:{r:wsData.length - 1, c:5}
-  });
-
+  const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Count Sheet');
   XLSX.writeFile(wb, 'CountSheet_' + new Date().toLocaleDateString('en-CA') + '.xlsx');
   toast('Count sheet downloaded','ok');
-}// ─── UPLOAD FILLED COUNT SHEET (CSV) ─────────────────────────────────────────
-// Reads a filled-in count sheet CSV. The Count column drives entries:
-//   blank = skip that row entirely
-//   0 or any number = add/update entry in countEntries
-// Matches rows by product name (case-insensitive) OR barcode.
-function pcUploadCSV(input) {
-  const file = input.files[0];
-  input.value = ''; // reset so same file can be re-selected
-  if(!file){ return; }
-  // Warn if date not set — don't block upload, but make it obvious
-  if(!document.getElementById('pc-date').value){
-    const banner=document.getElementById('pc-date-banner');
-    if(banner){banner.style.background='var(--red)';setTimeout(()=>{banner.style.background='var(--amber)';},3000);}
-    toast('Set the count date before uploading — you can change it after but do it now','warn');
-  }
-  // ── FILE TYPE DETECTION ────────────────────────────────────────────────────
-  // Accept both CSV and Excel (.xlsx/.xls) files.
-  // Excel files are parsed with SheetJS into an array of row objects,
-  // then fed into the same column detection and matching logic as CSV.
-  const isExcel = /\.(xlsx|xls)$/i.test(file.name);
-
-  function processRows(rowObjects) {
-    // rowObjects = [{colName: value, ...}, ...] — same shape SheetJS and CSV both produce
-    if(!rowObjects || rowObjects.length < 1){ toast('File appears empty','err'); return; }
-
-    const header = Object.keys(rowObjects[0]).map(h=>h.toLowerCase().trim());
-
-    // ── FLEXIBLE COUNT COLUMN DETECTION ──────────────────────────────────────
-    // Accept any of these formats (in priority order):
-    //   1. A column named exactly 'count'
-    //   2. A column named 'total on-hand' or 'total on hand'
-    //   3. Separate 'machine count' + 'stock room' columns — summed automatically
-    // Accepts CSV or Excel without any reformatting required.
-    const countKey     = Object.keys(rowObjects[0]).find(k=>k.toLowerCase().trim()==='count');
-    const totalKey     = Object.keys(rowObjects[0]).find(k=>{const l=k.toLowerCase().trim();return l==='total on-hand'||l==='total on hand'||l==='total';});
-    const machineKey   = Object.keys(rowObjects[0]).find(k=>{const l=k.toLowerCase().trim();return l==='machine count'||l==='machine';});
-    const stockroomKey = Object.keys(rowObjects[0]).find(k=>{const l=k.toLowerCase().trim();return l==='stock room'||l==='stockroom'||l==='stock';});
-    const nameKey      = Object.keys(rowObjects[0]).find(k=>{const l=k.toLowerCase().trim();return l.includes('product')||l==='name';});
-    const bcKey        = Object.keys(rowObjects[0]).find(k=>k.toLowerCase().trim().includes('barcode'));
-    const useSplit     = machineKey && stockroomKey;
-
-    if(!countKey && !totalKey && !useSplit){
-      toast('File must have a "Count", "Total On-Hand", or "Machine Count"+"Stock Room" column','err');
-      return;
-    }
-    // ── END COLUMN DETECTION ─────────────────────────────────────────────────
-
-    let added=0, skipped=0, notFound=0;
-    const notFoundNames=[];
-
-    for(const row of rowObjects){
-      // Resolve count value based on detected format
-      let countVal;
-      if(countKey){
-        countVal = String(row[countKey]??'').trim();
-      } else if(totalKey){
-        countVal = String(row[totalKey]??'').trim();
-      } else {
-        // Machine + Stock Room — parse each and sum; strips non-numeric chars like "48+"
-        const m = parseFloat(String(row[machineKey]??'').replace(/[^0-9.]/g,''))||0;
-        const s = parseFloat(String(row[stockroomKey]??'').replace(/[^0-9.]/g,''))||0;
-        countVal = String(m + s);
-      }
-
-      if(countVal===''||countVal==='undefined'||countVal==='null') { skipped++; continue; }
-
-      const nameRaw = nameKey ? String(row[nameKey]??'').trim() : '';
-      const bcRaw   = bcKey   ? String(row[bcKey]??'').replace(/\D/g,'') : '';
-      // Strip non-numeric chars so values like "48+" don't parse as 0
-      const countNum = Math.max(0, parseInt((countVal||'').replace(/[^0-9]/g,''))||0);
-
-      // Match product: try barcode first (exact), then name (case-insensitive)
-      let prod = null;
-      if(bcRaw) prod = AP.find(p=>p.barcode&&p.barcode.replace(/\D/g,'')===bcRaw && p.product_type!=='bulk' && p.is_active!==false);
-      if(!prod && nameRaw) {
-        const nameLow = nameRaw.toLowerCase();
-        prod = AP.find(p=>p.name.toLowerCase()===nameLow && p.product_type!=='bulk' && p.is_active!==false);
-      }
-      if(!prod){
-        notFound++;
-        if(nameRaw) notFoundNames.push(nameRaw);
-        continue;
-      }
-
-      // Add or update in countEntries
-      const existing = countEntries.find(c=>c.product_id===prod.id);
-      if(existing){
-        existing.counted_qty = countNum;
-      } else {
-        const _csvSnap=_pcSnapshot[prod.id]||{on_hand_qty:prod.on_hand_qty||0,average_cost:parseFloat(prod.average_cost)||0};
-        countEntries.push({product_id:prod.id,name:prod.name,book_qty:_csvSnap.on_hand_qty,counted_qty:countNum,avg_cost:_csvSnap.average_cost});
-      }
-      added++;
-    }
-
-    renderCountList();
-    let msg = added+' product'+(added!==1?'s':'')+' loaded from file';
-    if(skipped) msg += ' · '+skipped+' blank rows skipped';
-    if(notFound) msg += ' · '+notFound+' not matched';
-    toast(msg, notFound>0?'warn':'ok');
-    if(notFound>0 && notFoundNames.length){
-      console.warn('Vendentory count upload — unmatched rows:', notFoundNames);
-    }
-  }
-
-  if(isExcel){
-    // Parse xlsx/xls with SheetJS — reads formula results (data_only equivalent)
-    if(typeof XLSX === 'undefined'){ toast('Excel reader not loaded yet — try again in a moment','err'); return; }
-    const reader = new FileReader();
-    reader.onload = function(e){
-      try {
-        const wb = XLSX.read(e.target.result, {type:'array', cellFormula:false, cellNF:false});
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        // sheet_to_json with header:1 gives arrays; with defval:'' fills blanks
-        const rowObjects = XLSX.utils.sheet_to_json(ws, {defval:''});
-        processRows(rowObjects);
-      } catch(err){
-        toast('Could not read Excel file — try saving as CSV','err');
-        console.error('SheetJS error:', err);
-      }
-    };
-    reader.readAsArrayBuffer(file);
-  } else {
-    // CSV path — unchanged behaviour
-    const reader = new FileReader();
-    reader.onload = function(e) {
-      const text = e.target.result;
-      // Parse CSV into row objects matching SheetJS output shape
-      function splitCSVRow(row) {
-        const result = []; let cur = ''; let inQ = false;
-        for(let i=0; i<row.length; i++){
-          const ch = row[i];
-          if(ch==='"'){ inQ=!inQ; }
-          else if(ch===','&&!inQ){ result.push(cur.trim()); cur=''; }
-          else { cur+=ch; }
-        }
-        result.push(cur.trim());
-        return result;
-      }
-      const lines = text.split(/\r?\n/).filter(l=>l.trim());
-      if(lines.length < 2){ toast('CSV appears empty','err'); return; }
-      const hdrs = splitCSVRow(lines[0]).map(h=>h.replace(/"/g,'').trim());
-      const rowObjects = lines.slice(1).map(line=>{
-        const cols = splitCSVRow(line).map(c=>c.replace(/^"|"$/g,'').trim());
-        const obj = {};
-        hdrs.forEach((h,i)=>{ obj[h] = cols[i]||''; });
-        return obj;
-      }).filter(r=>Object.values(r).some(v=>v));
-      processRows(rowObjects);
-    };
-    reader.readAsText(file);
-  }
-  // ── END FILE TYPE HANDLING ─────────────────────────────────────────────────
 }
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function handleIF(file){
-  if(!file)return;
-  showL('Reading file...');
-  const text=await new Promise(r=>{const rd=new FileReader();rd.onload=e=>r(e.target.result);rd.readAsText(file);});
-  const rows=parseCSV(text);
-  hideL();
-  if(!rows.length){toast('Could not read file — try a CSV export','err');return;}
-  impRows=rows;
-  document.getElementById('ifn').textContent=file.name+' · '+rows.length+' rows';
-  const keys=Object.keys(rows[0]);
-  document.getElementById('ipt').innerHTML=`<table class="tbl"><thead><tr>${keys.map(k=>`<th>${k}</th>`).join('')}</tr></thead><tbody>${rows.slice(0,8).map(r=>`<tr>${keys.map(k=>`<td>${r[k]||''}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
-  document.getElementById('ipa').style.display='block';
-}
-
 function parseCSV(text){
   // RFC 4180 compliant — handles quoted fields containing commas (e.g. "Glaceau ,Vitamin Water...")
   function tokenize(row){
