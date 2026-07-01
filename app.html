@@ -5248,11 +5248,11 @@ function pcCopyReport(){
 }
 
 // ─── DOWNLOAD BLANK COUNT SHEET (XLSX) ───────────────────────────────────────────
-// Exports an Excel workbook with:
-//   • Columns A–C (Name, Barcode, Book Qty) and F (Total) locked — read-only
-//   • Columns D (Machine Count) and E (Stock Room) editable
-//   • Column F Total = IF formula, auto-calculates as Rod types
+// Produces a clean Excel/Google Sheets compatible workbook:
+//   • Machine Count and Stock Room are blank — fill in by hand
+//   • Total column has =D+E formula — auto-calculates as you type
 //   • Barcodes stored as text — no scientific notation
+//   • No sheet protection (causes Excel repair warnings, ignored by Google Sheets)
 function downloadCountSheet() {
   if(typeof XLSX === 'undefined'){ toast('Excel library not loaded — please refresh','err'); return; }
   const prods = AP.filter(p => p.product_type !== 'bulk' && p.is_active !== false)
@@ -5260,33 +5260,42 @@ function downloadCountSheet() {
   if(!prods.length){ toast('No active products found','err'); return; }
 
   const wb = XLSX.utils.book_new();
+
+  // Build header row + data rows
+  // Machine Count (col D) and Stock Room (col E) are intentionally empty strings
+  // Total (col F) gets a formula written separately below
   const wsData = [['Product Name','Barcode','Book Qty','Machine Count','Stock Room','Total']];
   for(const p of prods){
     wsData.push([
       p.name || '',
       p.barcode ? String(p.barcode) : '',
-      p.on_hand_qty || 0,
-      null,
-      null,
-      null
+      typeof p.on_hand_qty === 'number' ? p.on_hand_qty : 0,
+      '',  // Machine Count — blank, Rod fills in
+      '',  // Stock Room — blank, Rod fills in
+      ''   // Total — formula written below
     ]);
   }
 
   const ws = XLSX.utils.aoa_to_sheet(wsData);
 
-  // Force barcodes to text so Excel never converts long numbers to scientific notation
+  // Force barcodes to text type so long numbers never become scientific notation
   for(let r = 1; r < wsData.length; r++){
-    const cellRef = XLSX.utils.encode_cell({r, c:1});
+    const ref = XLSX.utils.encode_cell({r, c:1});
     if(wsData[r][1]){
-      ws[cellRef] = { t:'s', v:String(wsData[r][1]), z:'@' };
+      ws[ref] = { t:'s', v:String(wsData[r][1]), z:'@' };
     }
   }
 
-  // Total column formula: blank if both D and E are empty, otherwise sum what's there
+  // Write Total formula for each data row
+  // IF both D and E are empty — show blank
+  // If only one has a value — show that value
+  // If both have values — sum them
   for(let r = 1; r < wsData.length; r++){
-    const row = r + 1;
-    const cellRef = XLSX.utils.encode_cell({r, c:5});
-    ws[cellRef] = { t:'n', f:'IF(D'+row+'="",IF(E'+row+'="","",E'+row+'),IF(E'+row+'="",D'+row+',D'+row+'+E'+row+'))' };
+    const row = r + 1; // Excel rows are 1-indexed; row 1 is the header
+    const ref = XLSX.utils.encode_cell({r, c:5});
+    const d = 'D' + row;
+    const e = 'E' + row;
+    ws[ref] = { t:'n', f:'IF(AND(' + d + '="",' + e + '=""),"",IF(' + d + '="",' + e + ',IF(' + e + '="",' + d + ',' + d + '+' + e + ')))' };
   }
 
   // Column widths
@@ -5299,30 +5308,16 @@ function downloadCountSheet() {
     {wch:10}, // F: Total
   ];
 
-  // Sheet protection — lock everything; D and E data cells are individually unlocked below
-  ws['!protect'] = {
-    sheet:true, password:'',
-    selectLockedCells:true, selectUnlockedCells:true,
-    formatCells:false, formatColumns:false, formatRows:false,
-    insertColumns:false, insertRows:false, deleteColumns:false, deleteRows:false,
-    sort:false, autoFilter:false
-  };
-
-  // Unlock D and E for all data rows so Rod can type into them
-  for(let r = 1; r < wsData.length; r++){
-    const row = r + 1;
-    ['D'+row, 'E'+row].forEach(ref => {
-      if(!ws[ref]) ws[ref] = {t:'n', v:null};
-      if(!ws[ref].s) ws[ref].s = {};
-      ws[ref].s.protection = { locked:false };
-    });
-  }
+  // Set print range to the data columns only
+  ws['!ref'] = XLSX.utils.encode_range({
+    s:{r:0, c:0},
+    e:{r:wsData.length - 1, c:5}
+  });
 
   XLSX.utils.book_append_sheet(wb, ws, 'Count Sheet');
   XLSX.writeFile(wb, 'CountSheet_' + new Date().toLocaleDateString('en-CA') + '.xlsx');
   toast('Count sheet downloaded','ok');
-}
-// ─── UPLOAD FILLED COUNT SHEET (CSV) ─────────────────────────────────────────
+}// ─── UPLOAD FILLED COUNT SHEET (CSV) ─────────────────────────────────────────
 // Reads a filled-in count sheet CSV. The Count column drives entries:
 //   blank = skip that row entirely
 //   0 or any number = add/update entry in countEntries
