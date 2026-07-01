@@ -3794,7 +3794,8 @@ RULES:
 7. If a line on the receipt is clearly a fee, tax, or shipping charge — put it in the correct header field and do NOT add it to lines.
 8. AMAZON RECEIPTS — Amazon PDFs often show quantity as a small number or badge next to the product image (e.g. a superscript "2" or "Qty: 2" near the item thumbnail). Look carefully for these — do not assume qty=1 if the line_total is more than the unit price. Always check: if line_total divided by unit_price is greater than 1, set qty to that result.
 9. MATH VALIDATION — For every line item, verify: qty x unit_cost = line_total. If they do not match, use the line_total and unit_cost to back-calculate qty (qty = line_total divided by unit_cost, rounded to nearest whole number). Never leave a line where the math does not balance. If you cannot determine qty from the math, flag confidence as "low".
-10. QUANTITY DOUBLE-CHECK — After parsing all lines, verify that the sum of all line_totals plus tax plus shipping plus extra_costs equals receipt_total. If it does not, re-examine each line for missed quantities before returning results.
+10. QUANTITY DOUBLE-CHECK — After parsing all lines, verify that the sum of all line_totals plus tax plus shipping plus extra_costs minus discount equals receipt_total. If it does not, re-examine each line for missed quantities before returning results.
+11. DISCOUNTS & PROMOTIONS — If the receipt shows any discount, promotion, coupon, multibuy discount, or credit that reduces the order total, capture the total discount amount (as a positive number) in the top-level "discount" field. Never put a discount as a negative line item in "lines". Examples: Amazon Multibuy Discount, Subscribe & Save, coupon, promotional credit, sale discount. If multiple discounts exist, sum them into one number. Shipping credits or "Free Shipping" offsets that net to zero do NOT count — only capture discounts that reduce what was actually paid vs the item subtotal.
 
 PRODUCT LIST (name | id | type | units_per_case):
 ${prodContext}
@@ -3809,6 +3810,7 @@ Return ONLY a JSON object in this exact format, no other text:
   "tax": 0.00,
   "shipping": 0.00,
   "extra_costs": 0.00,
+  "discount": 0.00,
   "lines": [
     {
       "description": "exact item name from receipt",
@@ -3861,7 +3863,10 @@ function openAIImportPreview(data) {
   // Tax / shipping
   if(data.tax)        document.getElementById('putx').value = data.tax.toFixed(2);
   if(data.shipping)   document.getElementById('push').value = data.shipping.toFixed(2);
-  if(data.extra_costs) document.getElementById('puex').value = data.extra_costs.toFixed(2);
+  // Discounts reduce the total — store as negative in the Extra field.
+  // If there's also an extra_costs value, net them together.
+  const extraNet = (data.extra_costs || 0) - (data.discount || 0);
+  if(extraNet !== 0) document.getElementById('puex').value = extraNet.toFixed(2);
   // AI import = receipt already in hand → default to Received
   document.getElementById('pustat').value = 'received';
   updPurSaveBtn();
@@ -5242,34 +5247,81 @@ function pcCopyReport(){
   });
 }
 
-// ─── DOWNLOAD BLANK COUNT SHEET (CSV) ────────────────────────────────────────
-// Exports all active individual products A→Z with a blank Count column.
-// Rod fills it in manually, then uploads it back via pcUploadCSV.
+// ─── DOWNLOAD BLANK COUNT SHEET (XLSX) ───────────────────────────────────────────
+// Exports an Excel workbook with:
+//   • Columns A–C (Name, Barcode, Book Qty) and F (Total) locked — read-only
+//   • Columns D (Machine Count) and E (Stock Room) editable
+//   • Column F Total = IF formula, auto-calculates as Rod types
+//   • Barcodes stored as text — no scientific notation
 function downloadCountSheet() {
+  if(typeof XLSX === 'undefined'){ toast('Excel library not loaded — please refresh','err'); return; }
   const prods = AP.filter(p => p.product_type !== 'bulk' && p.is_active !== false)
     .sort((a,b) => a.name.localeCompare(b.name));
   if(!prods.length){ toast('No active products found','err'); return; }
-  const rows = [['Product Name','Barcode','Book Qty','Machine Count','Stock Room']];
+
+  const wb = XLSX.utils.book_new();
+  const wsData = [['Product Name','Barcode','Book Qty','Machine Count','Stock Room','Total']];
   for(const p of prods){
-    rows.push([
-      '"'+p.name.replace(/"/g,'""')+'"',
-      p.barcode||'',
-      p.on_hand_qty||0,
-      '', // Machine Count — Rod fills in
-      ''  // Stock Room — Rod fills in (summed automatically on upload)
+    wsData.push([
+      p.name || '',
+      p.barcode ? String(p.barcode) : '',
+      p.on_hand_qty || 0,
+      null,
+      null,
+      null
     ]);
   }
-  const csv = rows.map(r=>r.join(',')).join('\n');
-  const blob = new Blob([csv], {type:'text/csv'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'CountSheet_'+(new Date().toISOString().split('T')[0])+'.csv';
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a); URL.revokeObjectURL(url);
+
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+  // Force barcodes to text so Excel never converts long numbers to scientific notation
+  for(let r = 1; r < wsData.length; r++){
+    const cellRef = XLSX.utils.encode_cell({r, c:1});
+    if(wsData[r][1]){
+      ws[cellRef] = { t:'s', v:String(wsData[r][1]), z:'@' };
+    }
+  }
+
+  // Total column formula: blank if both D and E are empty, otherwise sum what's there
+  for(let r = 1; r < wsData.length; r++){
+    const row = r + 1;
+    const cellRef = XLSX.utils.encode_cell({r, c:5});
+    ws[cellRef] = { t:'n', f:'IF(D'+row+'="",IF(E'+row+'="","",E'+row+'),IF(E'+row+'="",D'+row+',D'+row+'+E'+row+'))' };
+  }
+
+  // Column widths
+  ws['!cols'] = [
+    {wch:42}, // A: Product Name
+    {wch:16}, // B: Barcode
+    {wch:10}, // C: Book Qty
+    {wch:14}, // D: Machine Count
+    {wch:12}, // E: Stock Room
+    {wch:10}, // F: Total
+  ];
+
+  // Sheet protection — lock everything; D and E data cells are individually unlocked below
+  ws['!protect'] = {
+    sheet:true, password:'',
+    selectLockedCells:true, selectUnlockedCells:true,
+    formatCells:false, formatColumns:false, formatRows:false,
+    insertColumns:false, insertRows:false, deleteColumns:false, deleteRows:false,
+    sort:false, autoFilter:false
+  };
+
+  // Unlock D and E for all data rows so Rod can type into them
+  for(let r = 1; r < wsData.length; r++){
+    const row = r + 1;
+    ['D'+row, 'E'+row].forEach(ref => {
+      if(!ws[ref]) ws[ref] = {t:'n', v:null};
+      if(!ws[ref].s) ws[ref].s = {};
+      ws[ref].s.protection = { locked:false };
+    });
+  }
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Count Sheet');
+  XLSX.writeFile(wb, 'CountSheet_' + new Date().toLocaleDateString('en-CA') + '.xlsx');
   toast('Count sheet downloaded','ok');
 }
-
 // ─── UPLOAD FILLED COUNT SHEET (CSV) ─────────────────────────────────────────
 // Reads a filled-in count sheet CSV. The Count column drives entries:
 //   blank = skip that row entirely
@@ -8209,7 +8261,7 @@ function toast(msg,type=''){
     </div>
     <!-- CSV helpers -->
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-      <button class="btn btn-sm" style="flex:1" onclick="downloadCountSheet()">&#11015; Download Count Sheet (CSV)</button>
+      <button class="btn btn-sm" style="flex:1" onclick="downloadCountSheet()">&#11015; Download Count Sheet (Excel)</button>
       <label class="btn btn-sm" style="flex:1;cursor:pointer;justify-content:center">
         &#11014; Upload Filled CSV
         <input type="file" accept=".csv,.xlsx,.xls" style="display:none" onchange="pcUploadCSV(this)">
