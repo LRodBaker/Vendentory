@@ -3211,7 +3211,7 @@ function renderPL() {
     <div class="pline">
       <select class="fs" style="font-size:12px;padding:5px 7px" onchange="selPP(${i},this.value)">
         <option value="">Select product...</option>
-        ${AP.map(p=>`<option value="${p.product_id}" ${p.product_id===l.product_id?'selected':''}>${p.name}</option>`).join('')}
+        ${AP.filter(p=>p.is_active===true).map(p=>`<option value="${p.product_id}" ${p.product_id===l.product_id?'selected':''}>${p.name}</option>`).join('')}
       </select>
       <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.cases}" min="0" step="1" oninput="updPL(${i},'cases',this.value)">
       <input class="fi" style="padding:5px 7px;font-size:12px" type="number" value="${l.cost_per_case.toFixed(2)}" min="0" step="0.01" oninput="updPL(${i},'cost_per_case',this.value)">
@@ -3231,6 +3231,10 @@ function renderPL() {
 
 function selPP(i,pid){
   const p=AP.find(x=>x.product_id===pid);if(!p)return;
+  // Warn if this product is inactive (e.g. selected via AI Import Receipt)
+  if(p.is_active===false){
+    toast('⚠️ “'+p.name+'” is inactive — go to Stock Control → Products and reactivate it before saving this order','warn');
+  }
   // For bulk products units_per_case is always 1 — real pack size is in _qty_per_pack
   const upc = (p.product_type==='bulk'||p.product_type==='variety') && p._qty_per_pack>0
     ? p._qty_per_pack
@@ -5252,7 +5256,7 @@ function pcCopyReport(){
 // Machine Count + Stock Room are blank. Total auto-calculates, shows blank when zero.
 function downloadCountSheet() {
   if(typeof XLSX === 'undefined'){ toast('Excel library not loaded — please refresh','err'); return; }
-  const prods = AP.filter(p => p.product_type !== 'bulk' && p.is_active !== false)
+  const prods = AP.filter(p => p.product_type !== 'bulk' && p.is_active === true)
     .sort((a,b) => a.name.localeCompare(b.name));
   if(!prods.length){ toast('No active products found','err'); return; }
 
@@ -5540,11 +5544,13 @@ async function confImport(){
     const cand=AP.filter(p=>(p.product_type||'')==='individual'&&p.is_active!==false);
     const lines=[];
     const invTxnsBatch=[];
+    const inactiveMatched=[];
     for(const {rn,u,s,ap2} of incomingRows){
       const rnl=rn.toLowerCase();
       let matched=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
       if(!matched) matched=cand.find(p=>p.name.toLowerCase()===rnl);
       if(!matched) matched=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+      if(matched&&matched.is_active===false) inactiveMatched.push({name:rn,product:matched.name});
       const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
       lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
       // Only post DELTA units to inventory (not full week totals)
@@ -5562,6 +5568,7 @@ async function confImport(){
     toast('\u2705 Extended '+oldLabel+' \u2192 '+newLabel+' \u2014 '+totalDelta+' new units posted to inventory'+(unmatched.length?' \u00B7 '+unmatched.length+' unmatched':''),'ok');
     cancImport();
     if(unmatched.length) showUnmatchedModal(unmatched);
+    if(inactiveMatched.length) showInactiveMatchAlert(inactiveMatched);
     return;
   }
   // ── END CASE 2 ───────────────────────────────────────────────────────────────
@@ -5612,11 +5619,13 @@ async function confImport(){
     if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
     const cand=AP.filter(p=>(p.product_type||'')==='individual'&&p.is_active!==false);
     const lines=[];
+    const inactiveMatched=[];
     for(const {rn,u,s,ap2} of incomingRows){
       const rnl=rn.toLowerCase();
       let matched=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
       if(!matched) matched=cand.find(p=>p.name.toLowerCase()===rnl);
       if(!matched) matched=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+      if(matched&&matched.is_active===false) inactiveMatched.push({name:rn,product:matched.name});
       const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
       lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
     }
@@ -5627,6 +5636,7 @@ async function confImport(){
     toast('\u{1F4D6} Bookkeeping import complete \u2014 '+lines.length+' items recorded, inventory unchanged'+(unmatched.length?' \u00B7 '+unmatched.length+' unmatched':''),'ok');
     cancImport();
     if(unmatched.length) showUnmatchedModal(unmatched);
+    if(inactiveMatched.length) showInactiveMatchAlert(inactiveMatched);
     return;
   }
   // ── END CASE 3 ───────────────────────────────────────────────────────────────
@@ -5660,11 +5670,13 @@ async function confImport(){
     if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
     const cand=AP.filter(p=>(p.product_type||'')==='individual'&&p.is_active!==false);
     const lines=[];
+    const inactiveMatched=[];
     for(const {rn,u,s,ap2} of incomingRows){
       const rnl=rn.toLowerCase();
       let matched=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
       if(!matched) matched=cand.find(p=>p.name.toLowerCase()===rnl);
       if(!matched) matched=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+      if(matched&&matched.is_active===false) inactiveMatched.push({name:rn,product:matched.name});
       const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
       lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
     }
@@ -5675,6 +5687,7 @@ async function confImport(){
     toast('\u{1F4D6} Bookkeeping import complete \u2014 '+lines.length+' items recorded, inventory unchanged'+(unmatched.length?' \u00B7 '+unmatched.length+' unmatched':''),'ok');
     cancImport();
     if(unmatched.length) showUnmatchedModal(unmatched);
+    if(inactiveMatched.length) showInactiveMatchAlert(inactiveMatched);
     return;
   }
 
@@ -5688,11 +5701,13 @@ async function confImport(){
   const cand=AP.filter(p=>(p.product_type||'')==='individual'&&p.is_active!==false);
   const lines=[];
   const invTxnsBatch=[];
+  const inactiveMatched=[];
   for(const {rn,u,s,ap2} of incomingRows){
     const rnl=rn.toLowerCase();
     let matched=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
     if(!matched) matched=cand.find(p=>p.name.toLowerCase()===rnl);
     if(!matched) matched=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+    if(matched&&matched.is_active===false) inactiveMatched.push({name:rn,product:matched.name});
     const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
     lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
     if(matched&&u>0)invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
@@ -5708,12 +5723,38 @@ async function confImport(){
   toast('\u2705 Import complete \u2014 '+lines.length+' items \u00B7 '+totalUnits+' units consumed'+(unmatched.length?' \u00B7 '+unmatched.length+' unmatched':''),'ok');
   cancImport();
   if(unmatched.length) showUnmatchedModal(unmatched);
+  if(inactiveMatched.length) showInactiveMatchAlert(inactiveMatched);
   // ── END CASE 1 ───────────────────────────────────────────────────────────────
   // ── END SMART IMPORT ENGINE ──────────────────────────────────────────────────
 }
 
 // Store unmatched lines for retroactive fix
 let _unmatchedLines = [];
+
+function showInactiveMatchAlert(items) {
+  // Called after a sales import when one or more VMS products matched an inactive Vendentory product.
+  // The sales were still recorded — we just alert Rod to reactivate if needed.
+  const rows = items.map(i =>
+    `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:0.5px solid var(--border);font-size:13px;gap:8px">
+      <span style="color:var(--gray-500)">${i.name}</span>
+      <span style="font-weight:600">→ ${i.product}</span>
+    </div>`
+  ).join('');
+  showImportDecision(
+    '⚠️ Inactive Product—Sales Matched',
+    `<div style="font-size:13px;margin-bottom:10px">
+      The following VMS items were matched to <strong>inactive</strong> products in Vendentory.
+      Their sales were recorded, but inventory was <strong>not adjusted</strong> because the product is inactive.
+    </div>
+    <div style="background:var(--amber-light);border-radius:8px;padding:10px 12px;margin-bottom:12px;max-height:200px;overflow-y:auto">${rows}</div>
+    <div style="font-size:12px;color:var(--gray-500)">
+      If this product is still in your machines, go to <strong>Stock Control → Products</strong> and reactivate it,
+      then re-import this report to pick up the inventory adjustment.
+    </div>`,
+    [{label:'Got it', value:'ok', style:'btn-p'}]
+  );
+}
+
 
 function showUnmatchedModal(unmatched) {
   _unmatchedLines = unmatched;
