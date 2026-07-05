@@ -1109,6 +1109,9 @@ function showApp() {
   // across close/reopen, so we no longer try to restore the last page.
   nav('dashboard');
   maybeShowTour();
+  // Silently check for pre-count receipt integrity issues on every login.
+  // If any exist, a persistent red banner appears on the dashboard.
+  setTimeout(runStartupIntegrityCheck, 2000);
 }
 
 async function doLogin() {
@@ -4263,8 +4266,19 @@ async function savePur() {
       if(dups.length > 0) {
         const d = dups[0];
         hideL();
-        const msg = `\u26A0 Invoice "${invoiceNum}" was already imported on ${fmtD(d.purchase_date)}.\n\nImporting it again will double-count inventory and costs.\n\nClick OK only if this is a different order with the same number. Click Cancel to stop.`;
-        if(!confirm(msg)) {
+        const dupAnswer = await showImportDecision(
+          '⚠️ Duplicate Invoice Number',
+          `<div style="margin-bottom:12px;font-size:13px">Invoice <strong>"${invoiceNum}"</strong> was already imported on <strong>${fmtD(d.purchase_date)}</strong>.</div>
+          <div style="background:var(--red-light);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;color:var(--red)">
+            <strong>Importing again will double-count inventory and costs.</strong>
+          </div>
+          <div style="font-size:12px;color:var(--gray-600)">Only proceed if this is genuinely a different order that happens to share the same invoice number.</div>`,
+          [
+            {label: '⛔ Cancel — this is a duplicate', value: 'cancel', style: ''},
+            {label: 'Continue anyway — different order', value: 'ok', style: 'btn-d'}
+          ]
+        );
+        if(dupAnswer !== 'ok') {
           toast('Import cancelled \u2014 duplicate invoice number','warn');
           return;
         }
@@ -5132,6 +5146,10 @@ async function postCountResults(){
   invalidateLastCountDate();
   toast('Count posted! Inventory updated.','ok');
   pcShowReport(filled,countDate,transactions,null);
+  // Retroactive pre-count receipt scan — now that a new count date exists,
+  // check whether any purchase_receipt transactions are stranded before it.
+  // Runs silently in the background; shows a modal only if problems are found.
+  checkStrandedPreCountReceipts(countDate);
 }
 
 function pcShowReport(entries,countDate,transactions,note){
@@ -5383,6 +5401,150 @@ async function getLastCountDate() {
 // Call this after any physical count is posted so the cache refreshes next time.
 function invalidateLastCountDate() { _lastCountDate = undefined; }
 // ── END LAST COUNT DATE HELPER ───────────────────────────────────────────────
+
+// ── RETROACTIVE PRE-COUNT RECEIPT SCANNER ────────────────────────────────────
+// Called automatically after every physical count posts.
+// Checks whether any purchase_receipt inventory transactions are now stranded
+// before the new count date. If found, surfaces a modal with the full list
+// and a resolution path — Rod can delete them or mark them bookkeeping-only.
+// Also called on login (via runStartupIntegrityCheck) to catch any that slipped
+// through in previous sessions.
+async function checkStrandedPreCountReceipts(countDate) {
+  try {
+    const tok = await getAuthToken();
+    const wh = {'apikey': SKEY, 'Authorization': 'Bearer ' + tok};
+    const cutoff = countDate || await getLastCountDate();
+    if (!cutoff) return; // no count on record — nothing to check against
+
+    const resp = await fetch(
+      SURL + '/rest/v1/inventory_transactions'
+        + '?transaction_type=eq.purchase_receipt'
+        + '&created_at=lt.' + cutoff + 'T00:00:00+00:00'
+        + '&select=id,quantity_change,created_at,notes,products(name)'
+        + '&order=created_at.asc'
+        + '&limit=200',
+      {headers: wh}
+    );
+    if (!resp.ok) return;
+    const rows = await resp.json();
+    if (!rows || !rows.length) return; // clean — nothing to report
+
+    // Group by product name for a readable summary
+    const byProd = {};
+    let totalUnits = 0;
+    rows.forEach(r => {
+      const nm = r.products?.name || 'Unknown product';
+      if (!byProd[nm]) byProd[nm] = {units: 0, rows: []};
+      byProd[nm].units += r.quantity_change;
+      byProd[nm].rows.push(r);
+      totalUnits += r.quantity_change;
+    });
+
+    const prodLines = Object.entries(byProd)
+      .map(([nm, d]) => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--border);font-size:13px">
+        <span style="font-weight:500">${nm}</span>
+        <span style="color:var(--red-mid);font-weight:700">+${d.units} units</span>
+      </div>`)
+      .join('');
+
+    const bodyHTML = `
+      <div style="background:var(--red-light);border:1px solid var(--red-mid);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px">
+        <strong style="color:var(--red)">${rows.length} purchase receipt${rows.length !== 1 ? 's' : ''} (${totalUnits} units)</strong> are dated before your
+        <strong>${fmtD(cutoff)}</strong> physical count but are still adding to inventory.
+        These units were already captured in your count — they are inflating your on-hand numbers.
+      </div>
+      <div style="max-height:200px;overflow-y:auto;margin-bottom:12px;border:0.5px solid var(--border);border-radius:8px;padding:0 12px">
+        ${prodLines}
+      </div>
+      <div style="font-size:12px;color:var(--gray-600);line-height:1.6">
+        <strong>Fix:</strong> Delete these transactions. Your count is the baseline — these receipts
+        should have been saved for bookkeeping only, with no inventory impact.<br><br>
+        Run this SQL in Supabase to remove them:<br>
+        <code style="background:var(--gray-900);color:#e2e8f0;padding:6px 10px;border-radius:6px;display:block;margin-top:6px;font-size:11px;word-break:break-all">
+          DELETE FROM inventory_transactions WHERE transaction_type = 'purchase_receipt' AND created_at &lt; '${cutoff}T00:00:00+00';
+        </code>
+      </div>`;
+
+    // Show the warning modal
+    await showImportDecision(
+      '⚠️ Stranded Pre-Count Receipts Found',
+      bodyHTML,
+      [{label: 'OK — I will fix this in Supabase', value: 'ok', style: 'btn-p'}]
+    );
+
+    // Also set/refresh the dashboard integrity banner
+    _setIntegrityBanner(rows.length, totalUnits, cutoff);
+
+  } catch(e) {
+    console.warn('checkStrandedPreCountReceipts failed:', e);
+  }
+}
+
+// ── SESSION STARTUP INTEGRITY CHECK ─────────────────────────────────────────
+// Runs silently on every login. If pre-count purchase receipts exist in the DB,
+// shows a persistent amber banner on the dashboard that stays visible until
+// the problem is resolved. Rod sees it every session — it cannot be missed.
+async function runStartupIntegrityCheck() {
+  try {
+    const tok = await getAuthToken();
+    const wh = {'apikey': SKEY, 'Authorization': 'Bearer ' + tok};
+    const cutoff = await getLastCountDate();
+    if (!cutoff) return; // no count on record
+
+    const resp = await fetch(
+      SURL + '/rest/v1/inventory_transactions'
+        + '?transaction_type=eq.purchase_receipt'
+        + '&created_at=lt.' + cutoff + 'T00:00:00+00:00'
+        + '&select=id,quantity_change'
+        + '&limit=200',
+      {headers: wh}
+    );
+    if (!resp.ok) return;
+    const rows = await resp.json();
+    if (!rows || !rows.length) {
+      _clearIntegrityBanner();
+      return;
+    }
+    const totalUnits = rows.reduce((s, r) => s + (r.quantity_change || 0), 0);
+    _setIntegrityBanner(rows.length, totalUnits, cutoff);
+  } catch(e) {
+    console.warn('runStartupIntegrityCheck failed:', e);
+  }
+}
+
+function _setIntegrityBanner(rowCount, unitCount, cutoff) {
+  let banner = document.getElementById('integrity-banner');
+  if (!banner) {
+    // Create and insert before the first stat card on the dashboard
+    banner = document.createElement('div');
+    banner.id = 'integrity-banner';
+    const dash = document.getElementById('page-dashboard');
+    if (dash) dash.insertAdjacentElement('afterbegin', banner);
+  }
+  banner.style.cssText = 'background:var(--red-light);border:1.5px solid var(--red-mid);border-radius:12px;padding:14px 18px;margin-bottom:18px;display:flex;align-items:flex-start;gap:12px';
+  banner.innerHTML = `
+    <div style="font-size:22px;flex-shrink:0">🚨</div>
+    <div style="flex:1">
+      <div style="font-weight:700;color:var(--red);font-size:14px;margin-bottom:4px">Inventory Integrity Problem</div>
+      <div style="font-size:13px;color:var(--gray-700);line-height:1.6">
+        <strong>${rowCount} purchase receipt${rowCount !== 1 ? 's' : ''} (${unitCount} units)</strong> are dated before your
+        last count on <strong>${fmtD(cutoff)}</strong> but are still inflating inventory.
+        These are phantom units — your physical count already captured what was on hand.
+      </div>
+      <div style="margin-top:8px;font-size:12px;color:var(--gray-600)">
+        Go to <strong>Supabase → SQL Editor</strong> and run:<br>
+        <code style="background:var(--gray-900);color:#e2e8f0;padding:5px 9px;border-radius:6px;display:inline-block;margin-top:4px;font-size:11px;word-break:break-all">
+          DELETE FROM inventory_transactions WHERE transaction_type = 'purchase_receipt' AND created_at &lt; '${cutoff}T00:00:00+00';
+        </code>
+      </div>
+    </div>`;
+}
+
+function _clearIntegrityBanner() {
+  const banner = document.getElementById('integrity-banner');
+  if (banner) banner.remove();
+}
+// ── END INTEGRITY CHECKS ─────────────────────────────────────────────────────
 
 // ── IMPORT DECISION MODAL ───────────────────────────────────────────────────
 // Replaces browser confirm() for import overlap/straddling decisions.
