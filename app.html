@@ -3836,7 +3836,7 @@ Return ONLY a JSON object in this exact format, no other text:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
-        max_tokens: 4000,
+        max_tokens: 8000,
         messages: [{
           role: 'user',
           content: [
@@ -3851,6 +3851,10 @@ Return ONLY a JSON object in this exact format, no other text:
     const aiData = await resp.json();
     const raw = aiData.content.map(b => b.text||'').join('');
     const clean = raw.replace(/```json|```/g,'').trim();
+    // Guard: if response was truncated mid-JSON, detect and report clearly
+    if(aiData.stop_reason === 'max_tokens') {
+      throw new Error('Receipt too large — AI response was cut off. Try splitting into two separate imports or enter manually.');
+    }
     const parsed = JSON.parse(clean);
     hideL();
     openAIImportPreview(parsed);
