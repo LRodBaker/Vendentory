@@ -5722,7 +5722,7 @@ async function confImport(){
       // Only post DELTA units to inventory (not full week totals)
       const delta=deltaMap[rnl]||0;
       if(matched&&delta>0){
-        invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',quantity_change:-delta,warehouse_quantity_change:-delta,reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed+' (delta from '+old.report_end_date+')',created_by:CU?.id});
+        invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',transaction_date:new Date((ed||sd||new Date().toISOString().split('T')[0])+'T12:00:00').toISOString(),quantity_change:-delta,warehouse_quantity_change:-delta,reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed+' (delta from '+old.report_end_date+')',created_by:CU?.id});
       }
     }
     if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
@@ -5876,7 +5876,7 @@ async function confImport(){
     if(matched&&matched.is_active===false) inactiveMatched.push({name:rn,product:matched.name});
     const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
     lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
-    if(matched&&u>0)invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
+    if(matched&&u>0)invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',transaction_date:new Date((ed||sd||new Date().toISOString().split('T')[0])+'T12:00:00').toISOString(),quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
   }
   // Batch insert all at once
   if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
