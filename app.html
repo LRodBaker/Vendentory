@@ -747,12 +747,13 @@ body.ro #ro-badge{display:flex!important}
     <!-- Actions -->
     <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;align-items:center">
       <button class="btn" onclick="strConfirmAll()" style="font-size:13px">&#10003;&#10003; Confirm all items</button>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn" onclick="closeSTR()">Cancel</button>
+        <button class="btn" id="str-partial-btn" onclick="strPostPartial()" disabled style="opacity:0.4;background:var(--amber-light);color:var(--amber);border-color:var(--amber)">&#9888; Post partial receipt</button>
         <button class="btn btn-p" id="str-post-btn" onclick="strPostReceive()" disabled style="opacity:0.4">Post receipt &amp; close order</button>
       </div>
     </div>
-    <div style="font-size:11px;color:var(--gray-400);margin-top:8px">Tap each item or scan its barcode to confirm it arrived. Click "Confirm all" if everything came in. Inventory updates when you post.</div>
+    <div style="font-size:11px;color:var(--gray-400);margin-top:8px">Scan each item's barcode once per case to confirm it arrived. Scan multiple times for multiple cases. "Confirm all" marks everything received at once.</div>
   </div>
 </div>
 
@@ -3419,7 +3420,7 @@ async function checkOverdueOrders(){
   if(!banner||!list) return;
   try {
     const cutoff=new Date(Date.now()-14*24*60*60*1000).toISOString().split('T')[0];
-    const {data}=await dbFetch('purchases',{select:'id,purchase_date,suppliers(name)',filters:{'status':'in.(ordered,draft)','purchase_date':'lte.'+cutoff},order:'purchase_date.asc',limit:20});
+    const {data}=await dbFetch('purchases',{select:'id,purchase_date,suppliers(name)',filters:{'status':'in.(ordered,draft,partial)','purchase_date':'lte.'+cutoff},order:'purchase_date.asc',limit:20});
     if(!data||!data.length){banner.style.display='none';return;}
     const days=d=>Math.floor((Date.now()-new Date(d+'T12:00:00'))/(86400000));
     list.innerHTML=data.map(p=>`
@@ -3442,7 +3443,7 @@ function openReceiveOrder(id) {
 
 // ─── SCAN-TO-RECEIVE ─────────────────────────────────────────────────────────
 let _strPurId = null;     // purchase being received
-let _strLines = [];       // [{product_id,name,barcode,units_received,unit_cost,confirmed,line_id}]
+let _strLines = [];       // [{product_id,name,barcode,unit_cost,line_id,cases_ordered,cases_confirmed,units_per_case,already_posted}]
 
 async function openSTR(purchaseId) {
   _strPurId = purchaseId;
@@ -3461,13 +3462,27 @@ async function openSTR(purchaseId) {
   const pur = purs[0];
   if(!pur){ hideL(); toast('Purchase not found','err'); return; }
 
-  // Load purchase lines with product barcode
+  // Load purchase lines with product barcode and cases
   const linesResp = await fetch(
     SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+purchaseId
-      +'&select=id,product_id,units_received,unit_cost,products(id,name,barcode,average_cost)',
+      +'&select=id,product_id,units_received,unit_cost,cases,products(id,name,barcode,average_cost)',
     {headers:wh}
   );
   const lines = linesResp.ok ? await linesResp.json() : [];
+
+  // Load already-posted inventory transactions for this purchase (partial receipts)
+  const txnResp = await fetch(
+    SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+purchaseId
+      +'&transaction_type=eq.purchase_receipt&select=product_id,quantity_change',
+    {headers:wh}
+  );
+  const postedTxns = txnResp.ok ? await txnResp.json() : [];
+  // Sum already-posted units per product
+  const postedMap = {};
+  for(const t of postedTxns){
+    postedMap[t.product_id] = (postedMap[t.product_id]||0) + Math.abs(t.quantity_change);
+  }
+
   hideL();
 
   if(!lines.length){
@@ -3475,15 +3490,34 @@ async function openSTR(purchaseId) {
     return;
   }
 
-  _strLines = lines.map(l=>({
-    line_id:    l.id,
-    product_id: l.product_id,
-    name:       l.products?.name || 'Unknown',
-    barcode:    l.products?.barcode || '',
-    units:      l.units_received,
-    unit_cost:  l.unit_cost,
-    confirmed:  false
-  }));
+  _strLines = lines.map(l=>{
+    const casesOrdered = l.cases || 1;
+    const unitsPerCase = casesOrdered > 0 ? Math.round(l.units_received / casesOrdered) : l.units_received;
+    const alreadyPostedUnits = postedMap[l.product_id] || 0;
+    const alreadyPostedCases = unitsPerCase > 0 ? Math.round(alreadyPostedUnits / unitsPerCase) : 0;
+    return {
+      line_id:         l.id,
+      product_id:      l.product_id,
+      name:            l.products?.name || 'Unknown',
+      barcode:         l.products?.barcode || '',
+      unit_cost:       l.unit_cost,
+      cases_ordered:   casesOrdered,
+      cases_confirmed: alreadyPostedCases,  // pre-fill from already-posted partial receipts
+      units_per_case:  unitsPerCase,
+      already_posted:  alreadyPostedCases,  // track what was posted in prior sessions
+    };
+  });
+
+  // Filter out fully received lines when reopening a partial order
+  const hasPartial = _strLines.some(l=>l.already_posted > 0);
+  if(hasPartial){
+    _strLines = _strLines.filter(l=>l.cases_confirmed < l.cases_ordered);
+    if(!_strLines.length){
+      hideL();
+      toast('All items already received for this order','ok');
+      return;
+    }
+  }
 
   // Populate modal
   document.getElementById('str-header').textContent =
@@ -3506,36 +3540,65 @@ function closeSTR() {
 
 function strRenderLines() {
   const el = document.getElementById('str-lines');
-  const confirmed = _strLines.filter(l=>l.confirmed).length;
+  const fullyDone = _strLines.filter(l=>l.cases_confirmed>=l.cases_ordered).length;
+  const anyStarted = _strLines.some(l=>l.cases_confirmed>0);
   const total = _strLines.length;
+  const allDone = fullyDone === total;
 
-  document.getElementById('str-progress').textContent = confirmed + ' of ' + total + ' confirmed';
-  const postBtn=document.getElementById('str-post-btn');
-  if(postBtn){postBtn.disabled=confirmed<total;postBtn.style.opacity=confirmed<total?'0.4':'1';}
+  // Progress text
+  const casesTotal = _strLines.reduce((s,l)=>s+l.cases_ordered,0);
+  const casesConfirmed = _strLines.reduce((s,l)=>s+Math.min(l.cases_confirmed,l.cases_ordered),0);
+  document.getElementById('str-progress').textContent = casesConfirmed + ' of ' + casesTotal + ' cases confirmed';
 
-  el.innerHTML = _strLines.map((l,i)=>`
-    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;margin-bottom:6px;
-      background:${l.confirmed?'var(--green-light)':'var(--gray-50)'};
-      border:1px solid ${l.confirmed?'var(--green)':'var(--border)'};
-      cursor:pointer" onclick="strToggleLine(${i})">
-      <div style="font-size:18px;flex-shrink:0">${l.confirmed?'&#9989;':'&#9744;'}</div>
+  // Post full button — only enabled when everything confirmed
+  const postBtn = document.getElementById('str-post-btn');
+  if(postBtn){postBtn.disabled=!allDone;postBtn.style.opacity=allDone?'1':'0.4';}
+
+  // Post partial button — enabled when at least 1 case confirmed but not all
+  const partBtn = document.getElementById('str-partial-btn');
+  if(partBtn){
+    const showPartial = anyStarted && !allDone;
+    partBtn.disabled = !showPartial;
+    partBtn.style.opacity = showPartial ? '1' : '0.4';
+  }
+
+  el.innerHTML = _strLines.map((l,i)=>{
+    const full = l.cases_confirmed >= l.cases_ordered;
+    const partial = !full && l.cases_confirmed > 0;
+    const none = !full && !partial;
+
+    const bg    = full ? 'var(--green-light)' : partial ? 'var(--amber-light)' : 'var(--gray-50)';
+    const bord  = full ? 'var(--green)'       : partial ? 'var(--amber)'       : 'var(--border)';
+    const icon  = full ? '&#9989;'            : partial ? '&#9888;'            : '&#9744;';
+    const label = full ? '&#10003; Confirmed'
+                : partial ? l.cases_confirmed+' of '+l.cases_ordered+' cases'
+                : l.cases_ordered > 1 ? 'Scan '+l.cases_ordered+'x' : 'Tap to confirm';
+    const labelColor = full ? 'var(--green)' : partial ? 'var(--amber)' : 'var(--gray-400)';
+
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;margin-bottom:6px;
+      background:${bg};border:1px solid ${bord};cursor:pointer" onclick="strTapLine(${i})">
+      <div style="font-size:18px;flex-shrink:0">${icon}</div>
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${l.name}</div>
         <div style="font-size:11px;color:var(--gray-400);margin-top:1px">
-          ${l.units} units${l.barcode?' · Barcode: '+l.barcode:''}
+          ${l.cases_ordered} case${l.cases_ordered>1?'s':''} · ${l.cases_ordered*l.units_per_case} units${l.barcode?' · Barcode: '+l.barcode:''}
         </div>
       </div>
-      <div style="font-size:13px;font-weight:700;color:${l.confirmed?'var(--green)':'var(--gray-400)'};flex-shrink:0">
-        ${l.confirmed?'&#10003; Confirmed':'Tap to confirm'}
-      </div>
-    </div>`).join('');
+      <div style="font-size:13px;font-weight:700;color:${labelColor};flex-shrink:0">${label}</div>
+    </div>`;
+  }).join('');
 }
 
-function strToggleLine(idx) {
+function strTapLine(idx) {
   if(!_strLines[idx]) return;
-  _strLines[idx].confirmed = !_strLines[idx].confirmed;
+  const l = _strLines[idx];
+  if(l.cases_confirmed < l.cases_ordered){
+    l.cases_confirmed++;
+  } else {
+    // Already full — tapping again resets to 0 (undo)
+    l.cases_confirmed = 0;
+  }
   strRenderLines();
-  // Clear any error
   const errEl = document.getElementById('str-bc-err');
   if(errEl) errEl.style.display = 'none';
 }
@@ -3543,12 +3606,10 @@ function strToggleLine(idx) {
 function strSearch() { strSearchInput(); }
 
 function strConfirmAll() {
-  _strLines.forEach(l=>l.confirmed=true);
+  _strLines.forEach(l=>l.cases_confirmed=l.cases_ordered);
   strRenderLines();
-  document.getElementById('str-bc-err').style.display='none';
-  // Enable post button
-  const btn=document.getElementById('str-post-btn');
-  if(btn){btn.disabled=false;btn.style.opacity='1';}
+  const errEl = document.getElementById('str-bc-err');
+  if(errEl) errEl.style.display='none';
 }
 
 function strSearchInput() {
@@ -3559,7 +3620,7 @@ function strSearchInput() {
   // Match against unconfirmed lines by name or barcode
   const matches = _strLines
     .map((l,i)=>({...l,idx:i}))
-    .filter(l=>!l.confirmed && (
+    .filter(l=>l.cases_confirmed < l.cases_ordered && (
       l.name.toLowerCase().includes(q) ||
       (l.barcode && l.barcode.toLowerCase().includes(q))
     ));
@@ -3571,7 +3632,7 @@ function strSearchInput() {
     <div style="padding:9px 12px;cursor:pointer;font-size:13px;border-bottom:0.5px solid rgba(255,255,255,0.08);color:#fff"
       onmousedown="strConfirmIdx(${l.idx})">
       <strong>${l.name}</strong>
-      <span style="color:rgba(255,255,255,0.4);font-size:11px;margin-left:8px">${l.units} units</span>
+      <span style="color:rgba(255,255,255,0.4);font-size:11px;margin-left:8px">${l.cases_confirmed} of ${l.cases_ordered} cases</span>
     </div>`).join('');
 }
 
@@ -3583,30 +3644,28 @@ function strScanBarcode() {
   const drop = document.getElementById('str-search-drop');
   drop.style.display = 'none';
 
-  // Try exact barcode match first
-  const bcMatch = _strLines.findIndex(l=>
-    !l.confirmed && l.barcode && l.barcode === val
+  // Try exact barcode match first (prefer incomplete lines)
+  let matchIdx = _strLines.findIndex(l=>
+    l.cases_confirmed < l.cases_ordered && l.barcode && l.barcode === val
   );
-  if(bcMatch !== -1){
-    strConfirmIdx(bcMatch);
+  // Fall back to name match
+  if(matchIdx === -1){
+    matchIdx = _strLines.findIndex(l=>
+      l.cases_confirmed < l.cases_ordered && l.name.toLowerCase().includes(val.toLowerCase())
+    );
+  }
+  if(matchIdx !== -1){
+    strConfirmIdx(matchIdx);
     return;
   }
 
-  // Try name match
-  const nameMatch = _strLines.findIndex(l=>
-    !l.confirmed && l.name.toLowerCase().includes(val.toLowerCase())
-  );
-  if(nameMatch !== -1){
-    strConfirmIdx(nameMatch);
-    return;
-  }
-
-  // Already confirmed?
+  // Already fully confirmed?
   const alreadyDone = _strLines.findIndex(l=>
-    l.confirmed && (l.barcode===val || l.name.toLowerCase().includes(val.toLowerCase()))
+    l.cases_confirmed >= l.cases_ordered &&
+    (l.barcode===val || l.name.toLowerCase().includes(val.toLowerCase()))
   );
   if(alreadyDone !== -1){
-    errEl.textContent = '"'+_strLines[alreadyDone].name+'" is already confirmed ✓';
+    errEl.textContent = '"'+_strLines[alreadyDone].name+'" — all '+_strLines[alreadyDone].cases_ordered+' case(s) already confirmed ✓';
     errEl.style.display = 'block';
     document.getElementById('str-bc').value = '';
     return;
@@ -3617,7 +3676,8 @@ function strScanBarcode() {
 }
 
 function strConfirmIdx(idx) {
-  _strLines[idx].confirmed = true;
+  const l = _strLines[idx];
+  if(l.cases_confirmed < l.cases_ordered) l.cases_confirmed++;
   document.getElementById('str-bc').value = '';
   document.getElementById('str-search-drop').style.display = 'none';
   document.getElementById('str-bc-err').style.display = 'none';
@@ -3625,30 +3685,122 @@ function strConfirmIdx(idx) {
   const items = document.getElementById('str-lines').children;
   if(items[idx]) items[idx].scrollIntoView({behavior:'smooth',block:'nearest'});
   document.getElementById('str-bc').focus();
+  // Feedback toast for multi-case items
+  if(l.cases_ordered > 1){
+    if(l.cases_confirmed < l.cases_ordered){
+      toast(l.name+': '+l.cases_confirmed+' of '+l.cases_ordered+' cases confirmed','');
+    } else {
+      toast(l.name+': all '+l.cases_ordered+' cases confirmed ✓','ok');
+    }
+  }
 }
 
 // Alias — called from camera scan and Enter key
 function strScanSubmit() { strScanBarcode(); }
 
+async function strPostPartial() {
+  const anyConfirmed = _strLines.some(l=>l.cases_confirmed > 0);
+  if(!anyConfirmed){ toast('Scan at least one item before posting','err'); return; }
+  const unfinished = _strLines.filter(l=>l.cases_confirmed < l.cases_ordered);
+  const confirmed = _strLines.filter(l=>l.cases_confirmed > 0);
+  const answer = await showImportDecision(
+    '⚠️ Post Partial Receipt',
+    `<div style="margin-bottom:12px">Post inventory for <strong>${confirmed.length} confirmed item(s)</strong> and leave the order open for the remaining <strong>${unfinished.length} item(s)</strong>?</div>
+    <div style="font-size:12px;color:var(--gray-400)">The order will stay in "Partial" status. You can come back to receive the rest.</div>`,
+    [{label:'Post partial receipt', value:'yes', style:'background:var(--amber);color:#fff;border-color:var(--amber)'},
+     {label:'Cancel', value:'no', style:''}]
+  );
+  if(answer !== 'yes') return;
+  await strDoPost(false);
+}
+
 async function strPostReceive() {
-  const allConfirmed = _strLines.every(l=>l.confirmed);
-  if(!allConfirmed){ toast('Confirm all items before posting','err'); return; }
+  const allConfirmed = _strLines.every(l=>l.cases_confirmed>=l.cases_ordered);
+  if(!allConfirmed){ toast('Confirm all items before posting — or use "Post partial receipt"','err'); return; }
 
   const answer = await showImportDecision(
     '📦 Post Receipt',
-    `<div style="margin-bottom:12px">Post receipt for all <strong>${_strLines.length} items</strong>?</div>
-    <div style="font-size:12px;color:var(--gray-400)">This will update inventory and close the order.</div>`,
+    `<div style="margin-bottom:12px">Post receipt for all <strong>${_strLines.length} items</strong> and close the order?</div>
+    <div style="font-size:12px;color:var(--gray-400)">This will update inventory and mark the order fully received.</div>`,
     [
       {label:'✅ Yes — post receipt & close order', value:'ok', style:'btn-p'},
       {label:'Cancel', value:'cancel', style:''}
     ]
   );
   if(answer !== 'ok') return;
+  await strDoPost(true);
+}
 
-  // Capture ID BEFORE closeSTR() nulls _strPurId
+async function strDoPost(closeOrder) {
   const purId = _strPurId;
-  closeSTR();
-  await markPurReceived(purId);
+  showL(closeOrder ? 'Posting receipt...' : 'Posting partial receipt...');
+  try {
+    const tok = await getAuthToken();
+    const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+
+    // Only post lines that have newly confirmed cases (cases_confirmed > already_posted)
+    const linesToPost = _strLines.filter(l=>l.cases_confirmed > l.already_posted);
+    if(!linesToPost.length){ hideL(); toast('Nothing new to post','err'); return; }
+
+    const invTxns = [];
+    const wacUpdates = [];
+    const now = new Date().toISOString();
+
+    for(const l of linesToPost){
+      const newCases = l.cases_confirmed - l.already_posted;
+      const units = newCases * l.units_per_case;
+      invTxns.push({
+        product_id: l.product_id,
+        transaction_type: 'purchase_receipt',
+        transaction_date: now,
+        quantity_change: units,
+        warehouse_quantity_change: units,
+        unit_cost: l.unit_cost,
+        reference_type: 'purchase',
+        reference_id: purId,
+        notes: closeOrder ? 'Received order '+purId.slice(0,8) : 'Partial receipt '+purId.slice(0,8)+' ('+newCases+' of '+l.cases_ordered+' cases)',
+        created_by: CU?.id
+      });
+      wacUpdates.push({product_id:l.product_id, units, unit_cost:l.unit_cost});
+    }
+
+    // Insert inventory transactions
+    const txnResp = await fetch(SURL+'/rest/v1/inventory_transactions',{
+      method:'POST', headers:{...wh,'Prefer':'return=minimal'}, body:JSON.stringify(invTxns)
+    });
+    if(!txnResp.ok){ hideL(); toast('Error posting inventory','err'); return; }
+
+    // Update WAC for each product
+    for(const u of wacUpdates){
+      const prod = AP.find(p=>p.id===u.product_id);
+      if(!prod) continue;
+      const oldQty = parseFloat(prod.on_hand_qty)||0;
+      const oldWac = parseFloat(prod.average_cost)||0;
+      const newWac = (oldQty*oldWac + u.units*u.unit_cost) / (oldQty + u.units);
+      await fetch(SURL+'/rest/v1/products?id=eq.'+u.product_id,{
+        method:'PATCH', headers:{...wh,'Prefer':'return=minimal'},
+        body:JSON.stringify({average_cost:Math.round(newWac*10000)/10000, last_cost:u.unit_cost, updated_at:now})
+      });
+    }
+
+    // Update purchase status
+    const newStatus = closeOrder ? 'received' : 'partial';
+    await fetch(SURL+'/rest/v1/purchases?id=eq.'+purId,{
+      method:'PATCH', headers:{...wh,'Prefer':'return=minimal'},
+      body:JSON.stringify({status:newStatus, updated_at:now})
+    });
+
+    hideL();
+    closeSTR();
+    toast(closeOrder ? 'Order received! Inventory updated.' : '⚠️ Partial receipt posted — order left open for remaining items.', 'ok');
+    await loadProds2();
+    loadPurHistory();
+    checkOverdueOrders();
+  } catch(e){
+    hideL();
+    toast('Error posting receipt: '+e.message,'err');
+    console.error('strDoPost error:',e);
+  }
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -3836,7 +3988,7 @@ Return ONLY a JSON object in this exact format, no other text:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
-        max_tokens: 8000,
+        max_tokens: 4000,
         messages: [{
           role: 'user',
           content: [
@@ -3851,10 +4003,6 @@ Return ONLY a JSON object in this exact format, no other text:
     const aiData = await resp.json();
     const raw = aiData.content.map(b => b.text||'').join('');
     const clean = raw.replace(/```json|```/g,'').trim();
-    // Guard: if response was truncated mid-JSON, detect and report clearly
-    if(aiData.stop_reason === 'max_tokens') {
-      throw new Error('Receipt too large — AI response was cut off. Try splitting into two separate imports or enter manually.');
-    }
     const parsed = JSON.parse(clean);
     hideL();
     openAIImportPreview(parsed);
@@ -3999,11 +4147,14 @@ async function loadPurHistory(){
 
   function purRowHTML(p){
     const isOrdered=p.status==='ordered'||p.status==='draft';
+    const isPartial=p.status==='partial';
     const daysOld=Math.floor((now-new Date(p.purchase_date+'T12:00:00'))/86400000);
     const overdue=isOrdered&&daysOld>=14;
     const statusBadge=isOrdered
       ?`<span class="badge" style="background:${overdue?'var(--red-light)':'var(--amber-light)'};color:${overdue?'var(--red)':'var(--amber)'};margin-left:4px">${overdue?'&#9888; OVERDUE':'Ordered'}</span>`
-      :`<span class="badge b-ok" style="margin-left:4px">Received</span>`;
+      :isPartial
+      ?`<span class="badge" style="background:var(--amber-light);color:var(--amber);margin-left:4px">&#9888; Partial</span>`
+      :`<span class="badge b-ok" style="margin-left:4px">&#10003; Received</span>`;
     return`<div style="border-bottom:0.5px solid var(--border);padding:11px 0${overdue?';background:#FFF8F8;border-radius:8px;padding:10px;margin-bottom:4px':''}">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:nowrap">
         <div style="min-width:0;flex:1">
@@ -4017,6 +4168,8 @@ async function loadPurHistory(){
           <div style="font-size:16px;font-weight:700;font-family:var(--font-head)">${fmt(p.total_amount)}</div>
           ${isOrdered
             ?`<button class="btn btn-sm btn-p" data-pid="${p.id}" data-action="receive-pur">&#10003; Receive order</button>`
+            :isPartial
+            ?`<button class="btn btn-sm" data-pid="${p.id}" data-action="receive-pur" style="background:var(--amber-light);color:var(--amber);border-color:var(--amber)">&#9888; Receive rest</button>`
             :`<span style="font-size:11px;color:var(--green);font-weight:600;display:flex;align-items:center;gap:3px">&#10003; Received</span>`
           }
           <button class="btn btn-sm" data-pid="${p.id}" data-action="edit-pur" title="${isOrdered?'Edit this order — change quantities or remove items before receiving. Inventory will not post until you mark it received.':'Edit this receipt — adjust quantities if an item was missing, backordered, or refunded. Inventory will be reversed and re-posted with your changes.'}">&#9998; Edit</button>
@@ -5722,7 +5875,7 @@ async function confImport(){
       // Only post DELTA units to inventory (not full week totals)
       const delta=deltaMap[rnl]||0;
       if(matched&&delta>0){
-        invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',transaction_date:new Date((ed||sd||new Date().toISOString().split('T')[0])+'T12:00:00').toISOString(),quantity_change:-delta,warehouse_quantity_change:-delta,reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed+' (delta from '+old.report_end_date+')',created_by:CU?.id});
+        invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',quantity_change:-delta,warehouse_quantity_change:-delta,reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed+' (delta from '+old.report_end_date+')',created_by:CU?.id});
       }
     }
     if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
@@ -5876,7 +6029,7 @@ async function confImport(){
     if(matched&&matched.is_active===false) inactiveMatched.push({name:rn,product:matched.name});
     const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
     lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
-    if(matched&&u>0)invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',transaction_date:new Date((ed||sd||new Date().toISOString().split('T')[0])+'T12:00:00').toISOString(),quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
+    if(matched&&u>0)invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
   }
   // Batch insert all at once
   if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
