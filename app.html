@@ -3743,25 +3743,27 @@ async function strDoPost(closeOrder) {
     if(!linesToPost.length){ hideL(); toast('Nothing new to post','err'); return; }
 
     const invTxns = [];
-    const wacUpdates = [];
+    const wacProductIds = new Set();
     const now = new Date().toISOString();
 
     for(const l of linesToPost){
       const newCases = l.cases_confirmed - l.already_posted;
       const units = newCases * l.units_per_case;
-      invTxns.push({
-        product_id: l.product_id,
-        transaction_type: 'purchase_receipt',
-        transaction_date: now,
-        quantity_change: units,
-        warehouse_quantity_change: units,
-        unit_cost: l.unit_cost,
-        reference_type: 'purchase',
-        reference_id: purId,
-        notes: closeOrder ? 'Received order '+purId.slice(0,8) : 'Partial receipt '+purId.slice(0,8)+' ('+newCases+' of '+l.cases_ordered+' cases)',
-        created_by: CU?.id
-      });
-      wacUpdates.push({product_id:l.product_id, units, unit_cost:l.unit_cost});
+      const noteText = closeOrder ? 'Received order '+purId.slice(0,8) : 'Partial receipt '+purId.slice(0,8)+' ('+newCases+' of '+l.cases_ordered+' cases)';
+      // Check if this is a bulk/variety pack with component individual products
+      const compResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
+      const comps = compResp.ok ? await compResp.json() : [];
+      if(comps.length){
+        // Bulk/variety: explode into component individual products
+        for(const c of comps){
+          invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',transaction_date:now,quantity_change:units,warehouse_quantity_change:units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:purId,notes:noteText,created_by:CU?.id});
+          wacProductIds.add(c.component_product_id);
+        }
+      } else {
+        // Individual product: post directly
+        invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',transaction_date:now,quantity_change:units,warehouse_quantity_change:units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:purId,notes:noteText,created_by:CU?.id});
+        wacProductIds.add(l.product_id);
+      }
     }
 
     // Insert inventory transactions
@@ -3770,18 +3772,8 @@ async function strDoPost(closeOrder) {
     });
     if(!txnResp.ok){ hideL(); toast('Error posting inventory','err'); return; }
 
-    // Update WAC for each product
-    for(const u of wacUpdates){
-      const prod = AP.find(p=>p.id===u.product_id);
-      if(!prod) continue;
-      const oldQty = parseFloat(prod.on_hand_qty)||0;
-      const oldWac = parseFloat(prod.average_cost)||0;
-      const newWac = (oldQty*oldWac + u.units*u.unit_cost) / (oldQty + u.units);
-      await fetch(SURL+'/rest/v1/products?id=eq.'+u.product_id,{
-        method:'PATCH', headers:{...wh,'Prefer':'return=minimal'},
-        body:JSON.stringify({average_cost:Math.round(newWac*10000)/10000, last_cost:u.unit_cost, updated_at:now})
-      });
-    }
+    // Replay WAC from transaction history for each affected individual product
+    await Promise.allSettled([...wacProductIds].map(pid=>replayWAC(pid,wh)));
 
     // Update purchase status
     const newStatus = closeOrder ? 'received' : 'partial';
@@ -5875,7 +5867,7 @@ async function confImport(){
       // Only post DELTA units to inventory (not full week totals)
       const delta=deltaMap[rnl]||0;
       if(matched&&delta>0){
-        invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',transaction_date:new Date(ed+'T12:00:00').toISOString(),quantity_change:-delta,warehouse_quantity_change:-delta,reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed+' (delta from '+old.report_end_date+')',created_by:CU?.id});
+        invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',quantity_change:-delta,warehouse_quantity_change:-delta,reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed+' (delta from '+old.report_end_date+')',created_by:CU?.id});
       }
     }
     if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
@@ -6029,7 +6021,7 @@ async function confImport(){
     if(matched&&matched.is_active===false) inactiveMatched.push({name:rn,product:matched.name});
     const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
     lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
-    if(matched&&u>0)invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',transaction_date:new Date(ed+'T12:00:00').toISOString(),quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
+    if(matched&&u>0)invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',quantity_change:-Math.round(u),warehouse_quantity_change:-Math.round(u),reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed,created_by:CU?.id});
   }
   // Batch insert all at once
   if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
