@@ -667,6 +667,18 @@ body.ro #ro-badge{display:flex!important}
               <div style="display:flex;gap:8px"><input class="fi" id="ns" placeholder="New supplier"><button class="btn btn-sm btn-p" onclick="addSup()">Add</button></div>
             </div>
             <div class="card">
+              <div class="card-title">Reporting</div>
+              <div class="fg">
+                <label class="fl">WAP rolling window</label>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <input class="fi" type="number" id="s-wap-days" min="7" max="365" placeholder="90" style="width:90px">
+                  <span style="color:var(--gray-400);font-size:13px">days</span>
+                </div>
+                <div style="font-size:12px;color:var(--gray-400);margin-top:4px">Weighted average selling price is calculated over this rolling window. Default: 90 days.</div>
+              </div>
+              <button class="btn btn-p btn-sm" onclick="saveWAPSetting()">Save</button>
+            </div>
+            <div class="card">
               <div class="card-title">Scanner settings</div>
               <div class="ir"><div style="color:var(--gray-400)">iPhone camera</div><div class="tg" style="font-weight:500">Enabled</div></div>
               <div class="ir"><div style="color:var(--gray-400)">Bluetooth scanner</div><div class="tg" style="font-weight:500">Enabled</div></div>
@@ -1440,6 +1452,41 @@ function renderProds() {
   g.querySelectorAll('.pc[data-pid]').forEach(el=>el.addEventListener('click',()=>openPD(el.dataset.pid)));
 }
 
+// ─── WAP HELPERS ─────────────────────────────────────────────────────────────
+let _wapRollingDays = null; // cached per session
+
+async function getWAPRollingDays() {
+  if(_wapRollingDays !== null) return _wapRollingDays;
+  try {
+    const tok = await getAuthToken();
+    const r = await fetch(SURL+'/rest/v1/app_settings?key=eq.wap_rolling_days&select=value',
+      {headers:{'apikey':SKEY,'Authorization':'Bearer '+tok}});
+    if(r.ok){
+      const rows = await r.json();
+      _wapRollingDays = rows.length ? parseInt(rows[0].value)||90 : 90;
+    } else { _wapRollingDays = 90; }
+  } catch(e){ _wapRollingDays = 90; }
+  return _wapRollingDays;
+}
+
+async function fetchWAP(productId, wh) {
+  const days = await getWAPRollingDays();
+  const since = new Date(Date.now() - days*24*60*60*1000).toISOString().slice(0,10);
+  const r = await fetch(
+    SURL+'/rest/v1/sales_lines?product_id=eq.'+productId
+      +'&period_end_date=gte.'+since
+      +'&select=units_sold,sales_amount',
+    {headers:wh}
+  );
+  if(!r.ok) return null;
+  const rows = await r.json();
+  const totalUnits = rows.reduce((s,x)=>s+(parseFloat(x.units_sold)||0), 0);
+  const totalSales = rows.reduce((s,x)=>s+(parseFloat(x.sales_amount)||0), 0);
+  if(totalUnits <= 0) return null;
+  return totalSales / totalUnits;
+}
+// ─── END WAP HELPERS ─────────────────────────────────────────────────────────
+
 // Store the currently viewed product ID so the Edit button always has the right target
 let _currentPDid = null;
 
@@ -1448,8 +1495,7 @@ async function openPD(id) {
   const p = AP.find(x => x.id === id) || AP.find(x => x.product_id === id);
   if(!p){ toast('Product not found','err'); return; }
   _currentPDid = p.id; // store for Edit button
-  const mg = p.selling_price>0&&p.average_cost>0
-    ? (((p.selling_price-p.average_cost)/p.selling_price)*100).toFixed(1) : '—';
+  const _isIndividual = p.product_type === 'individual';
 
   // Render static content immediately so modal opens fast
   document.getElementById('pdc').innerHTML=`
@@ -1484,8 +1530,9 @@ async function openPD(id) {
       </div>
       <div>
         <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--gray-400);margin-bottom:7px">Cost &amp; price</div>
-        <div class="ir"><div style="color:var(--gray-400)">Current WAC</div><div style="font-weight:700;color:${p.product_type==='individual'&&p.on_hand_qty>0&&!(parseFloat(p.average_cost)>0)?'var(--amber)':'var(--teal-dark)'}">${fmt(p.average_cost)||'$0.00'}</div></div>
-        ${p.product_type==='individual'&&p.on_hand_qty>0&&!(parseFloat(p.average_cost)>0)?`
+        ${_isIndividual ? `
+        <div class="ir"><div style="color:var(--gray-400)">Current WAC</div><div style="font-weight:700;color:${p.on_hand_qty>0&&!(parseFloat(p.average_cost)>0)?'var(--amber)':'var(--teal-dark)'}">${fmt(p.average_cost)||'$0.00'}</div></div>
+        ${p.on_hand_qty>0&&!(parseFloat(p.average_cost)>0)?`
         <div style="background:var(--amber-light);border:1px solid var(--amber);border-radius:8px;padding:10px 12px;margin:4px 0;font-size:12px">
           <div style="font-weight:700;color:var(--amber);margin-bottom:5px">&#9888; WAC is $0 — COGS will be wrong</div>
           <div style="color:var(--gray-700);margin-bottom:8px;line-height:1.5">This product has inventory but no cost recorded. Every sale will show $0 cost, understating your expenses and overstating profit.<br><br>
@@ -1496,9 +1543,12 @@ async function openPD(id) {
           </div>
         </div>`:''}
         <div class="ir"><div style="color:var(--gray-400)">Last cost</div><div style="font-weight:500">${p.last_cost>0?fmt(p.last_cost):'—'}</div></div>
-        <div class="ir"><div style="color:var(--gray-400)">Selling price</div><div style="font-weight:500">${fmt(p.selling_price)}</div></div>
-        <div class="ir"><div style="color:var(--gray-400)">Gross margin</div><div class="tg" style="font-weight:500">${mg}%</div></div>
+        <div class="ir"><div style="color:var(--gray-400)">Avg sell price (90d)</div><div id="pd-wap" style="font-weight:500;color:var(--teal-dark)">Loading…</div></div>
+        <div class="ir"><div style="color:var(--gray-400)">Gross margin (90d)</div><div id="pd-margin" style="font-weight:500" class="tg">Loading…</div></div>
         <div class="ir"><div style="color:var(--gray-400)">Inventory value</div><div style="font-weight:500">${fmt(p.inventory_value)}</div></div>
+        ` : `
+        <div style="font-size:12px;color:var(--gray-400);padding:8px 0;line-height:1.5">Cost and pricing are tracked on the individual products inside this pack.</div>
+        `}
       </div>
     </div>
 
@@ -1526,6 +1576,37 @@ async function openPD(id) {
       <button class="btn btn-sm" onclick="pdEditClicked()">&#9998; Edit</button>
     </div>`;
   openM('mpd');
+
+  // Load WAP and margin async for individual products only
+  if(_isIndividual){
+    try {
+      const tok2 = await getAuthToken();
+      const wh2 = {'apikey':SKEY,'Authorization':'Bearer '+tok2};
+      const wap = await fetchWAP(p.id, wh2);
+      const wapEl = document.getElementById('pd-wap');
+      const mgEl  = document.getElementById('pd-margin');
+      if(wapEl){
+        if(wap !== null){
+          wapEl.textContent = fmt(wap);
+          if(mgEl){
+            const wac = parseFloat(p.average_cost)||0;
+            if(wap > 0 && wac > 0){
+              const mg2 = (((wap - wac) / wap) * 100).toFixed(1);
+              mgEl.textContent = mg2 + '%';
+              mgEl.style.color = parseFloat(mg2) >= 0 ? 'var(--teal-dark)' : 'var(--red)';
+            } else {
+              mgEl.textContent = '\u2014';
+              mgEl.style.color = 'var(--gray-400)';
+            }
+          }
+        } else {
+          wapEl.textContent = '\u2014';
+          wapEl.style.color = 'var(--gray-400)';
+          if(mgEl){ mgEl.textContent = '\u2014'; mgEl.style.color = 'var(--gray-400)'; }
+        }
+      }
+    } catch(e){ console.warn('WAP fetch failed', e); }
+  }
 
   // Load full transaction history async
   try {
@@ -3490,27 +3571,10 @@ async function openSTR(purchaseId) {
     return;
   }
 
-  // For each line, resolve which product_id was actually used when posting transactions.
-  // Bulk/variety lines post to component individual product IDs, not the bulk product ID.
-  // We need to check product_components so the already-posted count is correct.
-  const compCache = {};
-  for(const l of lines){
-    const cr = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
-    compCache[l.product_id] = cr.ok ? await cr.json() : [];
-  }
-
   _strLines = lines.map(l=>{
     const casesOrdered = l.cases || 1;
     const unitsPerCase = casesOrdered > 0 ? Math.round(l.units_received / casesOrdered) : l.units_received;
-    // Resolve already-posted units via component IDs if bulk/variety, else direct
-    const comps = compCache[l.product_id] || [];
-    let alreadyPostedUnits = 0;
-    if(comps.length){
-      // Use the first component as representative — all components get same unit count posted
-      alreadyPostedUnits = postedMap[comps[0].component_product_id] || 0;
-    } else {
-      alreadyPostedUnits = postedMap[l.product_id] || 0;
-    }
+    const alreadyPostedUnits = postedMap[l.product_id] || 0;
     const alreadyPostedCases = unitsPerCase > 0 ? Math.round(alreadyPostedUnits / unitsPerCase) : 0;
     return {
       line_id:         l.id,
@@ -3760,27 +3824,25 @@ async function strDoPost(closeOrder) {
     if(!linesToPost.length){ hideL(); toast('Nothing new to post','err'); return; }
 
     const invTxns = [];
-    const wacProductIds = new Set();
+    const wacUpdates = [];
     const now = new Date().toISOString();
 
     for(const l of linesToPost){
       const newCases = l.cases_confirmed - l.already_posted;
       const units = newCases * l.units_per_case;
-      const noteText = closeOrder ? 'Received order '+purId.slice(0,8) : 'Partial receipt '+purId.slice(0,8)+' ('+newCases+' of '+l.cases_ordered+' cases)';
-      // Check if this is a bulk/variety pack with component individual products
-      const compResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
-      const comps = compResp.ok ? await compResp.json() : [];
-      if(comps.length){
-        // Bulk/variety: explode into component individual products
-        for(const c of comps){
-          invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',transaction_date:now,quantity_change:units,warehouse_quantity_change:units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:purId,notes:noteText,created_by:CU?.id});
-          wacProductIds.add(c.component_product_id);
-        }
-      } else {
-        // Individual product: post directly
-        invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',transaction_date:now,quantity_change:units,warehouse_quantity_change:units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:purId,notes:noteText,created_by:CU?.id});
-        wacProductIds.add(l.product_id);
-      }
+      invTxns.push({
+        product_id: l.product_id,
+        transaction_type: 'purchase_receipt',
+        transaction_date: now,
+        quantity_change: units,
+        warehouse_quantity_change: units,
+        unit_cost: l.unit_cost,
+        reference_type: 'purchase',
+        reference_id: purId,
+        notes: closeOrder ? 'Received order '+purId.slice(0,8) : 'Partial receipt '+purId.slice(0,8)+' ('+newCases+' of '+l.cases_ordered+' cases)',
+        created_by: CU?.id
+      });
+      wacUpdates.push({product_id:l.product_id, units, unit_cost:l.unit_cost});
     }
 
     // Insert inventory transactions
@@ -3789,8 +3851,18 @@ async function strDoPost(closeOrder) {
     });
     if(!txnResp.ok){ hideL(); toast('Error posting inventory','err'); return; }
 
-    // Replay WAC from transaction history for each affected individual product
-    await Promise.allSettled([...wacProductIds].map(pid=>replayWAC(pid,wh)));
+    // Update WAC for each product
+    for(const u of wacUpdates){
+      const prod = AP.find(p=>p.id===u.product_id);
+      if(!prod) continue;
+      const oldQty = parseFloat(prod.on_hand_qty)||0;
+      const oldWac = parseFloat(prod.average_cost)||0;
+      const newWac = (oldQty*oldWac + u.units*u.unit_cost) / (oldQty + u.units);
+      await fetch(SURL+'/rest/v1/products?id=eq.'+u.product_id,{
+        method:'PATCH', headers:{...wh,'Prefer':'return=minimal'},
+        body:JSON.stringify({average_cost:Math.round(newWac*10000)/10000, last_cost:u.unit_cost, updated_at:now})
+      });
+    }
 
     // Update purchase status
     const newStatus = closeOrder ? 'received' : 'partial';
@@ -7261,6 +7333,10 @@ function sTbl(rows){return`<div class="card"><table class="tbl"><thead><tr><th>#
 
 async function loadSets(){
   await loadCats();await loadSups();
+  // Load WAP rolling window setting
+  const wapDays = await getWAPRollingDays();
+  const wapEl = document.getElementById('s-wap-days');
+  if(wapEl) wapEl.value = wapDays;
   // Fetch ALL categories (including inactive) for settings management
   const tok=await getAuthToken();
   const h={'apikey':SKEY,'Authorization':'Bearer '+tok};
@@ -7389,6 +7465,18 @@ async function chgPW(){
   document.getElementById('spw').value='';document.getElementById('scpw').value='';
 }
 
+async function saveWAPSetting(){
+  const val = parseInt(document.getElementById('s-wap-days').value)||90;
+  if(val < 7 || val > 365){ toast('Enter a value between 7 and 365 days','err'); return; }
+  const tok = await getAuthToken();
+  const r = await fetch(SURL+'/rest/v1/app_settings?key=eq.wap_rolling_days',{
+    method:'PATCH',
+    headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},
+    body:JSON.stringify({value:String(val),updated_at:new Date().toISOString()})
+  });
+  if(r.ok){ _wapRollingDays = val; toast('WAP window updated to '+val+' days','ok'); }
+  else { toast('Save failed','err'); }
+}
 async function addCat(){const n=document.getElementById('nc').value.trim();if(!n)return;const tok=await getAuthToken();await fetch(SURL+'/rest/v1/categories',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:n})});document.getElementById('nc').value='';await loadCats();loadSets();toast('Category added!','ok');}
 async function addSup(){const n=document.getElementById('ns').value.trim();if(!n)return;const tok=await getAuthToken();await fetch(SURL+'/rest/v1/suppliers',{method:'POST',headers:{'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},body:JSON.stringify({name:n})});document.getElementById('ns').value='';await loadSups();loadSets();toast('Supplier added!','ok');}
 
