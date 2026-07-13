@@ -3490,10 +3490,27 @@ async function openSTR(purchaseId) {
     return;
   }
 
+  // For each line, resolve which product_id was actually used when posting transactions.
+  // Bulk/variety lines post to component individual product IDs, not the bulk product ID.
+  // We need to check product_components so the already-posted count is correct.
+  const compCache = {};
+  for(const l of lines){
+    const cr = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
+    compCache[l.product_id] = cr.ok ? await cr.json() : [];
+  }
+
   _strLines = lines.map(l=>{
     const casesOrdered = l.cases || 1;
     const unitsPerCase = casesOrdered > 0 ? Math.round(l.units_received / casesOrdered) : l.units_received;
-    const alreadyPostedUnits = postedMap[l.product_id] || 0;
+    // Resolve already-posted units via component IDs if bulk/variety, else direct
+    const comps = compCache[l.product_id] || [];
+    let alreadyPostedUnits = 0;
+    if(comps.length){
+      // Use the first component as representative — all components get same unit count posted
+      alreadyPostedUnits = postedMap[comps[0].component_product_id] || 0;
+    } else {
+      alreadyPostedUnits = postedMap[l.product_id] || 0;
+    }
     const alreadyPostedCases = unitsPerCase > 0 ? Math.round(alreadyPostedUnits / unitsPerCase) : 0;
     return {
       line_id:         l.id,
