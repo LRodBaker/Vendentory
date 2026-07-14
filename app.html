@@ -5066,6 +5066,57 @@ async function loadRAJ(){
 
 function handleDrop(e){e.preventDefault();document.getElementById('idz').style.borderColor='';const f=e.dataTransfer.files[0];if(f)handleIF(f);}
 
+async function handleIF(file) {
+  if(!file) return;
+  const name = file.name || '';
+  const isXLS = /\.(xlsx|xls)$/i.test(name);
+  const isCSV = /\.csv$/i.test(name);
+  if(!isXLS && !isCSV) { toast('Please select a CSV or Excel (.xlsx/.xls) file','err'); return; }
+  showL('Reading file...');
+  try {
+    let rows = [];
+    if(isCSV) {
+      const text = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.onerror = () => rej(new Error('Could not read file'));
+        r.readAsText(file);
+      });
+      rows = parseCSV(text);
+    } else {
+      const buf = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.onerror = () => rej(new Error('Could not read file'));
+        r.readAsArrayBuffer(file);
+      });
+      const wb = XLSX.read(buf, {type:'array'});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_csv(ws);
+      rows = parseCSV(raw);
+    }
+    hideL();
+    if(!rows.length) { toast('No data rows found in file','err'); return; }
+    impRows = rows;
+    // Show filename and preview
+    document.getElementById('ifn').textContent = name;
+    const keys = Object.keys(rows[0]);
+    const thead = '<tr>' + keys.map(k=>`<th>${k}</th>`).join('') + '</tr>';
+    const tbody = rows.slice(0,10).map(r =>
+      '<tr>' + keys.map(k=>`<td>${r[k]||''}</td>`).join('') + '</tr>'
+    ).join('');
+    document.getElementById('ipt').innerHTML =
+      `<table class="tbl" style="font-size:12px"><thead>${thead}</thead><tbody>${tbody}</tbody></table>` +
+      (rows.length > 10 ? `<div style="font-size:12px;color:var(--gray-400);padding:6px 0">Showing first 10 of ${rows.length} rows</div>` : '');
+    document.getElementById('ipa').style.display = 'block';
+    toast('File loaded — set the report period dates then confirm','ok');
+  } catch(e) {
+    hideL();
+    toast('Could not read file: ' + e.message, 'err');
+    console.error('handleIF error:', e);
+  }
+}
+
 // ─── PHYSICAL COUNT ────────────────────────────────────────────────────────
 
 async function openPC(){
