@@ -397,7 +397,7 @@ body.ro #ro-badge{display:flex!important}
                 <div class="fg"><label class="fl">Supplier</label><select class="fs" id="pus"></select></div>
                 <div class="fg"><label class="fl">Invoice number</label><input class="fi" id="pui" placeholder="Optional"></div>
                 <div class="fg"><label class="fl">Date</label><input class="fi" type="date" id="pud"></div>
-                <div class="fg"><label class="fl">Status</label><select class="fs" id="pustat" onchange="updPurSaveBtn()"><option value="ordered">Ordered — save now, receive later</option><option value="received">Received — post inventory now</option></select><div id="pustat-hint" style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4"></div></div>
+                <div class="fg"><label class="fl">Status</label><select class="fs" id="pustat" onchange="updPurSaveBtn()"><option value="ordered" selected>Ordered — save now, receive later</option><option value="received">Received — post inventory now</option></select><div id="pustat-hint" style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4"></div></div>
                 <div class="fg"><label class="fl">Shipping ($)</label><input class="fi" type="number" id="push" value="0" step="0.01" oninput="updPT()"></div>
                 <div class="fg"><label class="fl">Tax ($)</label><input class="fi" type="number" id="putx" value="0" step="0.01" oninput="updPT()"></div>
                 <div class="fg"><label class="fl">Extra costs ($)</label><input class="fi" type="number" id="puex" value="0" step="0.01" oninput="updPT()" placeholder="Tips, fees, etc."></div>
@@ -4132,7 +4132,7 @@ function openAIImportPreview(data) {
   const extraNet = (data.extra_costs || 0) - (data.discount || 0);
   if(extraNet !== 0) document.getElementById('puex').value = extraNet.toFixed(2);
   // AI import = receipt already in hand → default to Received
-  document.getElementById('pustat').value = 'received';
+  document.getElementById('pustat').value = 'ordered';
   updPurSaveBtn();
   // Supplier — try to match by name
   if(data.supplier) {
@@ -4207,15 +4207,17 @@ function openAIImportPreview(data) {
   }
   // ── Flag new products (no WAC) and set initial cost flags ──────────────────
   PL.forEach((l) => {
+    l._costFlag = '';
     if(l.product_id) {
       const prod = AP.find(p => p.id === l.product_id || p.product_id === l.product_id);
       const wac = parseFloat(prod?.average_cost) || 0;
-      l._needsWAC = (wac === 0);
+      const isIndividual = !prod || prod.product_type === 'individual';
+      // Only flag WAC missing on individual products — bulk/variety WAC is always $0 by design
+      l._needsWAC = isIndividual && wac === 0;
       l._startingWAC = 0;
     } else {
       l._needsWAC = false;
     }
-    l._costFlag = '';
   });
   // ── END flag setup ────────────────────────────────────────────────────────
 
@@ -4255,10 +4257,11 @@ function checkPurFlags() {
       }
     }
 
-    // WAC check — only for matched products with history
+    // WAC check — only for individual matched products with history
     if(!l._needsWAC && l.product_id && l.unit_cost > 0) {
       const prod = AP.find(p => p.id === l.product_id || p.product_id === l.product_id);
-      const wac = parseFloat(prod?.average_cost) || 0;
+      const isIndividual = !prod || prod.product_type === 'individual';
+      const wac = isIndividual ? (parseFloat(prod?.average_cost) || 0) : 0;
       if(wac > 0) {
         if(l.unit_cost > wac * 3) {
           l._costFlag = `Unit cost $${l.unit_cost.toFixed(4)} is ${(l.unit_cost/wac).toFixed(1)}× higher than usual WAC $${wac.toFixed(4)} — verify units and cost`;
