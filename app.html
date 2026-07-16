@@ -3307,11 +3307,22 @@ function renderPL() {
     </div>
     ${(l._aiDescription||l._indivUnits)?`<div style="font-size:11px;color:var(--gray-500);padding:2px 6px 6px 6px;display:flex;gap:12px;flex-wrap:wrap">
       ${l._aiDescription?`<span style="color:var(--gray-400)">📄 "${l._aiDescription}"</span>`:''}
-      ${l._indivUnits?`<span style="color:var(--green-mid);font-weight:600">→ ${l._indivUnits} individual units on receive</span>`:''}
+      ${l._indivUnits?`<span data-indiv style="color:var(--green-mid);font-weight:600">→ ${l._indivUnits} individual units on receive</span>`:''}
       ${l._confidence&&l._confidence!=='high'?`<span style="color:${l._confidence==='low'||l._confidence==='none'?'var(--red-mid)':'var(--amber-mid)'}">${l._confidence} confidence</span>`:''}
+    </div>`:''}
+    ${l._needsWAC?`<div style="background:#fff8e1;border:1px solid #f59e0b;border-radius:6px;padding:7px 10px;margin:0 0 6px 0;font-size:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="color:#b45309;font-weight:600">&#9888; New product &mdash; no cost history. Enter starting WAC (cost per unit):</span>
+      <input type="number" min="0" step="0.0001" placeholder="0.0000"
+        style="width:90px;padding:3px 6px;font-size:12px;border:1px solid #f59e0b;border-radius:4px"
+        value="${l._startingWAC||''}"
+        oninput="PL[${i}]._startingWAC=parseFloat(this.value)||0;checkPurFlags()">
+    </div>`:''}
+    ${l._costFlag?`<div style="background:var(--red-light);border:1px solid var(--red-mid);border-radius:6px;padding:7px 10px;margin:0 0 6px 0;font-size:12px;color:var(--red)">
+      &#9940; ${l._costFlag}
     </div>`:''}
     `).join('');
   updPT();
+  checkPurFlags();
 }
 
 function selPP(i,pid){
@@ -3455,7 +3466,7 @@ function updPL(i,f,v){
 
   // Update DOM without full re-render (preserves focus while typing)
   // inputs order: cases(0), cost_per_case(1), units(2), unit_cost(3)
-  const lineEls = document.getElementById('plines').children;
+  const lineEls = document.getElementById('plines').querySelectorAll('.pline');
   if(lineEls[i]){
     const totalDiv = lineEls[i].querySelector('[data-total]');
     if(totalDiv) totalDiv.textContent = fmt(PL[i].total);
@@ -3471,6 +3482,17 @@ function updPL(i,f,v){
     if(f === 'unit_cost'){
       if(inputs[1] && document.activeElement !== inputs[1]) inputs[1].value = PL[i].cost_per_case.toFixed(2);
       if(inputs[2] && document.activeElement !== inputs[2]) inputs[2].value = PL[i].units;
+    }
+  }
+  checkPurFlags();
+  // Refresh the individual-units-on-receive label if units changed
+  if(f === 'units' || f === 'cases'){
+    const infoDiv = lineEls[i] ? lineEls[i].nextElementSibling : null;
+    if(infoDiv){
+      const lbl = infoDiv.querySelector('[data-indiv]');
+      if(lbl) lbl.textContent = '\u2192 ' + PL[i].units + ' individual units on receive';
+      // Also update the PL cache so renderPL stays consistent
+      PL[i]._indivUnits = PL[i].units;
     }
   }
   updPT();
@@ -4183,6 +4205,20 @@ function openAIImportPreview(data) {
       });
     });
   }
+  // ── Flag new products (no WAC) and set initial cost flags ──────────────────
+  PL.forEach((l) => {
+    if(l.product_id) {
+      const prod = AP.find(p => p.id === l.product_id || p.product_id === l.product_id);
+      const wac = parseFloat(prod?.average_cost) || 0;
+      l._needsWAC = (wac === 0);
+      l._startingWAC = 0;
+    } else {
+      l._needsWAC = false;
+    }
+    l._costFlag = '';
+  });
+  // ── END flag setup ────────────────────────────────────────────────────────
+
   renderPL();
   updPT();
   // Cost verification — compare extracted receipt total vs computed total
@@ -4201,6 +4237,62 @@ function openAIImportPreview(data) {
   if(unmatched > 0) msg += `, ${unmatched} need product assignment`;
   toast(msg, matched === total ? 'ok' : 'warn');
 }
+// ── PURCHASE LINE FLAG CHECKER ───────────────────────────────────────────────
+// Runs after every renderPL, updPL change, and before savePur.
+// Sets _needsWAC and _costFlag on each PL entry, updates save button state.
+function checkPurFlags() {
+  let blockCount = 0;
+  PL.forEach((l, i) => {
+    // Clear previous flags
+    l._costFlag = '';
+
+    // Math check — unit_cost × units must equal total (within $0.02)
+    if(l.units > 0 && l.unit_cost > 0 && l.total > 0) {
+      const mathCheck = Math.abs((l.unit_cost * l.units) - l.total);
+      if(mathCheck > 0.02) {
+        l._costFlag = `Math error: ${l.units} units × $${l.unit_cost.toFixed(4)}/unit = $${(l.unit_cost*l.units).toFixed(2)} but total shows $${l.total.toFixed(2)} — fix cases, cost/case, or units`;
+        blockCount++;
+      }
+    }
+
+    // WAC check — only for matched products with history
+    if(!l._needsWAC && l.product_id && l.unit_cost > 0) {
+      const prod = AP.find(p => p.id === l.product_id || p.product_id === l.product_id);
+      const wac = parseFloat(prod?.average_cost) || 0;
+      if(wac > 0) {
+        if(l.unit_cost > wac * 3) {
+          l._costFlag = `Unit cost $${l.unit_cost.toFixed(4)} is ${(l.unit_cost/wac).toFixed(1)}× higher than usual WAC $${wac.toFixed(4)} — verify units and cost`;
+          blockCount++;
+        } else if(l.unit_cost < wac / 3) {
+          l._costFlag = `Unit cost $${l.unit_cost.toFixed(4)} is ${(wac/l.unit_cost).toFixed(1)}× lower than usual WAC $${wac.toFixed(4)} — verify units and cost`;
+          blockCount++;
+        }
+      }
+    }
+
+    // New product WAC — must have _startingWAC entered
+    if(l._needsWAC && !(l._startingWAC > 0)) blockCount++;
+  });
+
+  // Update save button
+  const btn = document.getElementById('savePurBtn');
+  if(btn) {
+    if(blockCount > 0) {
+      btn.disabled = true;
+      btn.style.opacity = '0.5';
+      btn.style.cursor = 'not-allowed';
+      btn.title = blockCount + ' issue' + (blockCount !== 1 ? 's' : '') + ' must be resolved before saving';
+    } else {
+      btn.disabled = false;
+      btn.style.opacity = '';
+      btn.style.cursor = '';
+      btn.title = '';
+    }
+  }
+  return blockCount;
+}
+// ── END PURCHASE LINE FLAG CHECKER ───────────────────────────────────────────
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function loadPurHistory(){
@@ -4492,6 +4584,22 @@ async function savePur() {
   const status = document.getElementById('pustat').value;
   const vl=PL.filter(l=>l.product_id&&l.units>0);
   if(!vl.length){toast('Add at least one product line','err');return;}
+
+  // ── HARD BLOCK: run flag check before any DB work ────────────────────────
+  const flagCount = checkPurFlags();
+  if(flagCount > 0) {
+    // Collect all flagged line descriptions for the modal
+    const flagLines = PL.map((l,i) => {
+      const msgs = [];
+      if(l._needsWAC && !(l._startingWAC > 0)) msgs.push('Missing starting WAC — enter cost per unit in the amber box');
+      if(l._costFlag) msgs.push(l._costFlag);
+      if(msgs.length) return `<div style="margin-bottom:8px"><strong>${l.name||'Line '+(i+1)}</strong><br>${msgs.map(m=>'&bull; '+m).join('<br>')}</div>`;
+      return '';
+    }).filter(Boolean).join('');
+    toast('⛔ Fix ' + flagCount + ' issue' + (flagCount!==1?'s':'') + ' before saving — see red/amber lines above', 'err');
+    return;
+  }
+  // ── END HARD BLOCK ────────────────────────────────────────────────────────
 
   // ── DUPLICATE INVOICE CHECK — must run BEFORE creating any DB records ──────
   const invoiceNum = document.getElementById('pui').value?.trim();
