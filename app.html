@@ -401,6 +401,7 @@ body.ro #ro-badge{display:flex!important}
                 <div class="fg"><label class="fl">Shipping ($)</label><input class="fi" type="number" id="push" value="0" step="0.01" oninput="updPT()"></div>
                 <div class="fg"><label class="fl">Tax ($)</label><input class="fi" type="number" id="putx" value="0" step="0.01" oninput="updPT()"></div>
                 <div class="fg"><label class="fl">Extra costs ($)</label><input class="fi" type="number" id="puex" value="0" step="0.01" oninput="updPT()" placeholder="Tips, fees, etc."></div>
+                <div class="fg"><label class="fl">Discount ($)</label><input class="fi" type="number" id="pudis" value="0" step="0.01" min="0" oninput="updPT()" placeholder="Coupons, promotions, etc."></div>
               </div>
               <div class="fg"><label class="fl">Notes</label><input class="fi" id="pun" placeholder="Optional"></div>
             </div>
@@ -410,7 +411,7 @@ body.ro #ro-badge{display:flex!important}
               <div id="plines"></div>
               <div style="height:0.5px;background:var(--border);margin:12px 0"></div>
               <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-                <div style="font-size:13px" class="tm">Subtotal: <span id="pts">$0.00</span> · Ship: <span id="ptsh">$0.00</span> · Tax: <span id="pttx">$0.00</span> · Extra: <span id="ptex">$0.00</span></div>
+                <div style="font-size:13px" class="tm">Subtotal: <span id="pts">$0.00</span> · Ship: <span id="ptsh">$0.00</span> · Tax: <span id="pttx">$0.00</span> · Extra: <span id="ptex">$0.00</span> · Discount: <span id="ptdis">$0.00</span></div>
                 <div style="font-size:18px;font-weight:700;font-family:var(--font-head)">Total: <span id="ptt">$0.00</span></div>
               </div>
               <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;justify-content:space-between;align-items:center">
@@ -3502,7 +3503,7 @@ function updPL(i,f,v){
 }
 
 function rmPL(i){PL.splice(i,1);renderPL();}
-function clrPur(){_editPurId=null;PL=[];renderPL();['pui','pun','pud'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});['push','putx','puex'].forEach(id=>document.getElementById(id).value='0');document.getElementById('pustat').value='ordered';const supEl=document.getElementById('pus');if(supEl)supEl.value='';updPurSaveBtn();}
+function clrPur(){_editPurId=null;PL=[];renderPL();['pui','pun','pud'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});['push','putx','puex','pudis'].forEach(id=>document.getElementById(id).value='0');document.getElementById('pustat').value='ordered';const supEl=document.getElementById('pus');if(supEl)supEl.value='';updPurSaveBtn();}
 
 function updPurSaveBtn(){
   const s=document.getElementById('pustat').value;
@@ -4133,7 +4134,9 @@ function openAIImportPreview(data) {
   // Discounts reduce the total — store as negative in the Extra field.
   // If there's also an extra_costs value, net them together.
   const extraNet = (data.extra_costs || 0) - (data.discount || 0);
-  if(extraNet !== 0) document.getElementById('puex').value = extraNet.toFixed(2);
+  if(extraNet !== 0) document.getElementById('puex').value = extraNet > 0 ? extraNet.toFixed(2) : '0';
+  const dis = parseFloat(data.discount)||0;
+  document.getElementById('pudis').value = dis > 0 ? dis.toFixed(2) : '0';
   // AI import = receipt already in hand → default to Received
   document.getElementById('pustat').value = 'ordered';
   updPurSaveBtn();
@@ -4519,6 +4522,7 @@ async function editPurchase(id) {
   document.getElementById('push').value = p.shipping_cost || 0;
   document.getElementById('putx').value = p.tax_amount || 0;
   document.getElementById('puex').value = p.extra_costs || 0;
+  document.getElementById('pudis').value = p.discount_amount || 0;
   document.getElementById('pustat').value = (p.status==='received') ? 'received' : 'ordered';
   const supEl = document.getElementById('pus');
   if(supEl && p.supplier_id) supEl.value = p.supplier_id;
@@ -4578,11 +4582,13 @@ function updPT(){
   const sh=parseFloat(document.getElementById('push').value)||0;
   const tx=parseFloat(document.getElementById('putx').value)||0;
   const ex=parseFloat(document.getElementById('puex').value)||0;
+  const dis=parseFloat(document.getElementById('pudis').value)||0;
   document.getElementById('pts').textContent=fmt(sub);
   document.getElementById('ptsh').textContent=fmt(sh);
   document.getElementById('pttx').textContent=fmt(tx);
   document.getElementById('ptex').textContent=fmt(ex);
-  document.getElementById('ptt').textContent=fmt(sub+sh+tx+ex);
+  document.getElementById('ptdis').textContent=fmt(dis);
+  document.getElementById('ptt').textContent=fmt(sub+sh+tx+ex-dis);
 }
 
 async function savePur() {
@@ -4647,9 +4653,10 @@ async function savePur() {
   const sh=parseFloat(document.getElementById('push').value)||0;
   const tx=parseFloat(document.getElementById('putx').value)||0;
   const ex=parseFloat(document.getElementById('puex').value)||0;
+  const dis=parseFloat(document.getElementById('pudis').value)||0;
   const tok = await getAuthToken();
   const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
-  const purBody={supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,status:status==='ordered'?'draft':'received',notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex};
+  const purBody={supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,discount_amount:dis,status:status==='ordered'?'draft':'received',notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex-dis};
   let purId;
   if(_editPurId) {
     // Editing: reverse old inventory transactions and lines, then patch the header.
