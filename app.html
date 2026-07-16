@@ -1939,6 +1939,9 @@ async function openAP() {
   // Reset alternate barcodes
   ALT_BARCODES = [];
   document.getElementById('alt-barcode-lines').innerHTML='';
+  // Reset VMS aliases
+  ALIASES = [];
+  renderAliases();
   // Await so dropdowns are populated before modal opens — prevents stale/blank selects
   await Promise.all([loadCats(), loadSups()]);
   // Ensure dropdowns reset to blank for a fresh Add
