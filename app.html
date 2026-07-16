@@ -4036,6 +4036,7 @@ RULES:
 9. MATH VALIDATION — For every line item, verify: qty × unit_cost = line_total. If unit_cost × qty ≠ line_total, your line_total is wrong — recalculate it as qty × unit_cost. Never copy a displayed price directly as line_total without multiplying by qty.
 10. QUANTITY DOUBLE-CHECK — After computing all line_totals, sum them: sum(line_totals) + tax + shipping + extra_costs − discount must equal receipt_total. If the sum is less than receipt_total, you have under-counted quantities or under-calculated line totals — go back and find which lines have qty > 1 but line_total equal to unit_cost, and fix them by setting line_total = qty × unit_cost. Do not return until the math balances.
 11. DISCOUNTS & PROMOTIONS — If the receipt shows any discount, promotion, coupon, multibuy discount, or credit that reduces the order total, capture the total discount amount (as a positive number) in the top-level "discount" field. Never put a discount as a negative line item in "lines". Examples: Amazon Multibuy Discount, Subscribe & Save, coupon, promotional credit, sale discount. If multiple discounts exist, sum them into one number. Shipping credits or "Free Shipping" offsets that net to zero do NOT count — only capture discounts that reduce what was actually paid vs the item subtotal.
+12. UNITS PER CASE — For every line, set "units_per_case" to the number of individual units in one case/pack. If the product matches one in the product list, use its pack_qty. For unmatched products, read the description carefully: "Pack of 8" → 8, "12 pack" → 12, "24 pk" → 24, "6 Pack" → 6. A bare "15 Fl Oz" or "15 Ounce" with no pack count means a single can/bottle → 1. Default to 1 only if truly a single unit.
 
 PRODUCT LIST (name | id | type | units_per_case):
 ${prodContext}
@@ -4057,6 +4058,7 @@ Return ONLY a JSON object in this exact format, no other text:
       "qty": 1,
       "unit_cost": 0.00,
       "line_total": 0.00,
+      "units_per_case": 1,
       "matched_product_id": "uuid or null if no match",
       "matched_product_name": "matched product name or null",
       "confidence": "high|medium|low|none"
@@ -4154,9 +4156,10 @@ function openAIImportPreview(data) {
         ? AP.find(p => p.product_id === line.matched_product_id || p.id === line.matched_product_id)
         : null;
       // For bulk products units_per_case is always 1 — real pack size is in _qty_per_pack
+      // For unmatched products, fall back to AI-extracted units_per_case from the receipt description
       const upc = (matchedProd?.product_type === 'bulk'||matchedProd?.product_type === 'variety') && matchedProd?._qty_per_pack > 0
         ? matchedProd._qty_per_pack
-        : (parseInt(matchedProd?.units_per_case) || 1);
+        : (parseInt(matchedProd?.units_per_case) || parseInt(line.units_per_case) || 1);
       const cases      = line.qty || 1;
       const totalUnits = cases * upc;
       const lineTotal  = line.line_total || (line.unit_cost * cases);
