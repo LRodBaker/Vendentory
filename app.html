@@ -3042,9 +3042,10 @@ async function lookupBC() {
   // If not found, check alternate barcodes table
   if(!prod) {
     try {
+      const altTokLU = await getAuthToken();
       const altResp = await fetch(
         SURL+'/rest/v1/product_barcodes?barcode=eq.'+encodeURIComponent(bc)+'&select=product_id',
-        { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
+        { headers:{'apikey':SKEY,'Authorization':'Bearer '+altTokLU} }
       );
       if(altResp.ok) {
         const altRows = await altResp.json();
@@ -5353,8 +5354,9 @@ async function pcLookupBC(){
   // Try alt barcodes if not found
   if(!prod){
     try{
+      const altTokPC = await getAuthToken();
       const r=await fetch(SURL+'/rest/v1/product_barcodes?barcode=eq.'+encodeURIComponent(bc)+'&select=product_id',
-        {headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY}});
+        {headers:{'apikey':SKEY,'Authorization':'Bearer '+altTokPC}});
       if(r.ok){const rows=await r.json();if(rows.length)prod=AP.find(p=>p.id===rows[0].product_id&&p.product_type!=='bulk');}
     }catch(e){}
   }
@@ -8446,9 +8448,10 @@ async function isLookupUPC(i) {
     // Also check alternate barcodes table
     if (!existingProd) {
       try {
+        const altTokIS = await getAuthToken();
         const altR = await fetch(
           SURL + '/rest/v1/product_barcodes?barcode=eq.' + encodeURIComponent(bc) + '&select=product_id',
-          { headers: { 'apikey': SKEY, 'Authorization': 'Bearer ' + SKEY } }
+          { headers: { 'apikey': SKEY, 'Authorization': 'Bearer ' + altTokIS } }
         );
         if (altR.ok) {
           const altRows = await altR.json();
