@@ -1359,7 +1359,17 @@ async function loadProds2() {
         if(p) p._qty_per_pack=(p._qty_per_pack||0)+c.qty_per_pack;
       });
     }
-  } catch(e) { /* aliases/components table may not exist yet — graceful fallback */ }
+    // Load ALL alternate barcodes into AP cache — enables instant scan lookup without extra DB fetch
+    const {data:allAltBCs} = await dbFetch('product_barcodes',{select:'product_id,barcode'});
+    if(allAltBCs) {
+      const altBCMap={};
+      allAltBCs.forEach(r=>{
+        if(!altBCMap[r.product_id]) altBCMap[r.product_id]=[];
+        altBCMap[r.product_id].push(r.barcode);
+      });
+      AP.forEach(p=>{ p._altBarcodes = altBCMap[p.id] || []; });
+    }
+  } catch(e) { /* aliases/components/barcodes table may not exist yet — graceful fallback */ }
 }
 
 async function loadDash() {
@@ -2862,7 +2872,11 @@ async function saveProd() {
     // Update local cache immediately — no DB reload needed
     if(eid){
       const idx=AP.findIndex(x=>x.product_id===eid||x.id===eid);
-      if(idx>=0){ AP[idx]={...AP[idx],...pl,id:eid,product_id:eid}; }
+      if(idx>=0){
+        AP[idx]={...AP[idx],...pl,id:eid,product_id:eid};
+        // Update _altBarcodes cache so scans work immediately without reload
+        AP[idx]._altBarcodes = ALT_BARCODES.filter(b=>b.barcode&&b.barcode.trim()).map(b=>b.barcode.trim());
+      }
     } else if(savedId) {
       // New product — add to cache so it appears without a reload
       const cat=AC.find(c=>c.id===pl.category_id);
@@ -3039,7 +3053,10 @@ async function lookupBC() {
   if(!bc)return;
   // Check primary barcode first
   let prod=AP.find(p=>p.barcode===bc);
-  // If not found, check alternate barcodes table
+  // If not found, check alternate barcodes (cache first, then DB fallback)
+  if(!prod) {
+    prod = AP.find(p => p._altBarcodes && p._altBarcodes.includes(bc));
+  }
   if(!prod) {
     try {
       const altTokLU = await getAuthToken();
@@ -5351,7 +5368,10 @@ async function pcLookupBC(){
   // Try primary barcode (exclude bulk — sales only touch individual)
   let prod=AP.find(p=>p.barcode===bc && p.product_type!=='bulk');
 
-  // Try alt barcodes if not found
+  // Try alt barcodes — cache first, then DB fallback
+  if(!prod){
+    prod = AP.find(p => p.product_type!=='bulk' && p._altBarcodes && p._altBarcodes.includes(bc));
+  }
   if(!prod){
     try{
       const altTokPC = await getAuthToken();
@@ -8445,7 +8465,10 @@ async function isLookupUPC(i) {
       (p.barcode === bc || p.barcode.replace(/\D/g,'') === bc || bc.replace(/\D/g,'') === p.barcode.replace(/\D/g,''))
     );
 
-    // Also check alternate barcodes table
+    // Also check alternate barcodes — cache first, then DB fallback
+    if (!existingProd) {
+      existingProd = AP.find(p => p.product_type === 'individual' && p._altBarcodes && p._altBarcodes.includes(bc));
+    }
     if (!existingProd) {
       try {
         const altTokIS = await getAuthToken();
