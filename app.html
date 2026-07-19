@@ -2710,10 +2710,25 @@ async function saveProd() {
       }
     }
 
-    // Save alternate barcodes — delete all then re-insert
+    // Save alternate barcodes — conflict check FIRST, then delete, then re-insert
     if(savedId) {
       const altTok = await getAuthToken();
       const altH = {'apikey':SKEY,'Authorization':'Bearer '+altTok,'Content-Type':'application/json'};
+
+      // Step 1: Conflict check BEFORE touching the DB
+      const altToSave = ALT_BARCODES.filter(b => b.barcode && b.barcode.trim());
+      const conflicts = altToSave.map(b => {
+        const conflict = AP.find(p => p.barcode === b.barcode.trim() && p.id !== savedId && p.product_id !== savedId);
+        return conflict ? { barcode: b.barcode.trim(), name: conflict.name } : null;
+      }).filter(Boolean);
+      if(conflicts.length) {
+        showSaveErr('Barcode conflict: ' + conflicts.map(c=>
+          '"'+c.barcode+'" is already the primary barcode on "'+c.name+'" — remove it from that product first'
+        ).join(' | '));
+        return;
+      }
+
+      // Step 2: Delete existing alt barcodes for this product
       const altDelCtrl = new AbortController();
       const altDelTimer = setTimeout(()=>altDelCtrl.abort(), 10000);
       try {
@@ -2726,22 +2741,9 @@ async function saveProd() {
         showSaveErr(e.name==='AbortError'?'Alt barcode delete timed out':'Alt barcode delete error: '+e.message);
         return;
       }
-      // Conflict check — block if any alt barcode is already a primary barcode on another product
-      const conflicts = ALT_BARCODES
-        .filter(b => b.barcode && b.barcode.trim())
-        .map(b => {
-          const conflict = AP.find(p => p.barcode === b.barcode.trim() && (p.id !== savedId && p.product_id !== savedId));
-          return conflict ? { barcode: b.barcode.trim(), name: conflict.name } : null;
-        }).filter(Boolean);
-      if(conflicts.length) {
-        showSaveErr('Barcode conflict: ' + conflicts.map(c=>
-          '"'+c.barcode+'" is already the primary barcode on "'+c.name+'" — remove it from that product first, then add it here as an alternate'
-        ).join(' | '));
-        return;
-      }
-      const altRows = ALT_BARCODES
-        .filter(b => b.barcode && b.barcode.trim())
-        .map(b => ({ product_id:savedId, barcode:b.barcode.trim() }));
+
+      // Step 3: Re-insert all current alt barcodes
+      const altRows = altToSave.map(b => ({ product_id:savedId, barcode:b.barcode.trim() }));
       if(altRows.length) {
         const altInsCtrl = new AbortController();
         const altInsTimer = setTimeout(()=>altInsCtrl.abort(), 10000);
