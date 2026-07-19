@@ -2726,6 +2726,19 @@ async function saveProd() {
         showSaveErr(e.name==='AbortError'?'Alt barcode delete timed out':'Alt barcode delete error: '+e.message);
         return;
       }
+      // Conflict check — block if any alt barcode is already a primary barcode on another product
+      const conflicts = ALT_BARCODES
+        .filter(b => b.barcode && b.barcode.trim())
+        .map(b => {
+          const conflict = AP.find(p => p.barcode === b.barcode.trim() && (p.id !== savedId && p.product_id !== savedId));
+          return conflict ? { barcode: b.barcode.trim(), name: conflict.name } : null;
+        }).filter(Boolean);
+      if(conflicts.length) {
+        showSaveErr('Barcode conflict: ' + conflicts.map(c=>
+          '"'+c.barcode+'" is already the primary barcode on "'+c.name+'" — remove it from that product first, then add it here as an alternate'
+        ).join(' | '));
+        return;
+      }
       const altRows = ALT_BARCODES
         .filter(b => b.barcode && b.barcode.trim())
         .map(b => ({ product_id:savedId, barcode:b.barcode.trim() }));
