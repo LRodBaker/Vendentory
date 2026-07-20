@@ -2403,7 +2403,7 @@ function baseSearch(i, q) {
   q = (q||'').toLowerCase().trim();
   if(!q) { dd.style.display='none'; return; }
   const matches = AP.filter(p =>
-    (p.name.toLowerCase().includes(q) || (p.barcode||'').includes(q) || (p.product_code||'').toLowerCase().includes(q))
+    (p.name.toLowerCase().includes(q) || (p.barcode||'').includes(q) || (p.product_code||'').toLowerCase().includes(q) || (p._altBarcodes||[]).some(b=>b.includes(q)))
   ).slice(0,8);
   if(!matches.length) { dd.style.display='none'; return; }
   _baseMatches[i] = matches;
