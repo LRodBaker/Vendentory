@@ -2068,9 +2068,11 @@ async function openEP(id) {
   ALIASES = [];
   document.getElementById('alias-lines').innerHTML='';
   if(p.id) {
+    const epTok = await getAuthToken();
+    const epH = {'apikey':SKEY,'Authorization':'Bearer '+epTok};
     const altResp = await fetch(
       SURL+'/rest/v1/product_barcodes?product_id=eq.'+p.id+'&select=id,barcode&order=created_at',
-      { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
+      { headers: epH }
     );
     if(altResp.ok) {
       const altRows = await altResp.json();
@@ -2080,7 +2082,7 @@ async function openEP(id) {
     // Load VMS aliases
     const aliasResp = await fetch(
       SURL+'/rest/v1/product_aliases?product_id=eq.'+p.id+'&select=id,alias&order=created_at',
-      { headers:{'apikey':SKEY,'Authorization':'Bearer '+SKEY} }
+      { headers: epH }
     );
     if(aliasResp.ok) {
       const aliasRows = await aliasResp.json();
