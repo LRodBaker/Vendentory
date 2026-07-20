@@ -2377,11 +2377,14 @@ function renderBaseLines() {
         <div style="position:relative">
           <input class="fi base-search-input" style="font-size:12px;padding:6px 9px" placeholder="Search product name or barcode..."
             value="${(l.name||'').replace(/"/g,'&quot;')}"
+            autocomplete="off"
             oninput="baseSearch(${i},this.value)"
+            onchange="baseSearch(${i},this.value)"
+            onkeyup="baseSearch(${i},this.value)"
             onfocus="baseSearch(${i},this.value)"
             onblur="setTimeout(()=>{ const d=document.getElementById('basedd-${i}'); if(d) d.style.display='none'; },180)"
             id="baseinput-${i}">
-          <div id="basedd-${i}" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:0.5px solid var(--border);border-radius:8px;max-height:160px;overflow-y:auto;z-index:600;box-shadow:0 4px 16px rgba(0,0,0,0.12)"></div>
+          <div id="basedd-${i}" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:0.5px solid var(--border);border-radius:8px;max-height:160px;overflow-y:auto;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.12)"></div>
         </div>
         <input class="fi" style="font-size:12px;padding:6px 9px;text-align:center" type="number" min="1"
           value="${l.qty_per_case}" placeholder="Qty"
@@ -2389,6 +2392,7 @@ function renderBaseLines() {
         <button style="background:var(--red-light);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;color:var(--red-mid);font-size:14px;display:flex;align-items:center;justify-content:center" onclick="removeBaseLine(${i})">&#10005;</button>
       </div>`;
   }).join('');
+  startBaseSearchPolling();
 }
 
 function baseSearch(i, q) {
@@ -2410,6 +2414,22 @@ function baseSearch(i, q) {
     el.addEventListener('mousedown', () => baseSelect(i, parseInt(el.dataset.mi)));
   });
   dd.style.display='block';
+}
+
+// Poll base search inputs for scanner-injected values that bypass DOM events
+function startBaseSearchPolling() {
+  clearInterval(window._baseSearchPollTimer);
+  window._baseSearchPollTimer = setInterval(() => {
+    BASE_LINES.forEach((l, i) => {
+      const inp = document.getElementById('baseinput-'+i);
+      if(!inp) return;
+      const cur = inp.value;
+      if(cur && cur !== (l._lastPollVal||'')) {
+        l._lastPollVal = cur;
+        baseSearch(i, cur);
+      }
+    });
+  }, 300);
 }
 
 function baseSelect(lineIdx, matchIdx) {
