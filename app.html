@@ -1515,7 +1515,7 @@ async function openPD(id) {
         ${p.image_url?`<img src="${p.image_url}" style="width:100%;height:100%;object-fit:cover;border-radius:10px">`:' &#128230;'}</div>
       <div style="flex:1">
         <div style="font-family:var(--font-head);font-size:19px;font-weight:700;margin-bottom:2px">${p.name}</div>
-        <div style="font-size:12px;color:var(--gray-400);margin-bottom:7px">${p.product_code||''} ${p.barcode?'&#183; '+p.barcode:''}</div>
+        <div style="font-size:12px;color:var(--gray-400);margin-bottom:7px">${p.product_code||''} ${p.barcode?'&#183; '+p.barcode:''}${p._altBarcodes&&p._altBarcodes.length?'<br><span style="font-size:11px;color:var(--gray-400)">Alt: '+p._altBarcodes.join(' &middot; ')+'</span>':''}</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
           <span class="badge ${p.stock_status==='REORDER'?'b-red':'b-ok'}">${p.stock_status==='REORDER'?'Reorder needed':'In stock'}</span>
           ${p.category_name?`<span class="badge b-gray">${p.category_name}</span>`:''}
@@ -2244,7 +2244,7 @@ function vpSearch(i, q) {
   if(!q) { dd.style.display='none'; return; }
   const matches = AP.filter(p =>
     !p.is_variety_pack &&
-    (p.name.toLowerCase().includes(q) || (p.barcode||'').includes(q) || (p.product_code||'').toLowerCase().includes(q))
+    (p.name.toLowerCase().includes(q) || (p.barcode||'').includes(q) || (p.product_code||'').toLowerCase().includes(q) || (p._altBarcodes||[]).some(b=>b.includes(q)))
   ).slice(0,8);
   if(!matches.length) { dd.style.display='none'; return; }
   _vpMatches[i] = matches; // store so vpSelect can look up by index
