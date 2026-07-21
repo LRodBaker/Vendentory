@@ -4168,6 +4168,27 @@ Return ONLY a JSON object in this exact format, no other text:
     const raw = aiData.content.map(b => b.text||'').join('');
     const clean = raw.replace(/```json|```/g,'').trim();
     const parsed = JSON.parse(clean);
+
+    // ── POST-PARSE LINE TOTAL CORRECTION ─────────────────────────────────────
+    // The AI sometimes returns line_total = unit_cost instead of qty × unit_cost
+    // (Rule 8 failure). Detect this by checking if line totals + header fees ≠
+    // receipt_total. If so, correct any line where line_total ≈ unit_cost and
+    // qty > 1 — those are the lines where the AI forgot to multiply.
+    if(parsed.receipt_total > 0 && Array.isArray(parsed.lines)) {
+      const rawSum = parsed.lines.reduce((s,l)=>s+(l.line_total||0),0);
+      const headerSum = rawSum + (parsed.tax||0) + (parsed.shipping||0) + (parsed.extra_costs||0) - (parsed.discount||0);
+      if(Math.abs(headerSum - parsed.receipt_total) > 0.02) {
+        parsed.lines.forEach(l => {
+          const qty = l.qty || 1;
+          if(qty > 1 && Math.abs((l.line_total||0) - (l.unit_cost||0)) < 0.01) {
+            // line_total equals unit_cost — AI forgot to multiply by qty
+            l.line_total = Math.round((l.unit_cost||0) * qty * 100) / 100;
+          }
+        });
+      }
+    }
+    // ── END POST-PARSE CORRECTION ─────────────────────────────────────────────
+
     hideL();
     openAIImportPreview(parsed);
   } catch(e) {
