@@ -4170,21 +4170,31 @@ Return ONLY a JSON object in this exact format, no other text:
     const parsed = JSON.parse(clean);
 
     // ── POST-PARSE LINE TOTAL CORRECTION ─────────────────────────────────────
-    // The AI sometimes returns line_total = unit_cost instead of qty × unit_cost
-    // (Rule 8 failure). Detect this by checking if line totals + header fees ≠
-    // receipt_total. If so, correct any line where line_total ≈ unit_cost and
-    // qty > 1 — those are the lines where the AI forgot to multiply.
-    if(parsed.receipt_total > 0 && Array.isArray(parsed.lines)) {
+    // Amazon receipts show price-per-case on the right. The AI sometimes
+    // treats that as unit_cost/case but still sets line_total = unit_cost
+    // instead of qty × unit_cost. It may also pre-divide unit_cost by qty.
+    // Either way the signature is: sum(line_totals) + fees ≠ receipt_total,
+    // but sum(line_totals × qty) + fees ≈ receipt_total.
+    // Fix: when totals don't balance, multiply each line_total by its qty,
+    // and recalculate unit_cost = new line_total / qty so both are consistent.
+    if(parsed.receipt_total > 0 && Array.isArray(parsed.lines) && parsed.lines.length > 0) {
+      const fees = (parsed.tax||0) + (parsed.shipping||0) + (parsed.extra_costs||0) - (parsed.discount||0);
       const rawSum = parsed.lines.reduce((s,l)=>s+(l.line_total||0),0);
-      const headerSum = rawSum + (parsed.tax||0) + (parsed.shipping||0) + (parsed.extra_costs||0) - (parsed.discount||0);
-      if(Math.abs(headerSum - parsed.receipt_total) > 0.02) {
-        parsed.lines.forEach(l => {
-          const qty = l.qty || 1;
-          if(qty > 1 && Math.abs((l.line_total||0) - (l.unit_cost||0)) < 0.01) {
-            // line_total equals unit_cost — AI forgot to multiply by qty
-            l.line_total = Math.round((l.unit_cost||0) * qty * 100) / 100;
-          }
-        });
+      const rawTotal = rawSum + fees;
+      if(Math.abs(rawTotal - parsed.receipt_total) > 0.02) {
+        // Check if multiplying each line_total by its qty brings us close to receipt_total
+        const scaledSum = parsed.lines.reduce((s,l)=>s+((l.line_total||0)*(l.qty||1)),0);
+        const scaledTotal = scaledSum + fees;
+        if(Math.abs(scaledTotal - parsed.receipt_total) < 0.02) {
+          // Confirmed: AI returned per-case price as line_total — multiply through
+          parsed.lines.forEach(l => {
+            const qty = l.qty || 1;
+            if(qty > 1) {
+              l.line_total = Math.round((l.line_total||0) * qty * 100) / 100;
+              l.unit_cost  = Math.round((l.unit_cost||0)  * qty * 100) / 100;
+            }
+          });
+        }
       }
     }
     // ── END POST-PARSE CORRECTION ─────────────────────────────────────────────
