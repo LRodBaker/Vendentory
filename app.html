@@ -1465,7 +1465,7 @@ function renderProds() {
   g.querySelectorAll('.pc[data-pid]').forEach(el=>el.addEventListener('click',()=>openPD(el.dataset.pid)));
 }
 
-// ─── PRODUCT EXCEL EXPORT ────────────────────────────────────────────────────
+// ─── PRODUCT CSV EXPORT ──────────────────────────────────────────────────────
 function exportProdsXLSX() {
   // Collect currently filtered products (same logic as renderProds)
   const q=(document.getElementById('psrch')?.value||'').toLowerCase();
@@ -1483,102 +1483,41 @@ function exportProdsXLSX() {
   });
   if(!f.length){ toast('No products to export','err'); return; }
 
-  // Build CSV-style data rows then encode as Excel-compatible XML spreadsheet
   const cols = [
-    { h:'Name',          v:p=>p.name },
-    { h:'Product Code',  v:p=>p.product_code||'' },
-    { h:'Barcode',       v:p=>p.barcode||'' },
-    { h:'Type',          v:p=>p.product_type||'individual' },
-    { h:'Category',      v:p=>p.category_name||'' },
-    { h:'On Hand',       v:p=>p.on_hand_qty??0, num:true },
-    { h:'Status',        v:p=>p.stock_status||'' },
-    { h:'WAC ($)',       v:p=>parseFloat(p.average_cost)||0, num:true },
-    { h:'Sell Price ($)',v:p=>parseFloat(p.selling_price)||0, num:true },
-    { h:'Image URL',     v:p=>p.image_url||'' },
+    { h:'Name',           v:p=>p.name },
+    { h:'Product Code',   v:p=>p.product_code||'' },
+    { h:'Barcode',        v:p=>p.barcode||'' },
+    { h:'Type',           v:p=>p.product_type||'individual' },
+    { h:'Category',       v:p=>p.category_name||'' },
+    { h:'On Hand',        v:p=>p.on_hand_qty??0 },
+    { h:'Status',         v:p=>p.stock_status||'' },
+    { h:'WAC ($)',        v:p=>(parseFloat(p.average_cost)||0).toFixed(4) },
+    { h:'Sell Price ($)', v:p=>(parseFloat(p.selling_price)||0).toFixed(2) },
+    { h:'Image URL',      v:p=>p.image_url||'' },
   ];
 
-  // Build XML spreadsheet (SpreadsheetML — opens natively in Excel)
-  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  const headerRow = '<Row>' + cols.map(c=>`<Cell ss:StyleID="hdr"><Data ss:Type="String">${esc(c.h)}</Data></Cell>`).join('') + '</Row>';
+  // CSV encode — wrap any field containing commas, quotes, or newlines in double quotes
+  const csvCell = v => {
+    const s = String(v==null?'':v);
+    return (s.includes(',')||s.includes('"')||s.includes('\n')) ? '"'+s.replace(/"/g,'""')+'"' : s;
+  };
 
-  const dataRows = f.map(p => {
-    return '<Row>' + cols.map(c => {
-      const val = c.v(p);
-      if(c.h === 'Image URL' && val) {
-        // Render as hyperlink cell
-        return `<Cell ss:StyleID="lnk" ss:HRef="${esc(val)}"><Data ss:Type="String">${esc(val)}</Data></Cell>`;
-      }
-      if(c.num) {
-        const n = parseFloat(val);
-        return `<Cell ss:StyleID="num"><Data ss:Type="Number">${isNaN(n)?0:n}</Data></Cell>`;
-      }
-      return `<Cell ss:StyleID="def"><Data ss:Type="String">${esc(val)}</Data></Cell>`;
-    }).join('') + '</Row>';
-  }).join('');
+  const header = cols.map(c=>csvCell(c.h)).join(',');
+  const rows = f.map(p => cols.map(c=>csvCell(c.v(p))).join(','));
+  const csv = [header, ...rows].join('\r\n');
 
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
- xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
- xmlns:x="urn:schemas-microsoft-com:office:excel">
- <Styles>
-  <Style ss:ID="hdr">
-   <Font ss:Bold="1" ss:Size="11" ss:FontName="Arial"/>
-   <Interior ss:Color="#1E3A5F" ss:Pattern="Solid"/>
-   <Font ss:Bold="1" ss:Color="#FFFFFF" ss:Size="11" ss:FontName="Arial"/>
-   <Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/>
-   <Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#FFFFFF"/></Borders>
-  </Style>
-  <Style ss:ID="def">
-   <Font ss:Size="10" ss:FontName="Arial"/>
-   <Alignment ss:Vertical="Center"/>
-  </Style>
-  <Style ss:ID="num">
-   <Font ss:Size="10" ss:FontName="Arial"/>
-   <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
-   <NumberFormat ss:Format="0.0000"/>
-  </Style>
-  <Style ss:ID="lnk">
-   <Font ss:Size="10" ss:FontName="Arial" ss:Color="#0563C1" ss:Underline="Single"/>
-   <Alignment ss:Vertical="Center"/>
-  </Style>
- </Styles>
- <Worksheet ss:Name="Products">
-  <Table ss:DefaultRowHeight="18">
-   <Column ss:Width="220"/>
-   <Column ss:Width="90"/>
-   <Column ss:Width="110"/>
-   <Column ss:Width="80"/>
-   <Column ss:Width="110"/>
-   <Column ss:Width="65"/>
-   <Column ss:Width="75"/>
-   <Column ss:Width="70"/>
-   <Column ss:Width="80"/>
-   <Column ss:Width="200"/>
-   ${headerRow}
-   ${dataRows}
-  </Table>
-  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
-   <FreezePanes/>
-   <FrozenNoSplit/>
-   <SplitHorizontal>1</SplitHorizontal>
-   <TopRowBottomPane>1</TopRowBottomPane>
-   <ActivePane>2</ActivePane>
-  </WorksheetOptions>
- </Worksheet>
-</Workbook>`;
-
-  // Build filter description for filename
+  // Build filename from active filters
   const catName = cf ? (AC.find(c=>c.id===cf)?.name||'filtered') : '';
   const parts = ['Vendentory_Products'];
   if(clf) parts.push(clf);
-  if(catName) parts.push(catName);
+  if(catName) parts.push(catName.replace(/\s+/g,'_'));
   if(sf) parts.push(sf);
   const now = new Date();
   parts.push(`${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`);
-  const fname = parts.join('_') + '.xls';
+  const fname = parts.join('_') + '.csv';
 
-  const blob = new Blob([xml], {type:'application/vnd.ms-excel'});
+  // BOM prefix ensures Excel opens UTF-8 CSV correctly (special chars in product names)
+  const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = fname;
