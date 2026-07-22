@@ -383,6 +383,8 @@ body.ro #ro-badge{display:flex!important}
             <select class="fs" style="width:auto" id="pcf" onchange="renderProds()"><option value="">All Categories</option></select>
             <select class="fs" style="width:auto" id="psf" onchange="renderProds()"><option value="">All Status</option><option value="REORDER">Reorder needed</option><option value="OK">OK</option></select>
             <button class="btn" onclick="nav('scan')">&#128247; Scan</button>
+            <button class="btn" onclick="exportProdsXLSX()" title="Download filtered product list as Excel">&#8595; Excel</button>
+            <button class="btn" onclick="printProds()" title="Print product grid as currently shown">&#128438; Print</button>
             <button class="btn btn-p" onclick="openAP()">+ Add Product</button>
           </div>
           <div class="pg" id="pgrid"><div class="tm">Loading...</div></div>
@@ -1461,6 +1463,186 @@ function renderProds() {
       </div>
     </div>`).join('');
   g.querySelectorAll('.pc[data-pid]').forEach(el=>el.addEventListener('click',()=>openPD(el.dataset.pid)));
+}
+
+// ─── PRODUCT EXCEL EXPORT ────────────────────────────────────────────────────
+function exportProdsXLSX() {
+  // Collect currently filtered products (same logic as renderProds)
+  const q=(document.getElementById('psrch')?.value||'').toLowerCase();
+  const clf=document.getElementById('pclf')?.value||'';
+  const cf=document.getElementById('pcf')?.value||'';
+  const sf=document.getElementById('psf')?.value||'';
+  const f=AP.filter(p=>{
+    if(q&&!p.name.toLowerCase().includes(q)&&!(p.barcode||'').includes(q)&&!(p.product_code||'').toLowerCase().includes(q)) return false;
+    if(cf&&p.category_id!==cf) return false;
+    if(sf&&p.stock_status!==sf) return false;
+    if(clf==='individual'&&(p.product_type?p.product_type!=='individual':(p.is_variety_pack||parseInt(p.units_per_case||1)>1))) return false;
+    if(clf==='bulk'&&(p.product_type?p.product_type==='individual':(p.is_variety_pack||parseInt(p.units_per_case||1)<=1))) return false;
+    if(clf==='variety'&&(p.product_type?p.product_type!=='variety':!p.is_variety_pack)) return false;
+    return true;
+  });
+  if(!f.length){ toast('No products to export','err'); return; }
+
+  // Build CSV-style data rows then encode as Excel-compatible XML spreadsheet
+  const cols = [
+    { h:'Name',          v:p=>p.name },
+    { h:'Product Code',  v:p=>p.product_code||'' },
+    { h:'Barcode',       v:p=>p.barcode||'' },
+    { h:'Type',          v:p=>p.product_type||'individual' },
+    { h:'Category',      v:p=>p.category_name||'' },
+    { h:'On Hand',       v:p=>p.on_hand_qty??0, num:true },
+    { h:'Status',        v:p=>p.stock_status||'' },
+    { h:'WAC ($)',       v:p=>parseFloat(p.average_cost)||0, num:true },
+    { h:'Sell Price ($)',v:p=>parseFloat(p.selling_price)||0, num:true },
+    { h:'Image URL',     v:p=>p.image_url||'' },
+  ];
+
+  // Build XML spreadsheet (SpreadsheetML — opens natively in Excel)
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const headerRow = '<Row>' + cols.map(c=>`<Cell ss:StyleID="hdr"><Data ss:Type="String">${esc(c.h)}</Data></Cell>`).join('') + '</Row>';
+
+  const dataRows = f.map(p => {
+    return '<Row>' + cols.map(c => {
+      const val = c.v(p);
+      if(c.h === 'Image URL' && val) {
+        // Render as hyperlink cell
+        return `<Cell ss:StyleID="lnk" ss:HRef="${esc(val)}"><Data ss:Type="String">${esc(val)}</Data></Cell>`;
+      }
+      if(c.num) {
+        const n = parseFloat(val);
+        return `<Cell ss:StyleID="num"><Data ss:Type="Number">${isNaN(n)?0:n}</Data></Cell>`;
+      }
+      return `<Cell ss:StyleID="def"><Data ss:Type="String">${esc(val)}</Data></Cell>`;
+    }).join('') + '</Row>';
+  }).join('');
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:x="urn:schemas-microsoft-com:office:excel">
+ <Styles>
+  <Style ss:ID="hdr">
+   <Font ss:Bold="1" ss:Size="11" ss:FontName="Arial"/>
+   <Interior ss:Color="#1E3A5F" ss:Pattern="Solid"/>
+   <Font ss:Bold="1" ss:Color="#FFFFFF" ss:Size="11" ss:FontName="Arial"/>
+   <Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/>
+   <Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#FFFFFF"/></Borders>
+  </Style>
+  <Style ss:ID="def">
+   <Font ss:Size="10" ss:FontName="Arial"/>
+   <Alignment ss:Vertical="Center"/>
+  </Style>
+  <Style ss:ID="num">
+   <Font ss:Size="10" ss:FontName="Arial"/>
+   <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
+   <NumberFormat ss:Format="0.0000"/>
+  </Style>
+  <Style ss:ID="lnk">
+   <Font ss:Size="10" ss:FontName="Arial" ss:Color="#0563C1" ss:Underline="Single"/>
+   <Alignment ss:Vertical="Center"/>
+  </Style>
+ </Styles>
+ <Worksheet ss:Name="Products">
+  <Table ss:DefaultRowHeight="18">
+   <Column ss:Width="220"/>
+   <Column ss:Width="90"/>
+   <Column ss:Width="110"/>
+   <Column ss:Width="80"/>
+   <Column ss:Width="110"/>
+   <Column ss:Width="65"/>
+   <Column ss:Width="75"/>
+   <Column ss:Width="70"/>
+   <Column ss:Width="80"/>
+   <Column ss:Width="200"/>
+   ${headerRow}
+   ${dataRows}
+  </Table>
+  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
+   <FreezePanes/>
+   <FrozenNoSplit/>
+   <SplitHorizontal>1</SplitHorizontal>
+   <TopRowBottomPane>1</TopRowBottomPane>
+   <ActivePane>2</ActivePane>
+  </WorksheetOptions>
+ </Worksheet>
+</Workbook>`;
+
+  // Build filter description for filename
+  const catName = cf ? (AC.find(c=>c.id===cf)?.name||'filtered') : '';
+  const parts = ['Vendentory_Products'];
+  if(clf) parts.push(clf);
+  if(catName) parts.push(catName);
+  if(sf) parts.push(sf);
+  const now = new Date();
+  parts.push(`${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`);
+  const fname = parts.join('_') + '.xls';
+
+  const blob = new Blob([xml], {type:'application/vnd.ms-excel'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = fname;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast(`Exported ${f.length} products to ${fname}`,'ok');
+}
+// ─── PRODUCT PRINT ───────────────────────────────────────────────────────────
+function printProds() {
+  const grid = document.getElementById('pgrid');
+  if(!grid || !grid.children.length) { toast('No products to print','err'); return; }
+  const q = document.getElementById('psrch')?.value||'';
+  const clf = document.getElementById('pclf')?.value||'';
+  const cf = document.getElementById('pcf')?.value||'';
+  const sf = document.getElementById('psf')?.value||'';
+  const catName = cf ? (AC.find(c=>c.id===cf)?.name||'') : '';
+  const filterParts = [];
+  if(q) filterParts.push('Search: "'+q+'"');
+  if(clf) filterParts.push(clf.charAt(0).toUpperCase()+clf.slice(1));
+  if(catName) filterParts.push(catName);
+  if(sf) filterParts.push(sf==='REORDER'?'Reorder Needed':'Status: OK');
+  const subtitle = filterParts.length ? filterParts.join(' \xB7 ') : 'All Products';
+  const count = grid.querySelectorAll('.pc').length;
+  const now = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const styles = Array.from(document.styleSheets)
+    .map(ss=>{try{return Array.from(ss.cssRules).map(r=>r.cssText).join('\n');}catch(e){return '';}})
+    .join('\n');
+  const w = window.open('','_blank','width=1100,height=800');
+  w.document.write('<!DOCTYPE html><html><head>'
+    +'<meta charset="UTF-8">'
+    +'<title>Vendentory Products \u2014 '+subtitle+'</title>'
+    +'<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Syne:wght@600;700&display=swap" rel="stylesheet">'
+    +'<style>'
+    +styles
+    +'*{box-sizing:border-box}'
+    +'body{background:#F1EFE8;font-family:\'DM Sans\',sans-serif;padding:16px;color:#2C2C2A}'
+    +'.print-header{margin-bottom:18px;padding-bottom:12px;border-bottom:2px solid #0F6E56}'
+    +'.print-title{font-family:\'Syne\',sans-serif;font-size:22px;font-weight:700;color:#085041}'
+    +'.print-meta{font-size:12px;color:#888780;margin-top:3px}'
+    +'.pg{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}'
+    +'.pc{background:#fff;border-radius:12px;padding:12px;border:1px solid rgba(0,0,0,0.11);break-inside:avoid}'
+    +'.pi{width:100%;aspect-ratio:1;border-radius:8px;background:#F1EFE8;display:flex;align-items:center;justify-content:center;overflow:hidden;margin-bottom:8px;font-size:28px}'
+    +'.pi img{width:100%;height:100%;object-fit:contain}'
+    +'.badge{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:20px}'
+    +'.b-ok{background:#EAF3DE;color:#3B6D11}'
+    +'.b-red{background:#FCEBEB;color:#A32D2D}'
+    +'.b-low{background:#FAEEDA;color:#BA7517}'
+    +'.b-amber{background:#FAEEDA;color:#BA7517}'
+    +'@media print{'
+    +'body{background:#fff;padding:8px}'
+    +'@page{size:landscape;margin:10mm}'
+    +'.print-header{margin-bottom:12px}'
+    +'.pg{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}'
+    +'.pc{padding:8px;border-radius:8px}}'
+    +'</style></head><body>'
+    +'<div class="print-header">'
+    +'<div class="print-title">\uD83D\uDCE6 Vendentory \u2014 Products</div>'
+    +'<div class="print-meta">'+subtitle+' &nbsp;\xB7&nbsp; '+count+' product'+(count!==1?'s':'')+' &nbsp;\xB7&nbsp; '+now+'</div>'
+    +'</div>'
+    +'<div class="pg">'+grid.innerHTML+'</div>'
+    +'<script>document.querySelectorAll(".pc").forEach(el=>{el.style.cursor="default";el.onclick=null;});<\/script>'
+    +'</body></html>');
+  w.document.close();
+  setTimeout(function(){w.print();},600);
 }
 
 // ─── WAP HELPERS ─────────────────────────────────────────────────────────────
