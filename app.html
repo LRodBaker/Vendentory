@@ -3062,6 +3062,27 @@ async function saveProd() {
     }
     renderProds();
 
+    // ── LIVE CACHE REFRESH: _qty_per_pack ────────────────────────────────────
+    // Re-fetch product_components for the saved product and update the AP cache
+    // immediately — no page reload needed for the next purchase import to get
+    // the correct unit count for this bulk/variety product.
+    if(savedId && (_prodType === 'bulk' || _prodType === 'variety')) {
+      try {
+        const cTok = await getAuthToken();
+        const cResp = await fetch(
+          SURL+'/rest/v1/product_components?pack_product_id=eq.'+savedId+'&select=qty_per_pack',
+          {headers:{'apikey':SKEY,'Authorization':'Bearer '+cTok}}
+        );
+        if(cResp.ok) {
+          const comps = await cResp.json();
+          const totalQty = comps.reduce((s,c)=>s+(c.qty_per_pack||0),0);
+          const apProd = AP.find(x=>(x.id||x.product_id)===savedId);
+          if(apProd) apProd._qty_per_pack = totalQty;
+        }
+      } catch(e) { /* non-fatal — cache will correct on next full load */ }
+    }
+    // ── END LIVE CACHE REFRESH ───────────────────────────────────────────────
+
     // For new bulk/variety products — offer to create & link the individual product(s)
     if(savedId && (_prodType === 'bulk' || _prodType === 'variety')) {
       await maybeOpenIndivSetup(savedId, _prodType, pl.name, pl.category_id);
