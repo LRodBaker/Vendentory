@@ -804,6 +804,35 @@ body.ro #ro-badge{display:flex!important}
   </div>
 </div>
 
+<!-- MODAL: Credit / Refund -->
+<div class="modal-bg" id="m-refund" style="display:none">
+  <div class="modal" style="max-width:640px;max-height:88vh;overflow-y:auto">
+    <div class="modal-title">&#8617; Credit / Refund</div>
+    <button class="mc" onclick="closeM('m-refund')">&#10005;</button>
+    <div id="m-refund-header" style="font-size:13px;color:var(--gray-600);margin-bottom:14px;padding:10px 12px;background:var(--red-light);border-radius:8px;border:1px solid #FCA5A5"></div>
+    <div style="font-size:12px;color:var(--gray-600);margin-bottom:12px">Select the items being returned and enter the quantity. Cost is pre-filled from the original purchase. Only items that were received can be refunded.</div>
+    <div id="m-refund-lines" style="margin-bottom:14px"></div>
+    <div class="fg" style="margin-bottom:12px">
+      <label class="fl">Refund date</label>
+      <input class="fi" type="date" id="refund-date">
+    </div>
+    <div class="fg" style="margin-bottom:14px">
+      <label class="fl">Notes (optional)</label>
+      <input class="fi" id="refund-notes" placeholder="e.g. Item damaged, never shipped, etc.">
+    </div>
+    <div style="background:var(--gray-50);border-radius:8px;padding:10px 12px;margin-bottom:16px;font-size:13px">
+      <div style="display:flex;justify-content:space-between">
+        <span style="color:var(--gray-600)">Credit total:</span>
+        <span id="refund-total" style="font-weight:700;color:var(--red)">$0.00</span>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="closeM('m-refund')">Cancel</button>
+      <button class="btn" id="refund-save-btn" style="background:var(--red);color:#fff;border-color:var(--red)" onclick="saveRefund()">&#8617; Post Refund</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: Add/Edit Product -->
 <div class="modal-bg" id="mprod" style="display:none">
   <div class="modal" style="max-width:600px">
@@ -4563,9 +4592,12 @@ async function loadPurHistory(){
             ?`<button class="btn btn-sm btn-p" data-pid="${p.id}" data-action="receive-pur">&#10003; Receive order</button>`
             :isPartial
             ?`<button class="btn btn-sm" data-pid="${p.id}" data-action="receive-pur" style="background:var(--amber-light);color:var(--amber);border-color:var(--amber)">&#9888; Receive rest</button>`
+            :p.status==='refund'
+            ?`<span style="font-size:11px;color:var(--red);font-weight:600;display:flex;align-items:center;gap:3px">&#8617; Credit/Refund</span>`
             :`<span style="font-size:11px;color:var(--green);font-weight:600;display:flex;align-items:center;gap:3px">&#10003; Received</span>`
           }
           <button class="btn btn-sm" data-pid="${p.id}" data-action="edit-pur" title="${isOrdered?'Edit this order — change quantities or remove items before receiving. Inventory will not post until you mark it received.':'Edit this receipt — adjust quantities if an item was missing, backordered, or refunded. Inventory will be reversed and re-posted with your changes.'}">&#9998; Edit</button>
+          ${(!isOrdered&&!isPartial&&p.status!=='refund')?`<button class="btn btn-sm" data-pid="${p.id}" data-action="refund-pur" title="Issue a credit or return against this purchase" style="background:var(--red-light);color:var(--red);border-color:var(--red)">&#8617; Refund</button>`:''}
           <button class="btn btn-sm" data-pid="${p.id}" data-action="detail-pur">&#9658; Details</button>
           <button class="btn btn-sm btn-d" data-pid="${p.id}" data-plabel="${(p.suppliers?.name||'this purchase').replace(/"/g,'&quot;')}" data-action="del-pur" title="Delete">&#128465;</button>
         </div>
@@ -4646,6 +4678,7 @@ async function loadPurHistory(){
       if(action === 'edit-pur')    editPurchase(pid);
       if(action === 'receive-pur') openReceiveOrder(pid);
       if(action === 'detail-pur')  togglePurLines(pid, btn);
+      if(action === 'refund-pur')  openRefundModal(pid);
     });
   }
 }
@@ -4710,6 +4743,186 @@ async function deletePurchase(id, label) {
     toast('Delete failed: '+e.message, 'err');
   }
 }
+
+// ─── CREDIT / REFUND ─────────────────────────────────────────────────────────
+let _refundPurId = null;
+let _refundLines = []; // [{product_id, name, units_received, unit_cost, refund_qty}]
+
+async function openRefundModal(id) {
+  showL('Loading purchase...');
+  try {
+    const tok = await getAuthToken();
+    const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok};
+
+    // Load purchase header
+    const pResp = await fetch(SURL+'/rest/v1/purchases?id=eq.'+id+'&select=id,purchase_date,invoice_number,status,total_amount,suppliers(name)',{headers:wh});
+    if(!pResp.ok) throw new Error('Could not load purchase');
+    const pArr = await pResp.json();
+    const pur = pArr[0];
+    if(!pur) throw new Error('Purchase not found');
+
+    // Load original purchase lines
+    const lResp = await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+id+'&select=product_id,units_received,unit_cost,line_total,products(name)',{headers:wh});
+    if(!lResp.ok) throw new Error('Could not load purchase lines');
+    const lines = lResp.ok ? await lResp.json() : [];
+
+    hideL();
+    _refundPurId = id;
+
+    // Header info
+    const supName = pur.suppliers?.name || 'Unknown supplier';
+    const invLabel = pur.invoice_number ? ' · Invoice: '+pur.invoice_number : '';
+    document.getElementById('m-refund-header').innerHTML =
+      '<strong>Original purchase:</strong> '+supName+' · '+fmtD(pur.purchase_date)+invLabel+
+      '<br><strong>Original total:</strong> '+fmt(pur.total_amount);
+
+    // Default refund date to today
+    document.getElementById('refund-date').value = new Date().toISOString().split('T')[0];
+    document.getElementById('refund-notes').value = '';
+
+    // Build refund lines
+    _refundLines = lines.map(l => ({
+      product_id: l.product_id,
+      name: l.products?.name || l.product_id,
+      units_received: l.units_received,
+      unit_cost: parseFloat(l.unit_cost)||0,
+      refund_qty: 0
+    }));
+
+    renderRefundLines();
+    openM('m-refund');
+  } catch(e) {
+    hideL();
+    toast('Error loading purchase: '+e.message, 'err');
+  }
+}
+
+function renderRefundLines() {
+  const el = document.getElementById('m-refund-lines');
+  if(!_refundLines.length){ el.innerHTML='<div class="tm">No line items found on this purchase.</div>'; return; }
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 80px 80px 80px;gap:6px;font-size:11px;font-weight:600;color:var(--gray-400);padding:0 4px;margin-bottom:4px">
+      <div>PRODUCT</div><div style="text-align:right">ORIG QTY</div><div style="text-align:right">UNIT COST</div><div style="text-align:right">RETURN QTY</div>
+    </div>`+
+    _refundLines.map((l,i) => `
+    <div style="display:grid;grid-template-columns:1fr 80px 80px 80px;gap:6px;align-items:center;padding:8px 4px;border-bottom:0.5px solid var(--border)">
+      <div style="font-size:13px;line-height:1.3">${l.name}</div>
+      <div style="font-size:12px;text-align:right;color:var(--gray-600)">${l.units_received}</div>
+      <div style="font-size:12px;text-align:right;color:var(--gray-600)">${fmt(l.unit_cost)}</div>
+      <div style="text-align:right">
+        <input type="number" min="0" max="${l.units_received}" step="1" value="${l.refund_qty}"
+          style="width:70px;text-align:right;font-size:13px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--white)"
+          oninput="updateRefundQty(${i}, this.value)">
+      </div>
+    </div>`).join('');
+
+  updateRefundTotal();
+}
+
+function updateRefundQty(i, val) {
+  const qty = Math.max(0, Math.min(parseInt(val)||0, _refundLines[i].units_received));
+  _refundLines[i].refund_qty = qty;
+  updateRefundTotal();
+}
+
+function updateRefundTotal() {
+  const total = _refundLines.reduce((s,l) => s + (l.refund_qty * l.unit_cost), 0);
+  document.getElementById('refund-total').textContent = '-'+fmt(total);
+}
+
+async function saveRefund() {
+  const refundLines = _refundLines.filter(l => l.refund_qty > 0);
+  if(!refundLines.length){ toast('Enter a return quantity for at least one item','err'); return; }
+
+  const refundDate = document.getElementById('refund-date').value;
+  if(!refundDate){ toast('Select a refund date','err'); return; }
+
+  const notes = document.getElementById('refund-notes').value||'';
+  const creditTotal = refundLines.reduce((s,l) => s + (l.refund_qty * l.unit_cost), 0);
+
+  const btn = document.getElementById('refund-save-btn');
+  btn.disabled = true;
+  btn.textContent = 'Posting...';
+
+  try {
+    const tok = await getAuthToken();
+    const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
+
+    // 1 — Load original purchase header for supplier/invoice reference
+    const pResp = await fetch(SURL+'/rest/v1/purchases?id=eq.'+_refundPurId+'&select=supplier_id,invoice_number',{headers:wh});
+    const pArr = pResp.ok ? await pResp.json() : [];
+    const origPur = pArr[0]||{};
+
+    // 2 — Create refund purchase record (negative total)
+    const refundBody = {
+      supplier_id: origPur.supplier_id||null,
+      invoice_number: origPur.invoice_number ? 'REFUND-'+origPur.invoice_number : null,
+      purchase_date: refundDate,
+      status: 'refund',
+      subtotal_amount: -creditTotal,
+      total_amount: -creditTotal,
+      shipping_cost: 0,
+      tax_amount: 0,
+      extra_costs: 0,
+      discount_amount: 0,
+      notes: 'Credit/refund against purchase '+_refundPurId+(notes?' — '+notes:''),
+      created_by: CU?.id
+    };
+    const rPurResp = await fetch(SURL+'/rest/v1/purchases',{method:'POST',headers:{...wh,'Prefer':'return=representation'},body:JSON.stringify(refundBody)});
+    if(!rPurResp.ok) throw new Error('Could not create refund record');
+    const rPurArr = await rPurResp.json();
+    const refundPurId = (Array.isArray(rPurArr)?rPurArr[0]:rPurArr)?.id;
+    if(!refundPurId) throw new Error('No refund purchase ID returned');
+
+    // 3 — Insert negative purchase_lines (for COGS reports)
+    const purLines = refundLines.map(l => ({
+      purchase_id: refundPurId,
+      product_id: l.product_id,
+      cases: 0,
+      cost_per_case: 0,
+      units_received: -l.refund_qty,
+      unit_cost: l.unit_cost,
+      line_total: -(l.refund_qty * l.unit_cost)
+    }));
+    await fetch(SURL+'/rest/v1/purchase_lines',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(purLines)});
+
+    // 4 — Insert negative inventory_transactions (reduces on-hand)
+    // transaction_type stays 'purchase_receipt' so replayWAC picks it up,
+    // but quantity_change is negative so on-hand drops. replayWAC filters
+    // qty > 0 so WAC is unaffected — correct, refund doesn't change cost/unit.
+    const invTxns = refundLines.map(l => ({
+      product_id: l.product_id,
+      transaction_type: 'purchase_receipt',
+      quantity_change: -l.refund_qty,
+      warehouse_quantity_change: -l.refund_qty,
+      unit_cost: l.unit_cost,
+      transaction_date: refundDate,
+      reference_type: 'purchase',
+      reference_id: refundPurId,
+      notes: 'Refund/credit'+(origPur.invoice_number?' — Invoice '+origPur.invoice_number:'')+(notes?' — '+notes:''),
+      created_by: CU?.id
+    }));
+    await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
+
+    // 5 — Replay WAC for all affected products (on_hand_qty updates; WAC unchanged)
+    const affectedPids = [...new Set(refundLines.map(l=>l.product_id))];
+    for(const pid of affectedPids){ await replayWAC(pid, wh); }
+
+    closeM('m-refund');
+    toast('Refund posted — '+fmt(creditTotal)+' credit, inventory adjusted','ok');
+    await loadProds2();
+    renderProds();
+    loadPurHistory();
+
+  } catch(e) {
+    toast('Refund failed: '+e.message,'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↩ Post Refund';
+  }
+}
+// ─── END CREDIT / REFUND ─────────────────────────────────────────────────────
 
 async function editPurchase(id) {
   showL('Loading purchase...');
