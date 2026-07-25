@@ -4843,10 +4843,25 @@ async function openRefundModal(id) {
     const pur = pArr[0];
     if(!pur) throw new Error('Purchase not found');
 
-    // Load original purchase lines
+    // Load purchase lines — all statuses (ordered, partial, received)
     const lResp = await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+id+'&select=product_id,units_received,unit_cost,line_total,products(name)',{headers:wh});
     if(!lResp.ok) throw new Error('Could not load purchase lines');
     const lines = lResp.ok ? await lResp.json() : [];
+
+    // Load actual units posted to inventory for this purchase (the real received qty)
+    // This handles ordered/partial orders where only some items physically arrived
+    const txnResp = await fetch(
+      SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+id
+        +'&transaction_type=eq.purchase_receipt&select=product_id,quantity_change',
+      {headers:wh}
+    );
+    const txns = txnResp.ok ? await txnResp.json() : [];
+    // Sum positive inventory postings per product (negative = prior refund, skip)
+    const receivedMap = {};
+    for(const t of txns){
+      const q = parseFloat(t.quantity_change)||0;
+      if(q > 0) receivedMap[t.product_id] = (receivedMap[t.product_id]||0) + q;
+    }
 
     hideL();
     _refundPurId = id;
@@ -4854,8 +4869,11 @@ async function openRefundModal(id) {
     // Header info
     const supName = pur.suppliers?.name || 'Unknown supplier';
     const invLabel = pur.invoice_number ? ' · Invoice: '+pur.invoice_number : '';
+    const statusLabel = pur.status === 'ordered' ? ' · <span style="color:var(--amber);font-weight:600">Ordered — only items already in inventory can reduce stock</span>'
+                      : pur.status === 'partial' ? ' · <span style="color:var(--amber);font-weight:600">Partial receipt</span>'
+                      : '';
     document.getElementById('m-refund-header').innerHTML =
-      '<strong>Original purchase:</strong> '+supName+' · '+fmtD(pur.purchase_date)+invLabel+
+      '<strong>Original purchase:</strong> '+supName+' · '+fmtD(pur.purchase_date)+invLabel+statusLabel+
       '<br><strong>Original total:</strong> '+fmt(pur.total_amount);
 
     // Default refund date to today
@@ -4863,13 +4881,20 @@ async function openRefundModal(id) {
     document.getElementById('refund-notes').value = '';
 
     // Build refund lines
-    _refundLines = lines.map(l => ({
-      product_id: l.product_id,
-      name: l.products?.name || l.product_id,
-      units_received: l.units_received,
-      unit_cost: parseFloat(l.unit_cost)||0,
-      refund_qty: 0
-    }));
+    // units_received = units on the purchase line (ordered qty)
+    // units_in_inventory = units actually posted to inventory (what can physically be returned)
+    // For received orders these are the same. For ordered/partial, inventory may be less.
+    _refundLines = lines.map(l => {
+      const inInventory = receivedMap[l.product_id] || 0;
+      return {
+        product_id: l.product_id,
+        name: l.products?.name || l.product_id,
+        units_received: l.units_received,       // ordered qty (for display)
+        units_in_inventory: inInventory,         // actually in stock (caps refund)
+        unit_cost: parseFloat(l.unit_cost)||0,
+        refund_qty: 0
+      };
+    });
 
     renderRefundLines();
     openM('m-refund');
@@ -4884,26 +4909,33 @@ function renderRefundLines() {
   if(!_refundLines.length){ el.innerHTML='<div class="tm">No line items found on this purchase.</div>'; return; }
 
   el.innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 80px 80px 80px;gap:6px;font-size:11px;font-weight:600;color:var(--gray-400);padding:0 4px;margin-bottom:4px">
-      <div>PRODUCT</div><div style="text-align:right">ORIG QTY</div><div style="text-align:right">UNIT COST</div><div style="text-align:right">RETURN QTY</div>
+    <div style="display:grid;grid-template-columns:1fr 70px 70px 80px 90px;gap:6px;font-size:11px;font-weight:600;color:var(--gray-400);padding:0 4px;margin-bottom:4px">
+      <div>PRODUCT</div><div style="text-align:right">ORDERED</div><div style="text-align:right">IN STOCK</div><div style="text-align:right">UNIT COST</div><div style="text-align:right">RETURN QTY</div>
     </div>`+
-    _refundLines.map((l,i) => `
-    <div style="display:grid;grid-template-columns:1fr 80px 80px 80px;gap:6px;align-items:center;padding:8px 4px;border-bottom:0.5px solid var(--border)">
-      <div style="font-size:13px;line-height:1.3">${l.name}</div>
+    _refundLines.map((l,i) => {
+      const maxQty = l.units_in_inventory;
+      const creditOnly = maxQty === 0;
+      return `
+    <div style="display:grid;grid-template-columns:1fr 70px 70px 80px 90px;gap:6px;align-items:center;padding:8px 4px;border-bottom:0.5px solid var(--border);${creditOnly?'opacity:0.5':''}">
+      <div style="font-size:13px;line-height:1.3">${l.name}${creditOnly?' <span style="font-size:10px;color:var(--amber)">(credit only — not in inventory)</span>':''}</div>
       <div style="font-size:12px;text-align:right;color:var(--gray-600)">${l.units_received}</div>
+      <div style="font-size:12px;text-align:right;color:var(--gray-600);font-weight:${maxQty>0?'600':'400'}">${maxQty}</div>
       <div style="font-size:12px;text-align:right;color:var(--gray-600)">${fmt(l.unit_cost)}</div>
       <div style="text-align:right">
-        <input type="number" min="0" max="${l.units_received}" step="1" value="${l.refund_qty}"
+        <input type="number" min="0" max="${maxQty}" step="1" value="${l.refund_qty}"
           style="width:70px;text-align:right;font-size:13px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--white)"
+          ${creditOnly?'disabled title="No inventory posted for this item"':''}
           oninput="updateRefundQty(${i}, this.value)">
       </div>
-    </div>`).join('');
+    </div>`;
+    }).join('');
 
   updateRefundTotal();
 }
 
 function updateRefundQty(i, val) {
-  const qty = Math.max(0, Math.min(parseInt(val)||0, _refundLines[i].units_received));
+  const max = _refundLines[i].units_in_inventory;
+  const qty = Math.max(0, Math.min(parseInt(val)||0, max));
   _refundLines[i].refund_qty = qty;
   updateRefundTotal();
 }
@@ -4969,23 +5001,29 @@ async function saveRefund() {
     }));
     await fetch(SURL+'/rest/v1/purchase_lines',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(purLines)});
 
-    // 4 — Insert negative inventory_transactions (reduces on-hand)
+    // 4 — Insert negative inventory_transactions ONLY for items actually in inventory
+    // Items on ordered/partial orders that were never received don't touch inventory —
+    // they get a purchase credit record only (already handled in step 3).
     // transaction_type stays 'purchase_receipt' so replayWAC picks it up,
     // but quantity_change is negative so on-hand drops. replayWAC filters
-    // qty > 0 so WAC is unaffected — correct, refund doesn't change cost/unit.
-    const invTxns = refundLines.map(l => ({
-      product_id: l.product_id,
-      transaction_type: 'purchase_receipt',
-      quantity_change: -l.refund_qty,
-      warehouse_quantity_change: -l.refund_qty,
-      unit_cost: l.unit_cost,
-      transaction_date: refundDate,
-      reference_type: 'purchase',
-      reference_id: refundPurId,
-      notes: 'Refund/credit'+(origPur.invoice_number?' — Invoice '+origPur.invoice_number:'')+(notes?' — '+notes:''),
-      created_by: CU?.id
-    }));
-    await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
+    // qty > 0 so WAC is unaffected — correct, a refund doesn't change cost/unit.
+    const invTxns = refundLines
+      .filter(l => (l.units_in_inventory||0) > 0)
+      .map(l => ({
+        product_id: l.product_id,
+        transaction_type: 'purchase_receipt',
+        quantity_change: -l.refund_qty,
+        warehouse_quantity_change: -l.refund_qty,
+        unit_cost: l.unit_cost,
+        transaction_date: refundDate,
+        reference_type: 'purchase',
+        reference_id: refundPurId,
+        notes: 'Refund/credit'+(origPur.invoice_number?' — Invoice '+origPur.invoice_number:'')+(notes?' — '+notes:''),
+        created_by: CU?.id
+      }));
+    if(invTxns.length){
+      await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
+    }
 
     // 5 — Replay WAC for all affected products (on_hand_qty updates; WAC unchanged)
     const affectedPids = [...new Set(refundLines.map(l=>l.product_id))];
