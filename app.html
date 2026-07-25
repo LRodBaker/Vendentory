@@ -3810,7 +3810,7 @@ async function openSTR(purchaseId) {
     {headers:wh}
   );
   const postedTxns = txnResp.ok ? await txnResp.json() : [];
-  // Sum already-posted units per product
+  // Sum already-posted units per product (keyed by product_id as stored in inventory_transactions)
   const postedMap = {};
   for(const t of postedTxns){
     postedMap[t.product_id] = (postedMap[t.product_id]||0) + Math.abs(t.quantity_change);
@@ -3823,11 +3823,37 @@ async function openSTR(purchaseId) {
     return;
   }
 
+  // For variety/bulk packs, already-posted units live on component product IDs, not the parent.
+  // Fetch components for all lines so we can look up posted units correctly.
+  const compMap = {}; // pack_product_id -> [{ component_product_id, qty_per_pack }]
+  await Promise.all(lines.map(async l=>{
+    const cr = await fetch(
+      SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',
+      {headers:wh}
+    );
+    const comps = cr.ok ? await cr.json() : [];
+    if(comps.length) compMap[l.product_id] = comps;
+  }));
+
   _strLines = lines.map(l=>{
     const casesOrdered = l.cases || 1;
     const unitsPerCase = casesOrdered > 0 ? Math.round(l.units_received / casesOrdered) : l.units_received;
-    const alreadyPostedUnits = postedMap[l.product_id] || 0;
-    const alreadyPostedCases = unitsPerCase > 0 ? Math.round(alreadyPostedUnits / unitsPerCase) : 0;
+
+    // For packs: infer already-posted cases from the first component's posted units
+    let alreadyPostedCases = 0;
+    const comps = compMap[l.product_id];
+    if(comps && comps.length){
+      const tip = comps.reduce((s,x)=>s+x.qty_per_pack, 0);
+      const firstComp = comps[0];
+      const postedOnComp = postedMap[firstComp.component_product_id] || 0;
+      // Each case contributes (qty_per_pack/tip * unitsPerCase) units to this component
+      const unitsPerCaseOnComp = tip > 0 ? Math.round(unitsPerCase * (firstComp.qty_per_pack / tip)) : unitsPerCase;
+      alreadyPostedCases = unitsPerCaseOnComp > 0 ? Math.round(postedOnComp / unitsPerCaseOnComp) : 0;
+    } else {
+      const alreadyPostedUnits = postedMap[l.product_id] || 0;
+      alreadyPostedCases = unitsPerCase > 0 ? Math.round(alreadyPostedUnits / unitsPerCase) : 0;
+    }
+
     return {
       line_id:         l.id,
       product_id:      l.product_id,
@@ -4081,20 +4107,53 @@ async function strDoPost(closeOrder) {
 
     for(const l of linesToPost){
       const newCases = l.cases_confirmed - l.already_posted;
-      const units = newCases * l.units_per_case;
-      invTxns.push({
-        product_id: l.product_id,
-        transaction_type: 'purchase_receipt',
-        transaction_date: now,
-        quantity_change: units,
-        warehouse_quantity_change: units,
-        unit_cost: l.unit_cost,
-        reference_type: 'purchase',
-        reference_id: purId,
-        notes: closeOrder ? 'Received order '+purId.slice(0,8) : 'Partial receipt '+purId.slice(0,8)+' ('+newCases+' of '+l.cases_ordered+' cases)',
-        created_by: CU?.id
-      });
-      wacUpdates.push({product_id:l.product_id, units, unit_cost:l.unit_cost});
+      const totalUnits = newCases * l.units_per_case;
+      const note = closeOrder
+        ? 'Received order '+purId.slice(0,8)
+        : 'Partial receipt '+purId.slice(0,8)+' ('+newCases+' of '+l.cases_ordered+' cases)';
+
+      // Fetch components — variety/bulk packs must explode to individual products
+      const compResp = await fetch(
+        SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',
+        {headers:wh}
+      );
+      const comps = compResp.ok ? await compResp.json() : [];
+
+      if(comps.length){
+        // Variety/bulk pack — distribute units proportionally across components
+        const tip = comps.reduce((s,x)=>s+x.qty_per_pack, 0);
+        for(const c of comps){
+          const cu = tip > 0 ? Math.round(totalUnits * (c.qty_per_pack / tip)) : totalUnits;
+          invTxns.push({
+            product_id: c.component_product_id,
+            transaction_type: 'purchase_receipt',
+            transaction_date: now,
+            quantity_change: cu,
+            warehouse_quantity_change: cu,
+            unit_cost: l.unit_cost,
+            reference_type: 'purchase',
+            reference_id: purId,
+            notes: note,
+            created_by: CU?.id
+          });
+          wacUpdates.push({product_id: c.component_product_id, unit_cost: l.unit_cost});
+        }
+      } else {
+        // Individual product — post directly
+        invTxns.push({
+          product_id: l.product_id,
+          transaction_type: 'purchase_receipt',
+          transaction_date: now,
+          quantity_change: totalUnits,
+          warehouse_quantity_change: totalUnits,
+          unit_cost: l.unit_cost,
+          reference_type: 'purchase',
+          reference_id: purId,
+          notes: note,
+          created_by: CU?.id
+        });
+        wacUpdates.push({product_id: l.product_id, unit_cost: l.unit_cost});
+      }
     }
 
     // Insert inventory transactions
@@ -4103,18 +4162,9 @@ async function strDoPost(closeOrder) {
     });
     if(!txnResp.ok){ hideL(); toast('Error posting inventory','err'); return; }
 
-    // Update WAC for each product
-    for(const u of wacUpdates){
-      const prod = AP.find(p=>p.id===u.product_id);
-      if(!prod) continue;
-      const oldQty = parseFloat(prod.on_hand_qty)||0;
-      const oldWac = parseFloat(prod.average_cost)||0;
-      const newWac = (oldQty*oldWac + u.units*u.unit_cost) / (oldQty + u.units);
-      await fetch(SURL+'/rest/v1/products?id=eq.'+u.product_id,{
-        method:'PATCH', headers:{...wh,'Prefer':'return=minimal'},
-        body:JSON.stringify({average_cost:Math.round(newWac*10000)/10000, last_cost:u.unit_cost, updated_at:now})
-      });
-    }
+    // Replay WAC from DB for every affected product (same as savePur — no stale cache math)
+    const wacProductIds = [...new Set(wacUpdates.map(u=>u.product_id))];
+    await Promise.allSettled(wacProductIds.map(pid=>replayWAC(pid,wh)));
 
     // Update purchase status
     const newStatus = closeOrder ? 'received' : 'partial';
