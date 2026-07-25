@@ -761,7 +761,10 @@ body.ro #ro-badge{display:flex!important}
 
     <!-- Actions -->
     <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;align-items:center">
-      <button class="btn" onclick="strConfirmAll()" style="font-size:13px">&#10003;&#10003; Confirm all items</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" onclick="strConfirmAll()" style="font-size:13px">&#10003;&#10003; Confirm all items</button>
+        <button class="btn" id="str-refund-btn" onclick="strOpenRefund()" style="background:var(--red-light);color:var(--red);border-color:var(--red)">&#8617; Refund</button>
+      </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn" onclick="closeSTR()">Cancel</button>
         <button class="btn" id="str-partial-btn" onclick="strPostPartial()" disabled style="opacity:0.4;background:var(--amber-light);color:var(--amber);border-color:var(--amber)">&#9888; Post partial receipt</button>
@@ -3897,6 +3900,14 @@ function closeSTR() {
   _strLines = [];
 }
 
+function strOpenRefund() {
+  // Close the receive modal and open the refund modal for the same purchase
+  if(!_strPurId){ toast('No order loaded','err'); return; }
+  const pid = _strPurId;
+  closeSTR();
+  openRefundModal(pid);
+}
+
 function strRenderLines() {
   const el = document.getElementById('str-lines');
   const fullyDone = _strLines.filter(l=>l.cases_confirmed>=l.cases_ordered).length;
@@ -4657,7 +4668,7 @@ async function loadPurHistory(){
             Sub: ${fmt(p.subtotal_amount)}${p.shipping_cost>0?' · Ship: '+fmt(p.shipping_cost):''}${p.tax_amount>0?' · Tax: '+fmt(p.tax_amount):''}${p.extra_costs>0?' · Extra: '+fmt(p.extra_costs):''}
           </div>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:nowrap">
+        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">
           <div style="font-size:16px;font-weight:700;font-family:var(--font-head)">${fmt(p.total_amount)}</div>
           ${isOrdered
             ?`<button class="btn btn-sm btn-p" data-pid="${p.id}" data-action="receive-pur">&#10003; Receive order</button>`
