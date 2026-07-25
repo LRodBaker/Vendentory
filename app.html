@@ -4828,7 +4828,7 @@ async function deletePurchase(id, label) {
 
 // ─── CREDIT / REFUND ─────────────────────────────────────────────────────────
 let _refundPurId = null;
-let _refundLines = []; // [{product_id, name, units_received, unit_cost, refund_qty}]
+let _refundLines = []; // [{product_id, name, cases_ordered, cases_in_stock, units_per_case, cost_per_case, unit_cost, refund_cases}]
 
 async function openRefundModal(id) {
   showL('Loading purchase...');
@@ -4844,7 +4844,7 @@ async function openRefundModal(id) {
     if(!pur) throw new Error('Purchase not found');
 
     // Load purchase lines — all statuses (ordered, partial, received)
-    const lResp = await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+id+'&select=product_id,units_received,unit_cost,line_total,products(name)',{headers:wh});
+    const lResp = await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+id+'&select=product_id,cases,cost_per_case,units_received,unit_cost,line_total,products(name)',{headers:wh});
     if(!lResp.ok) throw new Error('Could not load purchase lines');
     const lines = lResp.ok ? await lResp.json() : [];
 
@@ -4880,19 +4880,29 @@ async function openRefundModal(id) {
     document.getElementById('refund-date').value = new Date().toISOString().split('T')[0];
     document.getElementById('refund-notes').value = '';
 
-    // Build refund lines
-    // units_received = units on the purchase line (ordered qty)
-    // units_in_inventory = units actually posted to inventory (what can physically be returned)
-    // For received orders these are the same. For ordered/partial, inventory may be less.
+    // Build refund lines — work in CASES, not individual units
+    // cases_ordered   = how many cases were on the PO
+    // cases_in_stock  = how many cases worth of units are actually in inventory
+    // units_per_case  = units_received / cases (derived)
+    // cost_per_case   = what was paid per case (shown to Rod, used for credit total)
     _refundLines = lines.map(l => {
-      const inInventory = receivedMap[l.product_id] || 0;
+      const casesOrdered = parseInt(l.cases) || 1;
+      const unitsReceived = parseInt(l.units_received) || 0;
+      const unitsPerCase = casesOrdered > 0 ? Math.round(unitsReceived / casesOrdered) : unitsReceived;
+      const costPerCase = parseFloat(l.cost_per_case) || (parseFloat(l.unit_cost)||0) * unitsPerCase;
+      const inInventoryUnits = receivedMap[l.product_id] || 0;
+      // Convert inventory units back to cases — how many full cases can be refunded
+      const casesInStock = unitsPerCase > 0 ? Math.floor(inInventoryUnits / unitsPerCase) : 0;
       return {
-        product_id: l.product_id,
-        name: l.products?.name || l.product_id,
-        units_received: l.units_received,       // ordered qty (for display)
-        units_in_inventory: inInventory,         // actually in stock (caps refund)
-        unit_cost: parseFloat(l.unit_cost)||0,
-        refund_qty: 0
+        product_id:    l.product_id,
+        name:          l.products?.name || l.product_id,
+        cases_ordered: casesOrdered,
+        cases_in_stock: casesInStock,
+        units_per_case: unitsPerCase,
+        cost_per_case:  costPerCase,
+        unit_cost:      parseFloat(l.unit_cost)||0,
+        units_in_inventory: inInventoryUnits,
+        refund_cases:   0   // user enters cases, not units
       };
     });
 
@@ -4909,20 +4919,23 @@ function renderRefundLines() {
   if(!_refundLines.length){ el.innerHTML='<div class="tm">No line items found on this purchase.</div>'; return; }
 
   el.innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 70px 70px 80px 90px;gap:6px;font-size:11px;font-weight:600;color:var(--gray-400);padding:0 4px;margin-bottom:4px">
-      <div>PRODUCT</div><div style="text-align:right">ORDERED</div><div style="text-align:right">IN STOCK</div><div style="text-align:right">UNIT COST</div><div style="text-align:right">RETURN QTY</div>
+    <div style="display:grid;grid-template-columns:1fr 80px 80px 90px 90px;gap:6px;font-size:11px;font-weight:600;color:var(--gray-400);padding:0 4px;margin-bottom:4px">
+      <div>PRODUCT</div><div style="text-align:right">ORDERED</div><div style="text-align:right">IN STOCK</div><div style="text-align:right">COST/CASE</div><div style="text-align:right">RETURN CASES</div>
     </div>`+
     _refundLines.map((l,i) => {
-      const maxQty = l.units_in_inventory;
-      const creditOnly = maxQty === 0;
+      const maxCases = l.cases_in_stock;
+      const creditOnly = maxCases === 0;
       return `
-    <div style="display:grid;grid-template-columns:1fr 70px 70px 80px 90px;gap:6px;align-items:center;padding:8px 4px;border-bottom:0.5px solid var(--border);${creditOnly?'opacity:0.5':''}">
-      <div style="font-size:13px;line-height:1.3">${l.name}${creditOnly?' <span style="font-size:10px;color:var(--amber)">(credit only — not in inventory)</span>':''}</div>
-      <div style="font-size:12px;text-align:right;color:var(--gray-600)">${l.units_received}</div>
-      <div style="font-size:12px;text-align:right;color:var(--gray-600);font-weight:${maxQty>0?'600':'400'}">${maxQty}</div>
-      <div style="font-size:12px;text-align:right;color:var(--gray-600)">${fmt(l.unit_cost)}</div>
+    <div style="display:grid;grid-template-columns:1fr 80px 80px 90px 90px;gap:6px;align-items:center;padding:8px 4px;border-bottom:0.5px solid var(--border);${creditOnly?'opacity:0.5':''}">
+      <div style="font-size:13px;line-height:1.3">${l.name}
+        <div style="font-size:11px;color:var(--gray-400)">${l.units_per_case} units/case · ${fmt(l.unit_cost)}/unit</div>
+        ${creditOnly?'<div style="font-size:10px;color:var(--amber)">credit only — not in inventory</div>':''}
+      </div>
+      <div style="font-size:12px;text-align:right;color:var(--gray-600)">${l.cases_ordered} cases</div>
+      <div style="font-size:12px;text-align:right;color:var(--gray-600);font-weight:${maxCases>0?'600':'400'}">${maxCases} cases</div>
+      <div style="font-size:12px;text-align:right;color:var(--gray-600)">${fmt(l.cost_per_case)}</div>
       <div style="text-align:right">
-        <input type="number" min="0" max="${maxQty}" step="1" value="${l.refund_qty}"
+        <input type="number" min="0" max="${maxCases}" step="1" value="${l.refund_cases}"
           style="width:70px;text-align:right;font-size:13px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--white)"
           ${creditOnly?'disabled title="No inventory posted for this item"':''}
           oninput="updateRefundQty(${i}, this.value)">
@@ -4934,26 +4947,26 @@ function renderRefundLines() {
 }
 
 function updateRefundQty(i, val) {
-  const max = _refundLines[i].units_in_inventory;
-  const qty = Math.max(0, Math.min(parseInt(val)||0, max));
-  _refundLines[i].refund_qty = qty;
+  const max = _refundLines[i].cases_in_stock;
+  const cases = Math.max(0, Math.min(parseInt(val)||0, max));
+  _refundLines[i].refund_cases = cases;
   updateRefundTotal();
 }
 
 function updateRefundTotal() {
-  const total = _refundLines.reduce((s,l) => s + (l.refund_qty * l.unit_cost), 0);
+  const total = _refundLines.reduce((s,l) => s + (l.refund_cases * l.cost_per_case), 0);
   document.getElementById('refund-total').textContent = '-'+fmt(total);
 }
 
 async function saveRefund() {
-  const refundLines = _refundLines.filter(l => l.refund_qty > 0);
+  const refundLines = _refundLines.filter(l => l.refund_cases > 0);
   if(!refundLines.length){ toast('Enter a return quantity for at least one item','err'); return; }
 
   const refundDate = document.getElementById('refund-date').value;
   if(!refundDate){ toast('Select a refund date','err'); return; }
 
   const notes = document.getElementById('refund-notes').value||'';
-  const creditTotal = refundLines.reduce((s,l) => s + (l.refund_qty * l.unit_cost), 0);
+  const creditTotal = refundLines.reduce((s,l) => s + (l.refund_cases * l.cost_per_case), 0);
 
   const btn = document.getElementById('refund-save-btn');
   btn.disabled = true;
@@ -4995,9 +5008,9 @@ async function saveRefund() {
       product_id: l.product_id,
       cases: 0,
       cost_per_case: 0,
-      units_received: -l.refund_qty,
+      units_received: -(l.refund_cases * l.units_per_case),
       unit_cost: l.unit_cost,
-      line_total: -(l.refund_qty * l.unit_cost)
+      line_total: -(l.refund_cases * l.cost_per_case)
     }));
     await fetch(SURL+'/rest/v1/purchase_lines',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(purLines)});
 
@@ -5012,8 +5025,8 @@ async function saveRefund() {
       .map(l => ({
         product_id: l.product_id,
         transaction_type: 'purchase_receipt',
-        quantity_change: -l.refund_qty,
-        warehouse_quantity_change: -l.refund_qty,
+        quantity_change: -(l.refund_cases * l.units_per_case),
+        warehouse_quantity_change: -(l.refund_cases * l.units_per_case),
         unit_cost: l.unit_cost,
         transaction_date: refundDate,
         reference_type: 'purchase',
