@@ -4997,7 +4997,11 @@ async function saveRefund() {
       created_by: CU?.id
     };
     const rPurResp = await fetch(SURL+'/rest/v1/purchases',{method:'POST',headers:{...wh,'Prefer':'return=representation'},body:JSON.stringify(refundBody)});
-    if(!rPurResp.ok) throw new Error('Could not create refund record');
+    if(!rPurResp.ok){
+      let errDetail='Could not create refund record';
+      try{ const e=await rPurResp.json(); errDetail+=' — '+(e?.message||e?.details||e?.hint||JSON.stringify(e)); }catch(ex){}
+      throw new Error(errDetail);
+    }
     const rPurArr = await rPurResp.json();
     const refundPurId = (Array.isArray(rPurArr)?rPurArr[0]:rPurArr)?.id;
     if(!refundPurId) throw new Error('No refund purchase ID returned');
