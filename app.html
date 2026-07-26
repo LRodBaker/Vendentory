@@ -5920,7 +5920,16 @@ async function handleIF(file) {
     impRows = rows;
     impSource = det;
     // Show filename and preview
-    document.getElementById('ifn').textContent = name;
+    // Title reflects what we actually KNOW (detected source + period), not
+    // the raw filename — a filename can be wrong (see the Sandstar file that
+    // was misnamed with the wrong week). Original filename kept as a small
+    // secondary line for audit reference only.
+    const titleMain = det && det.source
+      ? det.source + (det.period ? ' \u2014 ' + fmtD(det.period.start) + ' \u2192 ' + fmtD(det.period.end) : ' \u2014 period unknown')
+      : name;
+    document.getElementById('ifn').innerHTML = det && det.source
+      ? `<div>${titleMain}</div><div style="font-size:11px;font-weight:400;color:var(--gray-400);margin-top:2px">File: ${name}</div>`
+      : titleMain;
     const keys = Object.keys(rows[0]);
     const thead = '<tr>' + keys.map(k=>`<th>${k}</th>`).join('') + '</tr>';
     const tbody = rows.slice(0,10).map(r =>
