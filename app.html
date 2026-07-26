@@ -5837,7 +5837,9 @@ function detectSalesSource(ctx){
       out.reason=has('cst id')?'CSV with a "Cst ID" column'
                               :'CSV with Product / Units / Sales columns';
       // ParLevel stores no dates inside the file — filename is the only source
-      const fm=String(ctx.fileName||'').match(/(\d{2})_(\d{2})_(\d{4})_to_(\d{2})_(\d{2})_(\d{4})/);
+      // Separator-tolerant: filenames vary between "_" and " " around "to"
+      // depending on how the browser/OS reports the dropped file's name.
+      const fm=String(ctx.fileName||'').match(/(\d{2})[-_\s](\d{2})[-_\s](\d{4})[-_\s]+to[-_\s]+(\d{2})[-_\s](\d{2})[-_\s](\d{4})/i);
       if(fm){ out.period={start:fm[3]+'-'+fm[1]+'-'+fm[2],end:fm[6]+'-'+fm[4]+'-'+fm[5]};
               out.dateFrom='file name'; }
       const tr=(ctx.rows||[]).find(r=>String(r[out.cols.product]||'').trim().toLowerCase()==='totals');
