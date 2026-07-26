@@ -6717,21 +6717,33 @@ async function confImport(){
   }
   // ────────────────────────────────────────────────────────────────────────────
 
-  // Fetch any overlapping imports
+  // Fetch any overlapping imports — filtered to the SAME source system.
+  // Without this filter, e.g. Sandstar Jul 5-11 collides with ParLevel Jul 5-11
+  // and gets offered only bookkeeping-only/cancel, silently dropping its units.
   let existingImports=[];
   if(sd&&ed){
+    const srcFilter = impSource&&impSource.source
+      ? '&source_system=eq.'+encodeURIComponent(impSource.source)
+      : '';
     const dupChk=await fetch(
-      SURL+'/rest/v1/sales_imports?report_start_date=lte.'+ed+'&report_end_date=gte.'+sd+'&select=id,report_start_date,report_end_date,imported_at',
+      SURL+'/rest/v1/sales_imports?report_start_date=lte.'+ed+'&report_end_date=gte.'+sd+srcFilter+'&select=id,report_start_date,report_end_date,imported_at',
       {headers:{'apikey':SKEY,'Authorization':'Bearer '+tok0}}
     );
     if(dupChk.ok) existingImports=await dupChk.json()||[];
   }
 
   // Parse the incoming rows now (needed for delta calculation)
-  const pf=fndKey(impRows[0],['Product','product','Item','Name','name']);
-  const uf=fndKey(impRows[0],['Units','units','Qty','qty','Quantity']);
-  const sf2=fndKey(impRows[0],['Sales','sales','Revenue','Amount']);
-  const af=fndKey(impRows[0],['Avg Price','avg price','AvgPrice']);
+  // Prefer the columns identified by detectSalesSource() at file-load time —
+  // it correctly handles Sandstar's real headers (Product Name / Quantity /
+  // Sales Amount / Product Barcode), which fndKey's generic guesses do not.
+  // Fall back to the old guess only if a file was loaded without detection
+  // (e.g. a manually pasted table).
+  const cols = impSource && impSource.cols ? impSource.cols : null;
+  const pf = cols ? cols.product : fndKey(impRows[0],['Product','product','Item','Name','name']);
+  const uf = cols ? cols.units   : fndKey(impRows[0],['Units','units','Qty','qty','Quantity']);
+  const sf2= cols ? cols.sales   : fndKey(impRows[0],['Sales','sales','Revenue','Amount']);
+  const af = cols ? cols.price   : fndKey(impRows[0],['Avg Price','avg price','AvgPrice']);
+  const bf = cols ? cols.barcode : null;
 
   // Build a map of incoming units by raw product name
   const incomingUnits={};
@@ -6742,8 +6754,25 @@ async function confImport(){
     const u=parseFloat((row[uf]||'0').replace(/[^0-9.-]/g,''))||0;
     const s=parseFloat((row[sf2]||'0').replace(/[^0-9.-]/g,''))||0;
     const ap2=parseFloat((row[af]||'0').replace(/[^0-9.-]/g,''))||0;
+    const bc2=bf?(row[bf]||'').toString().trim():'';
     incomingUnits[rn.toLowerCase()]=u;
-    incomingRows.push({rn,u,s,ap2});
+    incomingRows.push({rn,u,s,ap2,bc:bc2});
+  }
+
+  // Shared matcher: barcode first (exact, from product_barcodes/products.barcode),
+  // then existing name-based fallbacks. Barcode match is far more reliable than
+  // name matching, which is why Sandstar files (which carry barcodes) benefit.
+  function matchImportRow(cand,rn,bc){
+    const rnl=rn.toLowerCase();
+    if(bc){
+      let m=cand.find(p=>p.barcode&&String(p.barcode).trim()===bc);
+      if(!m) m=cand.find(p=>p._altBarcodes&&p._altBarcodes.includes(bc));
+      if(m) return m;
+    }
+    let m=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
+    if(!m) m=cand.find(p=>p.name.toLowerCase()===rnl);
+    if(!m) m=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+    return m;
   }
 
   // ── CASE 2: Clean extension — same start date, later end date ───────────────
@@ -6818,7 +6847,7 @@ async function confImport(){
 
     // Create new import record
     const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
-    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
+    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:(impSource&&impSource.source)||'Unknown',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
     if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
     const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
     if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
@@ -6828,11 +6857,9 @@ async function confImport(){
     const lines=[];
     const invTxnsBatch=[];
     const inactiveMatched=[];
-    for(const {rn,u,s,ap2} of incomingRows){
+    for(const {rn,u,s,ap2,bc} of incomingRows){
       const rnl=rn.toLowerCase();
-      let matched=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
-      if(!matched) matched=cand.find(p=>p.name.toLowerCase()===rnl);
-      if(!matched) matched=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+      const matched=matchImportRow(cand,rn,bc);
       if(matched&&matched.is_active===false) inactiveMatched.push({name:rn,product:matched.name});
       const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
       lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
@@ -6896,18 +6923,16 @@ async function confImport(){
     showL('Importing for bookkeeping only...');
     const tok2=await getAuthToken();
     const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
-    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft-bookkeeping',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
+    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:((impSource&&impSource.source)||'Unknown')+'-bookkeeping',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
     if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
     const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
     if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
     const cand=AP.filter(p=>(p.product_type||'')==='individual'&&p.is_active!==false);
     const lines=[];
     const inactiveMatched=[];
-    for(const {rn,u,s,ap2} of incomingRows){
+    for(const {rn,u,s,ap2,bc} of incomingRows){
       const rnl=rn.toLowerCase();
-      let matched=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
-      if(!matched) matched=cand.find(p=>p.name.toLowerCase()===rnl);
-      if(!matched) matched=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+      const matched=matchImportRow(cand,rn,bc);
       if(matched&&matched.is_active===false) inactiveMatched.push({name:rn,product:matched.name});
       const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
       lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
@@ -6947,18 +6972,16 @@ async function confImport(){
     showL('Importing for bookkeeping only...');
     const tok2=await getAuthToken();
     const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
-    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft-bookkeeping',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
+    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:((impSource&&impSource.source)||'Unknown')+'-bookkeeping',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
     if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
     const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
     if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
     const cand=AP.filter(p=>(p.product_type||'')==='individual'&&p.is_active!==false);
     const lines=[];
     const inactiveMatched=[];
-    for(const {rn,u,s,ap2} of incomingRows){
+    for(const {rn,u,s,ap2,bc} of incomingRows){
       const rnl=rn.toLowerCase();
-      let matched=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
-      if(!matched) matched=cand.find(p=>p.name.toLowerCase()===rnl);
-      if(!matched) matched=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+      const matched=matchImportRow(cand,rn,bc);
       if(matched&&matched.is_active===false) inactiveMatched.push({name:rn,product:matched.name});
       const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
       lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
@@ -6977,7 +7000,7 @@ async function confImport(){
   showL('Importing sales data...');
   const tok2=await getAuthToken();
   const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
-  const irResp = await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:'VendSoft',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
+  const irResp = await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:(impSource&&impSource.source)||'Unknown',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
   if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
   const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
   if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
@@ -6985,11 +7008,9 @@ async function confImport(){
   const lines=[];
   const invTxnsBatch=[];
   const inactiveMatched=[];
-  for(const {rn,u,s,ap2} of incomingRows){
+  for(const {rn,u,s,ap2,bc} of incomingRows){
     const rnl=rn.toLowerCase();
-    let matched=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
-    if(!matched) matched=cand.find(p=>p.name.toLowerCase()===rnl);
-    if(!matched) matched=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+    const matched=matchImportRow(cand,rn,bc);
     if(matched&&matched.is_active===false) inactiveMatched.push({name:rn,product:matched.name});
     const wacAtSale=matched?(parseFloat(matched.average_cost)||null):null;
     lines.push({sales_import_id:ir.id,product_id:matched?.id||null,raw_product_name:rn,units_sold:Math.round(u),sales_amount:s,average_price:ap2,unit_cost_at_sale:wacAtSale,period_start_date:sd||null,period_end_date:ed||null});
@@ -7168,7 +7189,7 @@ async function loadIH(){
           <div style="font-weight:600;font-size:13px">${period}</div>
           <div style="font-size:12px;color:var(--gray-400);margin-top:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             <span>Imported ${fmtD(r.imported_at)}</span>
-            ${r.source_system==='VendSoft-bookkeeping'
+            ${String(r.source_system||'').endsWith('-bookkeeping')
               ?'<span style="display:inline-block;font-size:10px;font-weight:600;background:var(--amber-light);color:var(--amber);border:0.5px solid var(--amber);border-radius:4px;padding:1px 6px">&#128203; Bookkeeping only</span>'
               :'<span style="display:inline-block;font-size:10px;font-weight:600;background:var(--teal-light);color:var(--teal-mid);border:0.5px solid var(--teal-mid);border-radius:4px;padding:1px 6px">&#9989; Inventory + bookkeeping</span>'}
           </div>
