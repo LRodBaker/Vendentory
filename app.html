@@ -1031,7 +1031,7 @@ const SKEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZ
 // ═══════════════════════════════════════════════════
 
 let sb = null;
-let CU = null, CP = null, FF = {}, AP = [], AC = [], AS2 = [], PL = [], adjP = null, impRows = [], rScans = [], curRT = 'weekly';
+let CU = null, CP = null, FF = {}, AP = [], AC = [], AS2 = [], PL = [], adjP = null, impRows = [], impSource = null, rScans = [], curRT = 'weekly';
 let camCtx = 'scan'; // 'scan' | 'count'
 let countEntries = []; // [{product_id,name,book_qty,counted_qty,avg_cost}]
 let _pcSnapshot = {}; // {product_id: {on_hand_qty, average_cost}} — locked at modal open
@@ -5793,6 +5793,87 @@ async function loadRAJ(){
 
 function handleDrop(e){e.preventDefault();document.getElementById('idz').style.borderColor='';const f=e.dataTransfer.files[0];if(f)handleIF(f);}
 
+// ─── SALES IMPORT SOURCE DETECTION ─────────────────────────────────────────
+// Identify the VMS that produced a sales file by STRUCTURE, never by filename.
+// Filenames are unreliable: a Sandstar export named "..._07_01_2026_to_07_04_2026"
+// was found to contain 2026-07-12..2026-07-18 data. Content always wins.
+//
+// ParLevel : .csv, headers row 1, has a "Cst ID" column, last row "Totals"
+// Sandstar : .xlsx, data on sheet "Commodity sales reports" (NOT sheet 1),
+//            title row 1, summary row 2, headers row 3, barcodes in column A
+function detectSalesSource(ctx){
+  const out={source:null,sheet:null,headerRow:1,cols:null,period:null,
+             reported:null,dateFrom:null,reason:''};
+  // Sandstar — Excel workbook containing a "Commodity sales reports" sheet
+  if(ctx.isXLS && ctx.sheetNames){
+    const sn=ctx.sheetNames.find(s=>/commodity\s*sales\s*report/i.test(String(s)));
+    if(sn){
+      out.source='Sandstar'; out.sheet=sn; out.headerRow=3;
+      out.cols={product:'Product Name',units:'Quantity',sales:'Sales Amount',
+                price:'Unit Price',barcode:'Product Barcode'};
+      out.reason='Excel workbook with a "'+sn+'" sheet';
+      const ws=ctx.wb&&ctx.wb.Sheets[sn];
+      if(ws){
+        const a1=ws['A1']?String(ws['A1'].v||''):'';
+        const a2=ws['A2']?String(ws['A2'].v||''):'';
+        const dm=a1.match(/(\d{4}-\d{2}-\d{2})[\s\S]*?(\d{4}-\d{2}-\d{2})/);
+        if(dm){ out.period={start:dm[1],end:dm[2]}; out.dateFrom='file contents'; }
+        const um=a2.match(/sold[^0-9]*([\d,]+(?:\.\d+)?)/i);
+        const sm=a2.match(/\$\s*([\d,]+(?:\.\d{1,2})?)/);
+        if(um||sm) out.reported={
+          units:um?Math.round(parseFloat(um[1].replace(/,/g,''))):null,
+          sales:sm?parseFloat(sm[1].replace(/,/g,'')):null};
+      }
+      return out;
+    }
+  }
+  // ParLevel — CSV carrying a "Cst ID" column
+  if(ctx.isCSV && ctx.headerKeys && ctx.headerKeys.length){
+    const has=k=>ctx.headerKeys.some(h=>String(h).trim().toLowerCase()===k);
+    if(has('cst id')||(has('product')&&has('units')&&has('sales'))){
+      out.source='ParLevel'; out.headerRow=1;
+      out.cols={product:'Product',units:'Units',sales:'Sales',
+                price:'Avg Price',barcode:null};
+      out.reason=has('cst id')?'CSV with a "Cst ID" column'
+                              :'CSV with Product / Units / Sales columns';
+      // ParLevel stores no dates inside the file — filename is the only source
+      const fm=String(ctx.fileName||'').match(/(\d{2})_(\d{2})_(\d{4})_to_(\d{2})_(\d{2})_(\d{4})/);
+      if(fm){ out.period={start:fm[3]+'-'+fm[1]+'-'+fm[2],end:fm[6]+'-'+fm[4]+'-'+fm[5]};
+              out.dateFrom='file name'; }
+      const tr=(ctx.rows||[]).find(r=>String(r[out.cols.product]||'').trim().toLowerCase()==='totals');
+      if(tr) out.reported={
+        units:parseFloat(String(tr[out.cols.units]||'').replace(/[^0-9.-]/g,''))||null,
+        sales:parseFloat(String(tr[out.cols.sales]||'').replace(/[^0-9.-]/g,''))||null};
+      return out;
+    }
+  }
+  out.reason='Structure did not match a known VMS export';
+  return out;
+}
+
+// Banner shown above the import preview so the detection is never silent.
+function importDetectBanner(det,fileName){
+  if(!det||!det.source){
+    return `<div style="padding:9px 11px;border-radius:8px;background:var(--bg-danger,#fdeaea);border:0.5px solid var(--red-mid,#a32d2d);margin-bottom:10px;font-size:12px">
+      <strong>Source not recognized.</strong> ${det?det.reason:''}<br>
+      Import is still possible, but the sales source will not be labelled correctly.</div>`;
+  }
+  const rep=det.reported&&(det.reported.units!==null||det.reported.sales!==null)
+    ? `File reports <strong>${det.reported.units!==null?det.reported.units:'?'} units</strong> / <strong>${det.reported.sales!==null?fmt(det.reported.sales):'?'}</strong>`
+    : '';
+  const per=det.period
+    ? `Period <strong>${det.period.start}</strong> to <strong>${det.period.end}</strong> (from ${det.dateFrom})`
+    : `<span style="color:var(--red-mid,#a32d2d)">No period found — set the dates manually</span>`;
+  const warn=det.dateFrom==='file name'
+    ? `<div style="margin-top:5px;color:var(--gray-400)">Dates came from the file name — check them against the report.</div>`
+    : '';
+  return `<div style="padding:9px 11px;border-radius:8px;background:var(--bg-success,#eef6e6);border:0.5px solid var(--teal,#3b6d11);margin-bottom:10px;font-size:12px">
+    <div>Detected source: <strong>${det.source}</strong> &nbsp;·&nbsp; ${det.reason}</div>
+    <div style="margin-top:3px">${per}</div>
+    ${rep?`<div style="margin-top:3px">${rep}</div>`:''}
+    ${warn}</div>`;
+}
+
 async function handleIF(file) {
   if(!file) return;
   const name = file.name || '';
@@ -5801,7 +5882,7 @@ async function handleIF(file) {
   if(!isXLS && !isCSV) { toast('Please select a CSV or Excel (.xlsx/.xls) file','err'); return; }
   showL('Reading file...');
   try {
-    let rows = [];
+    let rows = [], det = null;
     if(isCSV) {
       const text = await new Promise((res, rej) => {
         const r = new FileReader();
@@ -5810,6 +5891,8 @@ async function handleIF(file) {
         r.readAsText(file);
       });
       rows = parseCSV(text);
+      det = detectSalesSource({isCSV:true,fileName:name,
+                               headerKeys:Object.keys(rows[0]||{}),rows});
     } else {
       const buf = await new Promise((res, rej) => {
         const r = new FileReader();
@@ -5818,13 +5901,22 @@ async function handleIF(file) {
         r.readAsArrayBuffer(file);
       });
       const wb = XLSX.read(buf, {type:'array'});
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const raw = XLSX.utils.sheet_to_csv(ws);
-      rows = parseCSV(raw);
+      det = detectSalesSource({isXLS:true,fileName:name,sheetNames:wb.SheetNames,wb});
+      // Use the DETECTED sheet — sheet 1 of a Sandstar workbook is metadata only
+      const sheetName = (det.sheet && wb.Sheets[det.sheet]) ? det.sheet : wb.SheetNames[0];
+      const ws = wb.Sheets[sheetName];
+      // Read as array-of-arrays from the detected header row. Avoids a CSV
+      // round-trip, which breaks on cells containing embedded newlines.
+      const aoa = XLSX.utils.sheet_to_json(ws,{header:1,range:(det.headerRow||1)-1,defval:''});
+      const hdr = (aoa[0]||[]).map(h=>String(h==null?'':h).trim());
+      rows = aoa.slice(1)
+        .filter(r=>r.some(c=>String(c==null?'':c).trim()!==''))
+        .map(r=>{const o={};hdr.forEach((h,i)=>{if(h)o[h]=r[i]==null?'':String(r[i]);});return o;});
     }
     hideL();
     if(!rows.length) { toast('No data rows found in file','err'); return; }
     impRows = rows;
+    impSource = det;
     // Show filename and preview
     document.getElementById('ifn').textContent = name;
     const keys = Object.keys(rows[0]);
@@ -5833,10 +5925,19 @@ async function handleIF(file) {
       '<tr>' + keys.map(k=>`<td>${r[k]||''}</td>`).join('') + '</tr>'
     ).join('');
     document.getElementById('ipt').innerHTML =
+      importDetectBanner(det,name) +
       `<table class="tbl" style="font-size:12px"><thead>${thead}</thead><tbody>${tbody}</tbody></table>` +
       (rows.length > 10 ? `<div style="font-size:12px;color:var(--gray-400);padding:6px 0">Showing first 10 of ${rows.length} rows</div>` : '');
+    // Pre-fill the report period from the file when we found one
+    if(det && det.period){
+      const sEl=document.getElementById('isd'), eEl=document.getElementById('ied');
+      if(sEl) sEl.value=det.period.start;
+      if(eEl) eEl.value=det.period.end;
+    }
     document.getElementById('ipa').style.display = 'block';
-    toast('File loaded — set the report period dates then confirm','ok');
+    toast(det&&det.source?(det.source+' file loaded — check the period, then confirm')
+                         :'File loaded — set the report period dates then confirm',
+          det&&det.source?'ok':'err');
   } catch(e) {
     hideL();
     toast('Could not read file: ' + e.message, 'err');
