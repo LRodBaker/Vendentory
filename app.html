@@ -7087,14 +7087,25 @@ function showUnmatchedModal(unmatched) {
     const esc=l.raw_product_name.replace(/\\/g,'\\\\  ').replace(/'/g,"\\'").replace(/"/g,'&quot;');
     const guessHTML=guess
       ?`<div style="font-size:12px;color:var(--gray-400);margin-top:3px">Best guess: <strong>${guess.name}</strong></div>
-        <button class="btn btn-sm btn-p" style="margin-top:6px" onclick="fixUnmatched('${guess.id}','${esc}',${i})">&#128295; Fix &amp; apply inventory</button>`
+        <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <button class="btn btn-sm btn-p" id="um-btn-${i}" onclick="fixUnmatched('${guess.id}','${esc}',${i})">&#128295; Fix &amp; apply inventory</button>
+          <button class="btn btn-sm" onclick="um_showAlt(${i})">Not this \u2014 choose different</button>
+        </div>
+        <div id="um-alt-${i}" style="display:none;margin-top:6px;gap:6px;flex-wrap:wrap">
+          <select class="fs" style="font-size:12px;padding:4px 8px;flex:1;min-width:160px" id="um-sel-${i}">
+            <option value="">Select product...</option>
+            ${AP.filter(p=>p.product_type==='individual'&&p.is_active!==false).map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}
+          </select>
+          <button class="btn btn-sm btn-p" onclick="fixUnmatchedFromSel(${i},'${esc}')">&#128295; Fix &amp; apply</button>
+          <button class="btn btn-sm" onclick="closeM('m-unmatched');openAP()">+ New product</button>
+        </div>`
       :`<div style="font-size:12px;color:var(--gray-400);margin-top:3px">No close match — pick below or add a new product.</div>
         <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
           <select class="fs" style="font-size:12px;padding:4px 8px;flex:1;min-width:160px" id="um-sel-${i}">
             <option value="">Select product...</option>
             ${AP.filter(p=>p.product_type==='individual'&&p.is_active!==false).map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}
           </select>
-          <button class="btn btn-sm btn-p" onclick="fixUnmatchedFromSel(${i},'${esc}')">&#128295; Fix &amp; apply</button>
+          <button class="btn btn-sm btn-p" id="um-btn-${i}" onclick="fixUnmatchedFromSel(${i},'${esc}')">&#128295; Fix &amp; apply</button>
           <button class="btn btn-sm" onclick="closeM('m-unmatched');openAP()">+ New product</button>
         </div>`;
     return`<div style="border:0.5px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px;${guess?'border-left:3px solid var(--amber)':'border-left:3px solid var(--red)'}">
@@ -7111,6 +7122,15 @@ function showUnmatchedModal(unmatched) {
   openM('m-unmatched');
 }
 
+function um_showAlt(i){
+  const el=document.getElementById('um-alt-'+i);
+  if(el) el.style.display='flex';
+}
+
+// Rows already fixed this session — prevents a second click from posting
+// a duplicate inventory_transactions deduction for the same units.
+let _unmatchedFixedRows = new Set();
+
 function fixUnmatchedFromSel(rowIndex, vmsName) {
   const sel=document.getElementById('um-sel-'+rowIndex);
   if(!sel||!sel.value){toast('Select a product first','err');return;}
@@ -7118,8 +7138,12 @@ function fixUnmatchedFromSel(rowIndex, vmsName) {
 }
 
 async function fixUnmatched(productId, vmsName, rowIndex) {
+  if(_unmatchedFixedRows.has(rowIndex)){ toast('Already fixed','warn'); return; }
   const prod=AP.find(p=>p.id===productId||p.product_id===productId);
   if(!prod){toast('Product not found','err');return;}
+  _unmatchedFixedRows.add(rowIndex);
+  const btn=document.getElementById('um-btn-'+rowIndex);
+  if(btn){ btn.disabled=true; btn.textContent='Applying...'; }
   showL('Fixing '+vmsName+'...');
   const tok=await getAuthToken();
   const wh={'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'};
@@ -7164,6 +7188,9 @@ async function fixUnmatched(productId, vmsName, rowIndex) {
   hideL();
   const statusEl=document.getElementById('um-status-'+rowIndex);
   if(statusEl) statusEl.style.display='block';
+  if(btn) btn.style.display='none';
+  const altEl=document.getElementById('um-alt-'+rowIndex);
+  if(altEl) altEl.style.display='none';
   const totalUnits=matchingLines.reduce((s,l)=>s+Math.round(l.units_sold||0),0);
   toast('Fixed! Alias saved · '+totalUnits+' units applied to inventory','ok');
   await loadProds2();
