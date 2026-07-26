@@ -1649,6 +1649,32 @@ async function fetchWAP(productId, wh) {
   if(totalUnits <= 0) return null;
   return totalSales / totalUnits;
 }
+// Bulk WAP for many products in ONE request. Identical math to fetchWAP():
+// SUM(sales_amount) / SUM(units_sold) per product over the rolling window.
+// Never average the average_price column — that ignores unit weighting.
+// Returns {product_id: wap}. Products absent from the map had no sales.
+async function fetchWAPBulk(wh) {
+  const days = await getWAPRollingDays();
+  const since = new Date(Date.now() - days*24*60*60*1000).toISOString().slice(0,10);
+  const r = await fetch(
+    SURL+'/rest/v1/sales_lines?period_end_date=gte.'+since
+      +'&product_id=not.is.null'
+      +'&select=product_id,units_sold,sales_amount',
+    {headers:wh}
+  );
+  if(!r.ok) return {};
+  const rows = await r.json();
+  const agg = {};
+  for(const x of rows){
+    const k = x.product_id;
+    if(!agg[k]) agg[k] = {u:0, s:0};
+    agg[k].u += parseFloat(x.units_sold)||0;
+    agg[k].s += parseFloat(x.sales_amount)||0;
+  }
+  const out = {};
+  for(const k in agg){ if(agg[k].u > 0) out[k] = agg[k].s / agg[k].u; }
+  return out;
+}
 // ─── END WAP HELPERS ─────────────────────────────────────────────────────────
 
 // Store the currently viewed product ID so the Edit button always has the right target
@@ -7593,10 +7619,23 @@ function renderSalesRpt(rows,label){
     </div>`;
 }
 
-function loadInvRpt(){
-  const tv=AP.filter(p=>p.product_type==='individual').reduce((s,p)=>s+(parseFloat(p.inventory_value)||0),0);
-  window._invRptData={products:AP.filter(p=>p.product_type==='individual'),tv};
-  document.getElementById('rc').innerHTML=rHdr([['Total value',fmt(tv)],['Products',AP.filter(p=>p.product_type==='individual').length],['Need reorder',AP.filter(p=>p.product_type==='individual'&&p.stock_status==='REORDER').length],['Active',AP.filter(p=>p.product_type==='individual'&&p.is_active).length]])+
+async function loadInvRpt(){
+  const inds=AP.filter(p=>p.product_type==='individual');
+  const tv=inds.reduce((s,p)=>s+(parseFloat(p.inventory_value)||0),0);
+  // Margin MUST come from WAP, never selling_price. One bulk request for all products.
+  let wapDays=90;
+  try{
+    const tok=await getAuthToken();
+    wapDays=await getWAPRollingDays();
+    const wapMap=await fetchWAPBulk({'apikey':SKEY,'Authorization':'Bearer '+tok});
+    inds.forEach(p=>{ const w=wapMap[p.id]; p._wap=(w===undefined?null:w); });
+  }catch(e){
+    console.warn('WAP bulk fetch failed — margin column will show as unavailable',e);
+    inds.forEach(p=>{ p._wap=null; });
+  }
+  window._invRptData={products:inds,tv,wapDays};
+  const nMargin=inds.filter(p=>p._wap!==null&&p._wap>0&&(parseFloat(p.average_cost)||0)>0).length;
+  document.getElementById('rc').innerHTML=rHdr([['Total value',fmt(tv)],['Products',inds.length],['Need reorder',inds.filter(p=>p.stock_status==='REORDER').length],['Active',inds.filter(p=>p.is_active).length],['Margin available',nMargin+' of '+inds.length]])+
     `<div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
         <div>
@@ -7608,8 +7647,15 @@ function loadInvRpt(){
           <button class="btn btn-sm btn-p" onclick="downloadInvRptPDF()">&#128196; PDF</button>
         </div>
       </div>
-      <table class="tbl" id="inv-rpt-table"><thead><tr><th>#</th><th>Product</th><th>On hand</th><th>Avg cost</th><th>Price</th><th>Value</th><th>Margin</th><th>Status</th></tr></thead><tbody>
-      ${AP.filter(p=>p.product_type==='individual').map((p,i)=>{const m=p.selling_price>0&&p.average_cost>0?(((p.selling_price-p.average_cost)/p.selling_price)*100).toFixed(1):0;return`<tr><td style="color:var(--g400);font-weight:600">${i+1}</td><td><strong>${p.name}</strong></td><td>${p.on_hand_qty}</td><td>${fmt(p.average_cost)}</td><td>${fmt(p.selling_price)}</td><td>${fmt(p.inventory_value)}</td><td class="${m>=40?'tg':m>=20?'ta':'tr'}">${m}%</td><td><span class="badge ${p.stock_status==='REORDER'?'b-red':'b-ok'}">${p.stock_status}</span></td></tr>`;}).join('')}
+      <table class="tbl" id="inv-rpt-table"><thead><tr><th>#</th><th>Product</th><th>On hand</th><th>Avg cost</th><th>Avg sell (${wapDays}d)</th><th>Value</th><th>Margin</th><th>Status</th></tr></thead><tbody>
+      ${inds.map((p,i)=>{
+        const w=p._wap, wac=parseFloat(p.average_cost)||0;
+        const hasM=(w!==null&&w>0&&wac>0);
+        const mv=hasM?((w-wac)/w)*100:null;
+        const mTxt=hasM?mv.toFixed(1)+'%':(w===null?(wac>0?'No sales '+wapDays+'d':'\u2014'):'Check cost');
+        const mCls=hasM?(mv>=40?'tg':mv>=20?'ta':'tr'):(w!==null?'ta':'');
+        return`<tr><td style="color:var(--g400);font-weight:600">${i+1}</td><td><strong>${p.name}</strong></td><td>${p.on_hand_qty}</td><td>${fmt(p.average_cost)}</td><td>${w!==null?fmt(w):'\u2014'}</td><td>${fmt(p.inventory_value)}</td><td class="${mCls}">${mTxt}</td><td><span class="badge ${p.stock_status==='REORDER'?'b-red':'b-ok'}">${p.stock_status}</span></td></tr>`;
+      }).join('')}
       </tbody></table>
     </div>`;
 }
