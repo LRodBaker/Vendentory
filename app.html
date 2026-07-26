@@ -3402,7 +3402,6 @@ async function lookupBC() {
       </div>`;
     }
   } else {
-    const mg=prod.selling_price>0&&prod.average_cost>0?(((prod.selling_price-prod.average_cost)/prod.selling_price)*100).toFixed(1):'—';
     re.style.display='block';
     re.innerHTML=`<div class="card" style="margin-bottom:11px">
       <div style="display:grid;grid-template-columns:68px 1fr auto;gap:13px;align-items:center">
@@ -3410,7 +3409,7 @@ async function lookupBC() {
           ${prod.image_url?`<img src="${prod.image_url}" style="width:100%;height:100%;object-fit:cover;border-radius:8px">`:' &#128230;'}</div>
         <div>
           <div style="font-size:15px;font-weight:700;margin-bottom:2px">${prod.name}</div>
-          <div style="font-size:12px;color:var(--gray-400)">Cost: ${fmt(prod.average_cost)} · Price: ${fmt(prod.selling_price)} · Margin: ${mg}%</div>
+          <div style="font-size:12px;color:var(--gray-400)">Cost: ${fmt(prod.average_cost)} · <span id="scan-wap" data-pid="${prod.id}">Avg sell: &hellip;</span></div>
         </div>
         <div style="text-align:right">
           <div style="font-size:22px;font-weight:800;font-family:var(--font-head);color:${prod.on_hand_qty<=prod.reorder_point?'var(--red-mid)':'var(--teal)'}">${prod.on_hand_qty}</div>
@@ -3428,6 +3427,26 @@ async function lookupBC() {
     rScans.unshift({barcode:bc,name:prod.name,status:prod.stock_status,product_id:prod.id});
     if(rScans.length>10)rScans.pop();
     renderRsc();
+    // Fill WAP + margin after render so the scan card appears instantly.
+    // Margin MUST come from WAP, never selling_price. data-pid guards against
+    // a slow response overwriting a newer scan.
+    (async()=>{
+      const el=document.getElementById('scan-wap');
+      if(!el||el.dataset.pid!==prod.id)return;
+      try{
+        const tok=await getAuthToken();
+        const days=await getWAPRollingDays();
+        const w=await fetchWAP(prod.id,{'apikey':SKEY,'Authorization':'Bearer '+tok});
+        const wac=parseFloat(prod.average_cost)||0;
+        const e2=document.getElementById('scan-wap');
+        if(!e2||e2.dataset.pid!==prod.id)return;
+        if(w===null){e2.textContent='Avg sell ('+days+'d): \u2014 · No sales';return;}
+        e2.textContent='Avg sell ('+days+'d): '+fmt(w)+' · Margin: '+(wac>0?(((w-wac)/w)*100).toFixed(1)+'%':'check cost');
+      }catch(e){
+        const e3=document.getElementById('scan-wap');
+        if(e3&&e3.dataset.pid===prod.id)e3.textContent='Avg sell: unavailable';
+      }
+    })();
   }
   document.getElementById('si').value='';
 }
