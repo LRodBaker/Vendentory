@@ -8020,16 +8020,18 @@ function downloadSalesRptPDF(){
 function downloadInvRptPDF(){
   const d=window._invRptData;
   if(!d){toast('Run the report first','err');return;}
-  const {products,tv}=d;
+  const {products,tv,wapDays=90}=d;
   const fmtN=v=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(parseFloat(v)||0);
   const body=products.map((p,i)=>{
-    const m=p.selling_price>0&&p.average_cost>0?(((p.selling_price-p.average_cost)/p.selling_price)*100).toFixed(1):0;
-    return`<tr><td>${i+1}</td><td><strong>${p.name}</strong></td><td>${p.on_hand_qty}</td><td>${fmtN(p.average_cost)}</td><td>${fmtN(p.selling_price)}</td><td>${fmtN(p.inventory_value)}</td><td>${m}%</td><td>${p.stock_status}</td></tr>`;
+    const w=p._wap, wac=parseFloat(p.average_cost)||0;
+    const hasM=(w!==null&&w!==undefined&&w>0&&wac>0);
+    const mTxt=hasM?(((w-wac)/w)*100).toFixed(1)+'%':((w===null||w===undefined)?(wac>0?'No sales '+wapDays+'d':'\u2014'):'Check cost');
+    return`<tr><td>${i+1}</td><td><strong>${p.name}</strong></td><td>${p.on_hand_qty}</td><td>${fmtN(p.average_cost)}</td><td>${(w===null||w===undefined)?'\u2014':fmtN(w)}</td><td>${fmtN(p.inventory_value)}</td><td>${mTxt}</td><td>${p.stock_status}</td></tr>`;
   }).join('');
   _buildRptPDF(
     'Inventory Valuation \u2014 '+new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}),
-    [['Total Value',fmtN(tv)],['Products',String(products.length)],['Need Reorder',String(products.filter(p=>p.stock_status==='REORDER').length)],['Active',String(products.filter(p=>p.is_active).length)]],
-    ['#','Product','On Hand','Avg Cost','Price','Value','Margin','Status'],
+    [['Total Value',fmtN(tv)],['Products',String(products.length)],['Need Reorder',String(products.filter(p=>p.stock_status==='REORDER').length)],['Active',String(products.filter(p=>p.is_active).length)],['Margin Available',products.filter(p=>p._wap!==null&&p._wap!==undefined&&p._wap>0&&(parseFloat(p.average_cost)||0)>0).length+' of '+products.length]],
+    ['#','Product','On Hand','Avg Cost','Avg Sell ('+wapDays+'d)','Value','Margin','Status'],
     body,'Inventory_Valuation.pdf'
   );
 }
