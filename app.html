@@ -6773,11 +6773,21 @@ async function confImport(){
   // Shared matcher: barcode first (exact, from product_barcodes/products.barcode),
   // then existing name-based fallbacks. Barcode match is far more reliable than
   // name matching, which is why Sandstar files (which carry barcodes) benefit.
+  // Normalize a barcode for comparison: digits only, leading zeros stripped.
+  // Sandstar sends the same UPC padded and unpadded within a single file
+  // (017082110725 vs 17082110725). Returns '' for anything too short to be
+  // a real barcode, so junk/blank values can never match each other.
+  function normBC(v){
+    const d=String(v==null?'':v).replace(/\D/g,'').replace(/^0+/,'');
+    return d.length>=6?d:'';
+  }
+
   function matchImportRow(cand,rn,bc){
     const rnl=rn.toLowerCase();
-    if(bc){
-      let m=cand.find(p=>p.barcode&&String(p.barcode).trim()===bc);
-      if(!m) m=cand.find(p=>p._altBarcodes&&p._altBarcodes.includes(bc));
+    const bcn=normBC(bc);
+    if(bcn){
+      let m=cand.find(p=>normBC(p.barcode)===bcn);
+      if(!m) m=cand.find(p=>p._altBarcodes&&p._altBarcodes.some(b=>normBC(b)===bcn));
       if(m) return m;
     }
     let m=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
