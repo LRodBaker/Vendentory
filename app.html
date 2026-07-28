@@ -4157,6 +4157,22 @@ async function strDoPost(closeOrder) {
     const linesToPost = _strLines.filter(l=>l.cases_confirmed > l.already_posted);
     if(!linesToPost.length){ hideL(); toast('Nothing new to post','err'); return; }
 
+    // ── PRE-COUNT WALL ────────────────────────────────────────────────────────
+    // Scanning to receive a purchase dated before the last physical count posts
+    // inventory on top of a count that already includes those units — a silent
+    // double-count. The other three receive paths guard this; this one did not.
+    // Block and redirect to Purchases, where markPurReceived() asks whether the
+    // goods were included in the count rather than assuming either way.
+    const {data:strPurHdr} = await dbFetch('purchases',{select:'purchase_date',filters:{'id':'eq.'+purId}});
+    const strPurDate = strPurHdr && strPurHdr[0] ? strPurHdr[0].purchase_date : null;
+    const strLastCount = await getLastCountDate();
+    if(strPurDate && strLastCount && strPurDate < strLastCount){
+      hideL();
+      toast('\u26D4 Blocked \u2014 purchase dated '+fmtD(strPurDate)+' is before your last count on '+fmtD(strLastCount)+'. Receive it from the Purchases screen, which will ask whether these units were already counted.','err');
+      return;
+    }
+    // ── END PRE-COUNT WALL ────────────────────────────────────────────────────
+
     const invTxns = [];
     const wacUpdates = [];
     const now = new Date().toISOString();
