@@ -6782,17 +6782,26 @@ async function confImport(){
     return d.length>=6?d:'';
   }
 
+  // Normalize a name for comparison: lowercase, collapse any run of whitespace
+  // to a single space, trim the ends. Rod pastes product names from Sam's Club
+  // and Amazon listings so purchase matching works, and those carry double
+  // spaces. Without this, split(' ') emits an empty token and the 3-word prefix
+  // below collapses to "red bull " — a wildcard matching every Red Bull product.
+  function normWS(v){
+    return String(v==null?'':v).toLowerCase().replace(/\s+/g,' ').trim();
+  }
+
   function matchImportRow(cand,rn,bc){
-    const rnl=rn.toLowerCase();
+    const rnl=normWS(rn);
     const bcn=normBC(bc);
     if(bcn){
       let m=cand.find(p=>normBC(p.barcode)===bcn);
       if(!m) m=cand.find(p=>p._altBarcodes&&p._altBarcodes.some(b=>normBC(b)===bcn));
       if(m) return m;
     }
-    let m=cand.find(p=>p._aliases&&p._aliases.some(a=>a===rnl));
-    if(!m) m=cand.find(p=>p.name.toLowerCase()===rnl);
-    if(!m) m=cand.find(p=>p.name.toLowerCase().includes(rnl)||rnl.includes(p.name.toLowerCase().split(' ').slice(0,3).join(' ')));
+    let m=cand.find(p=>p._aliases&&p._aliases.some(a=>normWS(a)===rnl));
+    if(!m) m=cand.find(p=>normWS(p.name)===rnl);
+    if(!m) m=cand.find(p=>normWS(p.name).includes(rnl)||rnl.includes(normWS(p.name).split(' ').slice(0,3).join(' ')));
     return m;
   }
 
