@@ -7094,7 +7094,7 @@ function showUnmatchedModal(unmatched) {
     const words=vmsName.toLowerCase().split(/\s+/).filter(w=>w.length>2);
     let best=null, bestScore=0;
     AP.forEach(p=>{
-      if((p.product_type||'')=='bulk')return;
+      if((p.product_type||'')!=='individual'||p.is_active===false)return;
       const pWords=p.name.toLowerCase().split(/\s+/);
       const score=words.filter(w=>pWords.some(pw=>pw.includes(w)||w.includes(pw))).length;
       if(score>bestScore){bestScore=score;best=p;}
