@@ -7117,10 +7117,24 @@ function showUnmatchedModal(unmatched) {
 
   function bestGuess(vmsName) {
     const words=vmsName.toLowerCase().split(/\s+/).filter(w=>w.length>2);
+    // ── BRAND GATE ───────────────────────────────────────────────────────────
+    // The leading token of a VMS name is effectively always the brand. Without
+    // this, a candidate can clear the >=2 threshold on purely generic tokens:
+    // "Lesser Evil Popcorn Himalayan Gold 0.65 oz" scored 2 against "SkinnyPop
+    // Original Popcorn Snack Bags, 0.65 oz" on "popcorn" and "0.65" alone, with
+    // zero brand agreement. Raising the threshold would not fix that; weighting
+    // the brand does. Substring both directions so "lesser" still reaches
+    // "LesserEvil" and "skinnypop" still reaches "Skinny Pop".
+    // A suppressed guess costs one dropdown selection. An accepted wrong guess
+    // writes a permanent alias. Bias to silence.
+    const brand=words[0]||'';
     let best=null, bestScore=0;
     AP.forEach(p=>{
       if((p.product_type||'')!=='individual'||p.is_active===false)return;
-      const pWords=p.name.toLowerCase().split(/\s+/);
+      const pn=p.name.toLowerCase();
+      const pFirst=pn.split(/\s+/)[0]||'';
+      if(brand && !pn.includes(brand) && !(pFirst && brand.includes(pFirst))) return;
+      const pWords=pn.split(/\s+/);
       const score=words.filter(w=>pWords.some(pw=>pw.includes(w)||w.includes(pw))).length;
       if(score>bestScore){bestScore=score;best=p;}
     });
