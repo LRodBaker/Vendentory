@@ -7631,6 +7631,7 @@ function checkImportGaps(imports){
     bySource.get(src).push(r);
   });
 
+  const TRAILING_STALE_DAYS=21;
   const yesterday=new Date();yesterday.setDate(yesterday.getDate()-1);
   const yStr=yesterday.toISOString().split('T')[0];
   const sections=[];
@@ -7651,7 +7652,20 @@ function checkImportGaps(imports){
       else if(gapStart){gaps.push({start:gapStart,end:new Date(cur.getTime()-86400000).toISOString().split('T')[0]});gapStart=null;}
       cur.setDate(cur.getDate()+1);
     }
-    if(gapStart)gaps.push({start:gapStart,end:yStr});
+    // ── TRAILING GAP GATE ────────────────────────────────────────
+    // Two kinds of gap. An INTERIOR gap (pushed above, in the else branch)
+    // sits between two imports from the same source and is always a real
+    // missing period. A TRAILING gap runs from a source's last import to
+    // yesterday, and only means anything if that source is still expected to
+    // report. VendSoft and VendSoft-bookkeeping were retired when Rod moved to
+    // ParLevel/Sandstar, so after the 2026-07-28 per-source change their
+    // trailing gaps became six weeks of false alarm each. Suppress the trailing
+    // gap for any source silent longer than TRAILING_STALE_DAYS. Interior gaps
+    // are never gated, so the threshold can never hide a real missing week.
+    const lastEnd=rows.reduce((m,r)=>r.report_end_date>m?r.report_end_date:m,rows[0].report_end_date);
+    const daysSilent=Math.round((yesterday-new Date(lastEnd+'T12:00:00'))/86400000);
+    if(gapStart && daysSilent<=TRAILING_STALE_DAYS) gaps.push({start:gapStart,end:yStr});
+    // ── END TRAILING GAP GATE ──────────────────────────────────
     if(gaps.length)sections.push({src,gaps});
   });
 
