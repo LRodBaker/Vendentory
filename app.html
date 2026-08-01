@@ -2562,7 +2562,7 @@ function renderBaseLines() {
             oninput="baseSearch(${i},this.value)"
             onchange="baseSearch(${i},this.value)"
             onkeyup="baseSearch(${i},this.value)"
-            onfocus="baseSearch(${i},this.value)"
+            onfocus="baseFocus(${i},this.value)"
             onblur="setTimeout(()=>{ const d=document.getElementById('basedd-${i}'); if(d) d.style.display='none'; },180)"
             id="baseinput-${i}">
           <div id="basedd-${i}" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:0.5px solid var(--border);border-radius:8px;max-height:160px;overflow-y:auto;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.12)"></div>
@@ -2573,7 +2573,24 @@ function renderBaseLines() {
         <button style="background:var(--red-light);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;color:var(--red-mid);font-size:14px;display:flex;align-items:center;justify-content:center" onclick="removeBaseLine(${i})">&#10005;</button>
       </div>`;
   }).join('');
+  // Seed the poll baseline to what we just rendered. Without this, _lastPollVal is
+  // undefined on modal open, so the poller sees the saved product name as freshly
+  // typed input and opens the dropdown unprompted — and re-opens it after a
+  // selection, because the stored value goes stale on re-render. The poller exists
+  // to catch scanner input that bypasses DOM events; seeding preserves that and
+  // only suppresses the phantom "change" that was never a change.
+  BASE_LINES.forEach(l => { l._lastPollVal = l.name || ''; });
   startBaseSearchPolling();
+}
+
+// Focus handler for base-product inputs. A row that already holds a confirmed
+// selection stays closed when clicked — Rod's requirement: once chosen and saved,
+// the list should not reappear and offer an accidental mis-click. Editing the text
+// still opens it via oninput, so re-linking a row is unchanged.
+function baseFocus(i, v) {
+  const l = BASE_LINES[i];
+  if(l && l.product_id && (l.name || '') === v) return;
+  baseSearch(i, v);
 }
 
 function baseSearch(i, q) {
