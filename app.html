@@ -528,7 +528,7 @@ body.ro #ro-badge{display:flex!important}
               <div class="dz" id="idz" onclick="document.getElementById('ifl').click()" ondragover="event.preventDefault();this.style.borderColor='var(--teal-mid)'" ondragleave="this.style.borderColor=''" ondrop="handleDrop(event)">
                 <div style="font-size:30px;margin-bottom:9px">&#128202;</div>
                 <div style="font-size:14px;font-weight:600;margin-bottom:3px">Drop your CSV or Excel sales file here</div>
-                <div style="font-size:13px" class="tm">or click to browse · Supports VendSoft exports</div>
+                <div style="font-size:13px" class="tm">or click to browse · Supports ParLevel and Sandstar exports</div>
                 <input type="file" id="ifl" accept=".csv,.xlsx,.xls" style="display:none" onchange="handleIF(this.files[0])">
               </div>
             </div>
@@ -5935,6 +5935,11 @@ async function handleIF(file) {
     if(!rows.length) { toast('No data rows found in file','err'); return; }
     impRows = rows;
     impSource = det;
+    // Keep the uploaded filename on impSource so it can be persisted to
+    // sales_imports.source_filename at save time. The column has always
+    // existed but was never written, which is why the 18 mislabeled ParLevel
+    // imports could not be traced back to their source files.
+    if(impSource) impSource.fileName = name;
     // Show filename and preview
     // Title reflects what we actually KNOW (detected source + period), not
     // the raw filename — a filename can be wrong (see the Sandstar file that
@@ -6749,8 +6754,13 @@ async function confImport(){
   // and gets offered only bookkeeping-only/cancel, silently dropping its units.
   let existingImports=[];
   if(sd&&ed){
+    // Match on the BASE source, not the exact string. A bookkeeping-only
+    // import is stored as "<source>-bookkeeping", so an eq. filter made the
+    // two variants invisible to each other: ParLevel Jun 19-20 was saved
+    // while ParLevel-bookkeeping Jun 14-20 already covered it, double-counting
+    // 23 lines / $88.00. like.<source>* catches both variants.
     const srcFilter = impSource&&impSource.source
-      ? '&source_system=eq.'+encodeURIComponent(impSource.source)
+      ? '&source_system=like.'+encodeURIComponent(impSource.source+'*')
       : '';
     const dupChk=await fetch(
       SURL+'/rest/v1/sales_imports?report_start_date=lte.'+ed+'&report_end_date=gte.'+sd+srcFilter+'&select=id,report_start_date,report_end_date,imported_at',
@@ -6893,7 +6903,7 @@ async function confImport(){
 
     // Create new import record
     const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
-    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:(impSource&&impSource.source)||'Unknown',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
+    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:(impSource&&impSource.source)||'Unknown',source_filename:(impSource&&impSource.fileName)||null,report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
     if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
     const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
     if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
@@ -6969,7 +6979,7 @@ async function confImport(){
     showL('Importing for bookkeeping only...');
     const tok2=await getAuthToken();
     const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
-    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:((impSource&&impSource.source)||'Unknown')+'-bookkeeping',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
+    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:((impSource&&impSource.source)||'Unknown')+'-bookkeeping',source_filename:(impSource&&impSource.fileName)||null,report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
     if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
     const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
     if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
@@ -7018,7 +7028,7 @@ async function confImport(){
     showL('Importing for bookkeeping only...');
     const tok2=await getAuthToken();
     const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
-    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:((impSource&&impSource.source)||'Unknown')+'-bookkeeping',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
+    const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:((impSource&&impSource.source)||'Unknown')+'-bookkeeping',source_filename:(impSource&&impSource.fileName)||null,report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
     if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
     const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
     if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
@@ -7046,7 +7056,7 @@ async function confImport(){
   showL('Importing sales data...');
   const tok2=await getAuthToken();
   const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
-  const irResp = await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:(impSource&&impSource.source)||'Unknown',report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
+  const irResp = await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:(impSource&&impSource.source)||'Unknown',source_filename:(impSource&&impSource.fileName)||null,report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
   if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
   const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
   if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
