@@ -2725,6 +2725,30 @@ async function saveProd() {
       if(_vlMatch.product_type && _vlMatch.product_type !== 'individual') { showSaveErr('Variety component "'+_vlMatch.name+'" is type "'+_vlMatch.product_type+'" — component links must point to individual products only.'); return; }
     }
   }
+  // ── supplier_skus validation ──────────────────────────────────────────────
+  // The SKU save DELETEs every supplier_skus row for this product (L2889) then
+  // re-inserts only rows with a non-blank barcode (L2900). A barcode-less row is
+  // therefore not merely skipped — if it already existed in the database it is
+  // destroyed, on a save the user sees succeed. units_per_case is not editable
+  // in this modal, so such a row can arrive purely from the DB and be lost on an
+  // unrelated edit. Validate BEFORE any write: block, name the row, delete nothing.
+  // An untouched blank row the user added and abandoned carries nothing, so it is
+  // dropped quietly here rather than nagging about it.
+  if(typeof SKU_LINES !== 'undefined' && SKU_LINES.length) {
+    for(let _si=0; _si<SKU_LINES.length; _si++) {
+      const _sk = SKU_LINES[_si];
+      if(_sk.bulk_barcode && _sk.bulk_barcode.trim()) continue;
+      const _skHasData = !!_sk.db_id
+        || (parseInt(_sk.units_per_case)||1) > 1
+        || !!(_sk.description && String(_sk.description).trim())
+        || !!_sk.supplier_id;
+      if(_skHasData) {
+        showSaveErr('Bulk barcode row '+(_si+1)+' has no barcode but has other data (units per case, supplier, or description). Saving now would delete it. Enter the case barcode, or click the ✕ to remove the row deliberately.');
+        return;
+      }
+    }
+    SKU_LINES = SKU_LINES.filter(s => s.bulk_barcode && s.bulk_barcode.trim());
+  }
   // ─────────────────────────────────────────────────────────────────────────
 
   const saveBtn=document.querySelector('#mprod .btn-p');
