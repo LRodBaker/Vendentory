@@ -4533,6 +4533,28 @@ Return ONLY a JSON object in this exact format, no other text:
     }
     // ── END POST-PARSE CORRECTION ─────────────────────────────────────────────
 
+    // ── DERIVED-DISCOUNT CORRECTION ───────────────────────────────────────────
+    // Sam's Club prints a Subtotal that does not equal the sum of its own listed
+    // lines — member savings are already baked into the line prices but the
+    // Subtotal is shown pre-savings. The AI sees Subtotal minus Total and reports
+    // the remainder as a "discount" that appears nowhere on the receipt as a line.
+    // Applying it double-counts savings already in the prices and understates the
+    // purchase. Observed on Sam's order 10445409928: lines 170.94 + tip 5.68 =
+    // 176.62, the exact card charge, with a phantom discount of 2.32 on top.
+    // Only drop the discount when doing so balances EXACTLY. If it doesn't, the
+    // discount may be real and the banner will surface the gap for Rod to judge.
+    if(parsed.receipt_total > 0 && (parsed.discount||0) > 0 && Array.isArray(parsed.lines)) {
+      const _sum  = parsed.lines.reduce((s,l)=>s+(l.line_total||0),0);
+      const _base = _sum + (parsed.tax||0) + (parsed.shipping||0) + (parsed.extra_costs||0);
+      const _withDiscount = Math.abs(_base - (parsed.discount||0) - parsed.receipt_total);
+      const _noDiscount   = Math.abs(_base - parsed.receipt_total);
+      if(_withDiscount > 0.02 && _noDiscount <= 0.02) {
+        console.log('Derived-discount correction: dropping phantom discount of '+parsed.discount);
+        parsed.discount = 0;
+      }
+    }
+    // ── END DERIVED-DISCOUNT CORRECTION ───────────────────────────────────────
+
     hideL();
     openAIImportPreview(parsed);
   } catch(e) {
