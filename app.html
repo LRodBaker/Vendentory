@@ -412,6 +412,7 @@ body.ro #ro-badge{display:flex!important}
               <div class="pline plh" style="padding-bottom:6px"><div>Product</div><div>Cases</div><div>Cost/case</div><div>Units</div><div>Unit cost</div><div>Total</div><div></div></div>
               <div id="plines"></div>
               <div style="height:0.5px;background:var(--border);margin:12px 0"></div>
+              <div id="pu-recon"></div>
               <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
                 <div style="font-size:13px" class="tm">Subtotal: <span id="pts">$0.00</span> · Ship: <span id="ptsh">$0.00</span> · Tax: <span id="pttx">$0.00</span> · Extra: <span id="ptex">$0.00</span> · Discount: <span id="ptdis">$0.00</span></div>
                 <div style="font-size:18px;font-weight:700;font-family:var(--font-head)">Total: <span id="ptt">$0.00</span></div>
@@ -3818,7 +3819,7 @@ function updPL(i,f,v){
 }
 
 function rmPL(i){PL.splice(i,1);renderPL();}
-function clrPur(){_editPurId=null;PL=[];renderPL();['pui','pun','pud'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});['push','putx','puex','pudis'].forEach(id=>document.getElementById(id).value='0');document.getElementById('pustat').value='ordered';const supEl=document.getElementById('pus');if(supEl)supEl.value='';updPurSaveBtn();}
+function clrPur(){_editPurId=null;_RECEIPT_TOTAL=null;PL=[];renderPL();['pui','pun','pud'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});['push','putx','puex','pudis'].forEach(id=>document.getElementById(id).value='0');document.getElementById('pustat').value='ordered';const supEl=document.getElementById('pus');if(supEl)supEl.value='';updPurSaveBtn();}
 
 function updPurSaveBtn(){
   const s=document.getElementById('pustat').value;
@@ -4541,6 +4542,48 @@ Return ONLY a JSON object in this exact format, no other text:
   }
 }
 
+// Receipt reconciliation. Holds the receipt's own grand total for the current
+// AI import; null when there is nothing to check against (manual entry).
+let _RECEIPT_TOTAL = null;
+
+function checkReceiptBalance() {
+  const bar = document.getElementById('pu-recon');
+  if(!bar) return;
+  if(_RECEIPT_TOTAL === null) { bar.innerHTML = ''; return; }
+  const sub = PL.reduce((s,l)=>s+(l.total||0), 0);
+  const sh  = parseFloat(document.getElementById('push').value)  || 0;
+  const tx  = parseFloat(document.getElementById('putx').value)  || 0;
+  const ex  = parseFloat(document.getElementById('puex').value)  || 0;
+  const dis = parseFloat(document.getElementById('pudis').value) || 0;
+  const computed = sub + sh + tx + ex - dis;
+  const gap = Math.round((_RECEIPT_TOTAL - computed) * 100) / 100;
+  if(Math.abs(gap) <= 0.02) {
+    bar.innerHTML = `<div style="background:var(--teal-light);border-radius:8px;padding:9px 11px;font-size:13px;margin-bottom:10px">
+      &#10003; Balances to the receipt — $${_RECEIPT_TOTAL.toFixed(2)}.</div>`;
+    return;
+  }
+  bar.innerHTML = `<div style="background:var(--amber-light);border-radius:8px;padding:10px 11px;font-size:13px;margin-bottom:10px">
+    <div style="font-weight:700;margin-bottom:4px">Does not balance to the receipt</div>
+    <div style="margin-bottom:8px">Receipt total <strong>$${_RECEIPT_TOTAL.toFixed(2)}</strong> &middot; this purchase computes to <strong>$${computed.toFixed(2)}</strong> &middot; difference <strong>${gap<0?'-':''}$${Math.abs(gap).toFixed(2)}</strong>.
+    Check the line quantities first — an unlisted member discount or fee is the usual cause.</div>
+    <button class="btn btn-sm" onclick="applyReconGap(${gap})">${gap>0?'Add':'Subtract'} $${Math.abs(gap).toFixed(2)} ${gap>0?'to Extra':'as Discount'}</button>
+    <button class="btn btn-sm" onclick="_RECEIPT_TOTAL=null;checkReceiptBalance();">Dismiss</button>
+  </div>`;
+}
+
+// Puts the unexplained difference where it belongs, on your instruction only.
+// Never called automatically — a guessed number is what caused the original bug.
+function applyReconGap(gap) {
+  if(gap > 0) {
+    const cur = parseFloat(document.getElementById('puex').value) || 0;
+    document.getElementById('puex').value = (cur + gap).toFixed(2);
+  } else {
+    const cur = parseFloat(document.getElementById('pudis').value) || 0;
+    document.getElementById('pudis').value = (cur + Math.abs(gap)).toFixed(2);
+  }
+  updPT();
+}
+
 function openAIImportPreview(data) {
   // Populate the purchase form with the AI-extracted data
   // Date
@@ -4550,12 +4593,15 @@ function openAIImportPreview(data) {
   // Tax / shipping
   if(data.tax)        document.getElementById('putx').value = data.tax.toFixed(2);
   if(data.shipping)   document.getElementById('push').value = data.shipping.toFixed(2);
-  // Discounts reduce the total — store as negative in the Extra field.
-  // If there's also an extra_costs value, net them together.
-  const extraNet = (data.extra_costs || 0) - (data.discount || 0);
-  if(extraNet !== 0) document.getElementById('puex').value = extraNet > 0 ? extraNet.toFixed(2) : '0';
-  const dis = parseFloat(data.discount)||0;
-  document.getElementById('pudis').value = dis > 0 ? dis.toFixed(2) : '0';
+  // Each field holds what the receipt shows. Do NOT net discount into Extra:
+  // savePur (L5319) and updPT (L5240) both compute sub+sh+tx+ex-dis, so a
+  // discount already subtracted here is subtracted a second time at save.
+  // That is what turned a correct extraction (extra 5.68, discount 2.32) into
+  // a displayed Extra of 3.36 and a total $4.64 below the receipt.
+  const _ex = parseFloat(data.extra_costs) || 0;
+  const _dis = parseFloat(data.discount) || 0;
+  document.getElementById('puex').value  = _ex  > 0 ? _ex.toFixed(2)  : '0';
+  document.getElementById('pudis').value = _dis > 0 ? _dis.toFixed(2) : '0';
   // AI import = receipt already in hand → default to Received
   document.getElementById('pustat').value = 'ordered';
   updPurSaveBtn();
@@ -4650,14 +4696,15 @@ function openAIImportPreview(data) {
 
   renderPL();
   updPT();
-  // Cost verification — compare extracted receipt total vs computed total
-  if(data.receipt_total && data.receipt_total > 0) {
-    const linesSum = (data.lines||[]).reduce((s,l)=>s+(l.line_total||0),0);
-    const computed = linesSum + (data.tax||0) + (data.shipping||0) + (data.extra_costs||0);
-    if(Math.abs(computed - data.receipt_total) > 0.02) {
-      setTimeout(()=>toast(`⚠ Receipt total $${data.receipt_total.toFixed(2)} vs line sum $${computed.toFixed(2)} — check amounts`,'warn'),400);
-    }
-  }
+  // Cost verification — check what was actually loaded into the form, using the
+  // SAME expression as updPT/savePur (sub+sh+tx+ex-dis). The previous version
+  // checked data.* instead, so it validated the AI payload and never saw what
+  // population did to it — a receipt could reconcile perfectly here and still
+  // load a wrong total. It also omitted discount, disagreeing with both other
+  // formulas. Persistent banner, not a vanishing toast: this fires at the
+  // receiving dock and must survive being looked away from.
+  _RECEIPT_TOTAL = (parseFloat(data.receipt_total) || 0) > 0 ? parseFloat(data.receipt_total) : null;
+  checkReceiptBalance();
   // Show a summary toast
   const matched = data.lines.filter(l => l.matched_product_id).length;
   const total = data.lines.length;
@@ -5249,6 +5296,7 @@ function updPT(){
   document.getElementById('ptex').textContent=fmt(ex);
   document.getElementById('ptdis').textContent=fmt(dis);
   document.getElementById('ptt').textContent=fmt(sub+sh+tx+ex-dis);
+  if(typeof checkReceiptBalance==='function') checkReceiptBalance();
 }
 
 async function savePur() {
