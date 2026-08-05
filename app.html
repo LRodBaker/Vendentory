@@ -1047,6 +1047,10 @@ let _pcSnapshot = {}; // {product_id: {on_hand_qty, average_cost}} — locked at
 let VP_LINES = []; // variety pack component lines for the product edit modal
 let SKU_LINES = []; // bulk barcode lines for the product edit modal
 let BASE_LINES = []; // base product links for bulk products
+// A4: true when the component read FAILED. A failed read must never be mistaken
+// for "this product has no components" — saving on that assumption deletes the
+// real links and re-inserts nothing (Class 1: unconditional delete, conditional restore).
+let BASE_LINES_LOAD_FAILED = false;
 let ALT_BARCODES = []; // alternate individual barcodes for a product
 let ALIASES = []; // VMS alias names for import matching
 let _editPurId = null;  // set when editing an existing purchase
@@ -2232,6 +2236,7 @@ async function openEP(id) {
   }
   // Load base product links (stored in product_components, separate from variety pack)
   BASE_LINES = [];
+  BASE_LINES_LOAD_FAILED = false;
   document.getElementById('base-lines').innerHTML='';
   if(p.id && _detectedType !== 'variety') {
     const baseResp = await fetch(
@@ -2248,6 +2253,10 @@ async function openEP(id) {
         _mode: 'link'
       }));
       renderBaseLines();
+    } else {
+      // A4: fail loudly. Silence here becomes data loss at save time.
+      BASE_LINES_LOAD_FAILED = true;
+      toast('\u26A0 Could not load this product\u2019s base-product links. Saving is blocked until this loads \u2014 close and reopen the product.','err');
     }
   }
   // Load alternate barcodes for this product
@@ -3076,6 +3085,13 @@ async function saveProd() {
             }
           }
         }
+      }
+
+      // A4: never delete links we failed to read. Without this the DELETE below
+      // succeeds and the re-insert has nothing to insert.
+      if(BASE_LINES_LOAD_FAILED){
+        showSaveErr('Base-product links could not be read when this product was opened, so they cannot be safely rewritten. Close the product, reopen it, and try again.');
+        return;
       }
 
       // Delete existing product_components for this product
