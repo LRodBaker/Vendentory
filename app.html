@@ -4205,8 +4205,11 @@ async function strDoPost(closeOrder) {
     // double-count. The other three receive paths guard this; this one did not.
     // Block and redirect to Purchases, where markPurReceived() asks whether the
     // goods were included in the count rather than assuming either way.
-    const {data:strPurHdr} = await dbFetch('purchases',{select:'purchase_date',filters:{'id':'eq.'+purId}});
-    const strPurDate = strPurHdr && strPurHdr[0] ? strPurHdr[0].purchase_date : null;
+    const {data:strPurHdr} = await dbFetch('purchases',{select:'purchase_date,received_date',filters:{'id':'eq.'+purId}});
+    const strPurchaseDate = strPurHdr && strPurHdr[0] ? strPurHdr[0].purchase_date : null;
+    const strRcvExisting  = strPurHdr && strPurHdr[0] ? strPurHdr[0].received_date : null;
+    // B3: the wall tests the RECEIPT date, falling back to purchase_date when null.
+    const strPurDate = strRcvExisting || strPurchaseDate;
     const strLastCount = await getLastCountDate();
     if(strPurDate && strLastCount && strPurDate < strLastCount){
       hideL();
@@ -4218,6 +4221,10 @@ async function strDoPost(closeOrder) {
     const invTxns = [];
     const wacUpdates = [];
     const now = new Date().toISOString();
+    // B3: receipts carry the date the goods arrived, not entry time.
+    // Reuse an existing received_date — never overwrite it.
+    const strRcvDate  = strRcvExisting || now.slice(0,10);
+    const strRcvStamp = new Date(strRcvDate+'T12:00:00').toISOString();
 
     for(const l of linesToPost){
       const newCases = l.cases_confirmed - l.already_posted;
@@ -4241,7 +4248,7 @@ async function strDoPost(closeOrder) {
           invTxns.push({
             product_id: c.component_product_id,
             transaction_type: 'purchase_receipt',
-            transaction_date: now,
+            transaction_date: strRcvStamp,
             quantity_change: cu,
             warehouse_quantity_change: cu,
             unit_cost: l.unit_cost,
@@ -4257,7 +4264,7 @@ async function strDoPost(closeOrder) {
         invTxns.push({
           product_id: l.product_id,
           transaction_type: 'purchase_receipt',
-          transaction_date: now,
+          transaction_date: strRcvStamp,
           quantity_change: totalUnits,
           warehouse_quantity_change: totalUnits,
           unit_cost: l.unit_cost,
@@ -4284,7 +4291,7 @@ async function strDoPost(closeOrder) {
     const newStatus = closeOrder ? 'received' : 'partial';
     await fetch(SURL+'/rest/v1/purchases?id=eq.'+purId,{
       method:'PATCH', headers:{...wh,'Prefer':'return=minimal'},
-      body:JSON.stringify({status:newStatus, updated_at:now})
+      body:JSON.stringify({status:newStatus, updated_at:now, received_date:strRcvDate})
     });
 
     hideL();
@@ -4327,8 +4334,11 @@ async function markPurReceived(id){
     // If this purchase's date is before the last physical count, the count already
     // captured those units physically. Posting inventory would inflate on-hand.
     // We still mark it received for bookkeeping/WAC purposes — just skip inv txns.
-    const {data:purHdr}=await dbFetch('purchases',{select:'purchase_date',filters:{'id':'eq.'+id}});
-    const purDate=purHdr&&purHdr[0]?purHdr[0].purchase_date:null;
+    const {data:purHdr}=await dbFetch('purchases',{select:'purchase_date,received_date',filters:{'id':'eq.'+id}});
+    const purchaseDate=purHdr&&purHdr[0]?purHdr[0].purchase_date:null;
+    const rcvExisting=purHdr&&purHdr[0]?purHdr[0].received_date:null;
+    // B3: the wall tests the RECEIPT date, falling back to purchase_date when null.
+    const purDate = rcvExisting || purchaseDate;
     const lastCount=await getLastCountDate();
     const preCount = !!(purDate && lastCount && purDate < lastCount);
     if(preCount){
@@ -4337,7 +4347,7 @@ async function markPurReceived(id){
       hideL();
       const answer = await showImportDecision(
         '📦 Pre-Count Purchase',
-        `<div style="margin-bottom:12px">This purchase is dated <strong>${fmtD(purDate)}</strong>, before your last count on <strong>${fmtD(lastCount)}</strong>.</div>
+        `<div style="margin-bottom:12px">This purchase is dated <strong>${fmtD(purchaseDate)}</strong>, before your last count on <strong>${fmtD(lastCount)}</strong>.</div>
         <div style="margin-bottom:12px">Were these items included in your <strong>${fmtD(lastCount)}</strong> physical count?</div>
         <div style="background:var(--gray-50);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--gray-600)">
           <strong>Yes</strong> — inventory stays as counted. Bookkeeping and WAC updated only.<br><br>
@@ -4361,7 +4371,7 @@ async function markPurReceived(id){
         }
         await Promise.allSettled([...new Set(wacProductIds)].map(pid=>replayWAC(pid,wh)));
         hideL();
-        toast('\u26A0 Purchase dated '+purDate+' marked received — bookkeeping updated, inventory unchanged (items were in your '+lastCount+' count).','warn');
+        toast('\u26A0 Purchase dated '+purchaseDate+' marked received — bookkeeping updated, inventory unchanged (items were in your '+lastCount+' count).','warn');
         await loadProds2(); loadPurHistory(); checkOverdueOrders();
         return;
       } else if(answer === 'no'){
@@ -4376,6 +4386,9 @@ async function markPurReceived(id){
     // ── END PRE-COUNT WALL ────────────────────────────────────────────────────
 
     const invNote='Received order '+id.slice(0,8);
+    // B3: stamp receipts with the receipt date. Reuse existing — never overwrite.
+    const mprRcvDate  = rcvExisting || new Date().toISOString().slice(0,10);
+    const mprRcvStamp = new Date(mprRcvDate+'T12:00:00').toISOString();
     const invTxns=[];const wacUpdates=[];
     for(const l of lines){
       const compResp=await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
@@ -4385,11 +4398,11 @@ async function markPurReceived(id){
         for(const c of comps){
           const tu = tip > 0 ? Math.round(l.units_received * (c.qty_per_pack / tip)) : l.units_received;
           const uc = l.unit_cost;
-          invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',quantity_change:tu,warehouse_quantity_change:tu,unit_cost:uc,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
+          invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',transaction_date:mprRcvStamp,quantity_change:tu,warehouse_quantity_change:tu,unit_cost:uc,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
           wacUpdates.push({product_id:c.component_product_id,units:tu,unit_cost:uc});
         }
       } else {
-        invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units_received,warehouse_quantity_change:l.units_received,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
+        invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',transaction_date:mprRcvStamp,quantity_change:l.units_received,warehouse_quantity_change:l.units_received,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:id,notes:invNote,created_by:CU?.id});
         wacUpdates.push({product_id:l.product_id,units:l.units_received,unit_cost:l.unit_cost});
       }
     }
@@ -4400,7 +4413,7 @@ async function markPurReceived(id){
     // Replay WAC — run in parallel for speed, catch individual failures without aborting
     const wacProductIds=[...new Set(wacUpdates.map(u=>u.product_id))];
     await Promise.allSettled(wacProductIds.map(pid=>replayWAC(pid,wh)));
-    await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString()})});
+    await fetch(SURL+'/rest/v1/purchases?id=eq.'+id,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify({status:'received',updated_at:new Date().toISOString(),received_date:mprRcvDate})});
     hideL();
     toast('Order received! Inventory updated.','ok');
     await loadProds2();
@@ -5386,7 +5399,19 @@ async function savePur() {
   const dis=parseFloat(document.getElementById('pudis').value)||0;
   const tok = await getAuthToken();
   const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
-  const purBody={supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,discount_amount:dis,status:status==='ordered'?'draft':'received',notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex-dis};
+  // B3: an existing received_date is authoritative — read it BEFORE building
+  // purBody so the edit reuses it. Overwriting is what moved 114 units into August.
+  // Aborts on a failed read: a network failure must not look like "no date yet".
+  let spRcvExisting = null;
+  if(_editPurId){
+    const rcvChk = await fetch(SURL+'/rest/v1/purchases?id=eq.'+_editPurId+'&select=received_date',{headers:wh});
+    if(!rcvChk.ok){hideL();toast('Could not read the existing received date — edit aborted. Try again.','err');return;}
+    const rcvRows = await rcvChk.json();
+    spRcvExisting = rcvRows[0]?.received_date || null;
+  }
+  const spRcvDate  = spRcvExisting || new Date().toISOString().slice(0,10);
+  const spRcvStamp = new Date(spRcvDate+'T12:00:00').toISOString();
+  const purBody={supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,discount_amount:dis,status:status==='ordered'?'draft':'received',received_date:status==='ordered'?spRcvExisting:spRcvDate,notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex-dis};
   let purId;
   let hadPriorTxns=false;
   if(_editPurId) {
@@ -5432,10 +5457,14 @@ async function savePur() {
   // If the purchase date is before the last physical count, skip inventory txns.
   // The count is the baseline — this purchase affects books/WAC only.
   const purDateVal = document.getElementById('pud').value;
+  // B3: wall tests the RECEIPT date when one exists, else the purchase date.
+  // Deliberately NOT spRcvDate — that falls back to TODAY, which would make every
+  // new purchase look post-count and defeat the wall.
+  const purWallDate = spRcvExisting || purDateVal;
   const lastCountVal = await getLastCountDate();
-  const purIsPreCount = !!(status === 'received' && purDateVal && lastCountVal && purDateVal < lastCountVal && !hadPriorTxns);
+  const purIsPreCount = !!(status === 'received' && purWallDate && lastCountVal && purWallDate < lastCountVal && !hadPriorTxns);
   if(purIsPreCount){
-    toast('\u26A0 Purchase date '+purDateVal+' is before your last count ('+lastCountVal+'). Saved for bookkeeping — inventory NOT adjusted (count is the baseline).','warn');
+    toast('\u26A0 Effective date '+purWallDate+' is before your last count ('+lastCountVal+'). Saved for bookkeeping — inventory NOT adjusted (count is the baseline).','warn');
   }
   // ── END PRE-COUNT WALL ────────────────────────────────────────────────────────
 
@@ -5456,11 +5485,11 @@ async function savePur() {
           ? Math.round(l.units * (c.qty_per_pack / totalItemsPerPack))
           : l.units;
         const compUnitCost = l.unit_cost; // already per individual unit
-        invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',quantity_change:compUnits,warehouse_quantity_change:compUnits,unit_cost:compUnitCost,reference_type:'purchase',reference_id:purId,notes:invNote+' (from bulk: '+(prod?.name||'')+')',created_by:CU?.id});
+        invTxns.push({product_id:c.component_product_id,transaction_type:'purchase_receipt',transaction_date:spRcvStamp,quantity_change:compUnits,warehouse_quantity_change:compUnits,unit_cost:compUnitCost,reference_type:'purchase',reference_id:purId,notes:invNote+' (from bulk: '+(prod?.name||'')+')',created_by:CU?.id});
         wacUpdates.push({product_id:c.component_product_id,units:compUnits,unit_cost:compUnitCost});
       }
     } else {
-      invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',quantity_change:l.units,warehouse_quantity_change:l.units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:purId,notes:invNote,created_by:CU?.id});
+      invTxns.push({product_id:l.product_id,transaction_type:'purchase_receipt',transaction_date:spRcvStamp,quantity_change:l.units,warehouse_quantity_change:l.units,unit_cost:l.unit_cost,reference_type:'purchase',reference_id:purId,notes:invNote,created_by:CU?.id});
       wacUpdates.push({product_id:l.product_id,units:l.units,unit_cost:l.unit_cost});
     }
   } // end if(status==='received')
