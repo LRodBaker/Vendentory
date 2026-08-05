@@ -4238,7 +4238,16 @@ async function strDoPost(closeOrder) {
     const strTypedForWall = (document.getElementById('str-rcvd')?.value || '').trim() || null;
     const strPurDate = strTypedForWall || strRcvExisting || strPurchaseDate;
     const strLastCount = await getLastCountDate();
-    if(strPurDate && strLastCount && strPurDate < strLastCount){
+    if(strLastCount === COUNT_DATE_UNKNOWN){
+      hideL();
+      const go = await showImportDecision('\u26A0 Count date unavailable',
+        '<div style="margin-bottom:12px">Vendentory could not read the date of your last physical count, so it cannot check whether these goods were already counted.</div>'+
+        '<div style="background:var(--gray-50);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--gray-600)">If this delivery arrived <strong>after</strong> your last count, posting is safe. If it arrived <strong>before</strong> and was already counted, posting will double-count it.</div>',
+        [{label:'Cancel \u2014 check first',value:'no',style:''},{label:'Post anyway \u2014 it arrived after my last count',value:'yes',style:'btn-p'}]);
+      if(go!=='yes'){ toast('Receipt cancelled','warn'); return; }
+      showL('Posting receipt...');
+    }
+    else if(strPurDate && strLastCount && strPurDate < strLastCount){
       hideL();
       toast('\u26D4 Blocked \u2014 purchase dated '+fmtD(strPurDate)+' is before your last count on '+fmtD(strLastCount)+'. Receive it from the Purchases screen, which will ask whether these units were already counted.','err');
       return;
@@ -4373,7 +4382,16 @@ async function markPurReceived(id){
     // B3: the wall tests the RECEIPT date, falling back to purchase_date when null.
     const purDate = rcvExisting || purchaseDate;
     const lastCount=await getLastCountDate();
-    const preCount = !!(purDate && lastCount && purDate < lastCount);
+    if(lastCount === COUNT_DATE_UNKNOWN){
+      hideL();
+      const go = await showImportDecision('\u26A0 Count date unavailable',
+        '<div style="margin-bottom:12px">Vendentory could not read the date of your last physical count, so it cannot check whether these goods were already counted.</div>'+
+        '<div style="background:var(--gray-50);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--gray-600)">If this delivery arrived <strong>after</strong> your last count, posting is safe. If it arrived <strong>before</strong> and was already counted, posting will double-count it.</div>',
+        [{label:'Cancel \u2014 check first',value:'no',style:''},{label:'Post anyway \u2014 it arrived after my last count',value:'yes',style:'btn-p'}]);
+      if(go!=='yes'){ toast('Receipt cancelled','warn'); return; }
+      showL('Processing receipt...');
+    }
+    const preCount = !!(purDate && lastCount && lastCount !== COUNT_DATE_UNKNOWN && purDate < lastCount);
     if(preCount){
       // Ask the user — don't assume. They may have received goods that were
       // NOT included in the physical count and need inventory posted.
@@ -5501,7 +5519,16 @@ async function savePur() {
   // new purchase look post-count and defeat the wall.
   const purWallDate = spRcvTyped || spRcvExisting || purDateVal;
   const lastCountVal = await getLastCountDate();
-  const purIsPreCount = !!(status === 'received' && purWallDate && lastCountVal && purWallDate < lastCountVal && !hadPriorTxns);
+  if(lastCountVal === COUNT_DATE_UNKNOWN && status === 'received'){
+    hideL();
+    const go = await showImportDecision('\u26A0 Count date unavailable',
+      '<div style="margin-bottom:12px">Vendentory could not read the date of your last physical count, so it cannot check whether these goods were already counted.</div>'+
+      '<div style="background:var(--gray-50);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--gray-600)">If this delivery arrived <strong>after</strong> your last count, saving is safe. If it arrived <strong>before</strong> and was already counted, inventory will be double-counted.</div>',
+      [{label:'Cancel \u2014 check first',value:'no',style:''},{label:'Save anyway \u2014 it arrived after my last count',value:'yes',style:'btn-p'}]);
+    if(go!=='yes'){ toast('Save cancelled','warn'); return; }
+    showL('Saving purchase...');
+  }
+  const purIsPreCount = !!(status === 'received' && purWallDate && lastCountVal && lastCountVal !== COUNT_DATE_UNKNOWN && purWallDate < lastCountVal && !hadPriorTxns);
   if(purIsPreCount){
     toast('\u26A0 Effective date '+purWallDate+' is before your last count ('+lastCountVal+'). Saved for bookkeeping — inventory NOT adjusted (count is the baseline).','warn');
   }
@@ -6716,12 +6743,23 @@ function fndKey(obj,cands){return cands.find(k=>k in obj)||Object.keys(obj)[0]||
 // Returns the most recent physical count date as a string 'YYYY-MM-DD', or null.
 // Cached in _lastCountDate for the session to avoid repeated DB hits.
 let _lastCountDate = undefined; // undefined = not yet loaded; null = none exists
+// A2(d): distinct from null. UNKNOWN means the lookup FAILED — we do not know
+// whether a count exists. null means we asked and there genuinely is none.
+// Collapsing the two is what silently switched every pre-count guard off.
+const COUNT_DATE_UNKNOWN = 'UNKNOWN';
 async function getLastCountDate() {
   if (_lastCountDate !== undefined) return _lastCountDate;
   try {
     const tok = await getAuthToken();
+    // A2(a): a count writes write_off for shortages and quantity_adjustment for
+    // overages. Reading only the latter misses any count with no overage at all.
+    // A2(b): the baseline-correction writer notes do not start 'Physical count ',
+    // so also match on reason_code.
     const resp = await fetch(
-      SURL + '/rest/v1/inventory_transactions?transaction_type=eq.quantity_adjustment&notes=like.Physical+count+%25&order=transaction_date.desc&limit=1&select=transaction_date',
+      SURL + '/rest/v1/inventory_transactions'
+        + '?transaction_type=in.(quantity_adjustment,write_off)'
+        + '&or=(notes.like.Physical count *,reason_code.in.(count_correction,missing))'
+        + '&order=transaction_date.desc&limit=1&select=transaction_date',
       { headers: { 'apikey': SKEY, 'Authorization': 'Bearer ' + tok } }
     );
     if (resp.ok) {
@@ -6733,10 +6771,11 @@ async function getLastCountDate() {
         _lastCountDate = null;
       }
     } else {
-      _lastCountDate = null;
+      // A2(d): do NOT cache a failure. Leave it unset so the next call retries.
+      return COUNT_DATE_UNKNOWN;
     }
   } catch(e) {
-    _lastCountDate = null;
+    return COUNT_DATE_UNKNOWN;
   }
   return _lastCountDate;
 }
@@ -6756,7 +6795,7 @@ async function checkStrandedPreCountReceipts(countDate) {
     const tok = await getAuthToken();
     const wh = {'apikey': SKEY, 'Authorization': 'Bearer ' + tok};
     const cutoff = countDate || await getLastCountDate();
-    if (!cutoff) return; // no count on record — nothing to check against
+    if (!cutoff || cutoff === COUNT_DATE_UNKNOWN) return; // unknown or none — do not query with a non-date
 
     const resp = await fetch(
       SURL + '/rest/v1/inventory_transactions'
@@ -6831,7 +6870,7 @@ async function runStartupIntegrityCheck() {
     const tok = await getAuthToken();
     const wh = {'apikey': SKEY, 'Authorization': 'Bearer ' + tok};
     const cutoff = await getLastCountDate();
-    if (!cutoff) return; // no count on record
+    if (!cutoff || cutoff === COUNT_DATE_UNKNOWN) return; // unknown or none
 
     const resp = await fetch(
       SURL + '/rest/v1/inventory_transactions'
@@ -6926,7 +6965,7 @@ async function confImport(){
   const lastCount = await getLastCountDate();
 
   // ── CASE 4: Fully pre-count — hard block ────────────────────────────────────
-  if(sd && lastCount && ed && ed < lastCount){
+  if(sd && lastCount && lastCount !== COUNT_DATE_UNKNOWN && ed && ed < lastCount){
     hideL();
     toast('\u26D4 Import blocked \u2014 this report ends on '+ed+' which is before your last count on '+lastCount+'. Those sales are already in your count baseline.','err');
     return;
