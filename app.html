@@ -399,6 +399,7 @@ body.ro #ro-badge{display:flex!important}
                 <div class="fg"><label class="fl">Supplier</label><select class="fs" id="pus"></select></div>
                 <div class="fg"><label class="fl">Invoice number</label><input class="fi" id="pui" placeholder="Optional"></div>
                 <div class="fg"><label class="fl">Date</label><input class="fi" type="date" id="pud"></div>
+                <div class="fg"><label class="fl">Received date</label><input class="fi" type="date" id="purcv"><div style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4">Leave blank to use today when receiving. Set it to the date the goods actually arrived — this is what inventory and the count boundary use.</div></div>
                 <div class="fg"><label class="fl">Status</label><select class="fs" id="pustat" onchange="updPurSaveBtn()"><option value="ordered" selected>Ordered — save now, receive later</option><option value="received">Received — post inventory now</option></select><div id="pustat-hint" style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4"></div></div>
                 <div class="fg"><label class="fl">Shipping ($)</label><input class="fi" type="number" id="push" value="0" step="0.01" oninput="updPT()"></div>
                 <div class="fg"><label class="fl">Tax ($)</label><input class="fi" type="number" id="putx" value="0" step="0.01" oninput="updPT()"></div>
@@ -3819,7 +3820,7 @@ function updPL(i,f,v){
 }
 
 function rmPL(i){PL.splice(i,1);renderPL();}
-function clrPur(){_editPurId=null;_RECEIPT_TOTAL=null;PL=[];renderPL();['pui','pun','pud'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});['push','putx','puex','pudis'].forEach(id=>document.getElementById(id).value='0');document.getElementById('pustat').value='ordered';const supEl=document.getElementById('pus');if(supEl)supEl.value='';updPurSaveBtn();}
+function clrPur(){_editPurId=null;_RECEIPT_TOTAL=null;PL=[];renderPL();['pui','pun','pud','purcv'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});['push','putx','puex','pudis'].forEach(id=>document.getElementById(id).value='0');document.getElementById('pustat').value='ordered';const supEl=document.getElementById('pus');if(supEl)supEl.value='';updPurSaveBtn();}
 
 function updPurSaveBtn(){
   const s=document.getElementById('pustat').value;
@@ -5259,6 +5260,7 @@ async function editPurchase(id) {
   const lines = lr.ok ? await lr.json() : [];
   // Populate header fields
   document.getElementById('pud').value = p.purchase_date || '';
+  document.getElementById('purcv').value = p.received_date || '';
   document.getElementById('pui').value = p.invoice_number || '';
   document.getElementById('pun').value = p.notes || '';
   document.getElementById('push').value = p.shipping_cost || 0;
@@ -5409,9 +5411,12 @@ async function savePur() {
     const rcvRows = await rcvChk.json();
     spRcvExisting = rcvRows[0]?.received_date || null;
   }
-  const spRcvDate  = spRcvExisting || new Date().toISOString().slice(0,10);
+  // B4: a date typed into the form is deliberate user intent and outranks the
+  // stored value. Blank field keeps B3's behaviour: reuse existing, else today.
+  const spRcvTyped = (document.getElementById('purcv')?.value || '').trim() || null;
+  const spRcvDate  = spRcvTyped || spRcvExisting || new Date().toISOString().slice(0,10);
   const spRcvStamp = new Date(spRcvDate+'T12:00:00').toISOString();
-  const purBody={supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,discount_amount:dis,status:status==='ordered'?'draft':'received',received_date:status==='ordered'?spRcvExisting:spRcvDate,notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex-dis};
+  const purBody={supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,discount_amount:dis,status:status==='ordered'?'draft':'received',received_date:status==='ordered'?(spRcvTyped||spRcvExisting):spRcvDate,notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex-dis};
   let purId;
   let hadPriorTxns=false;
   if(_editPurId) {
@@ -5460,7 +5465,7 @@ async function savePur() {
   // B3: wall tests the RECEIPT date when one exists, else the purchase date.
   // Deliberately NOT spRcvDate — that falls back to TODAY, which would make every
   // new purchase look post-count and defeat the wall.
-  const purWallDate = spRcvExisting || purDateVal;
+  const purWallDate = spRcvTyped || spRcvExisting || purDateVal;
   const lastCountVal = await getLastCountDate();
   const purIsPreCount = !!(status === 'received' && purWallDate && lastCountVal && purWallDate < lastCountVal && !hadPriorTxns);
   if(purIsPreCount){
