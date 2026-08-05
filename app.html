@@ -758,6 +758,13 @@ body.ro #ro-badge{display:flex!important}
     <!-- Progress -->
     <div id="str-progress" style="font-size:12px;color:var(--gray-400);margin-bottom:10px"></div>
 
+    <!-- Received date -->
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:var(--gray-400)">
+      <label for="str-rcvd" style="white-space:nowrap">Received on</label>
+      <input class="fi" type="date" id="str-rcvd" style="width:auto;padding:4px 8px;font-size:12px">
+      <span style="color:var(--muted)">Defaults to today &mdash; change it only if the goods arrived earlier.</span>
+    </div>
+
     <!-- Line items -->
     <div id="str-lines" style="flex:1;overflow-y:auto;min-height:0;border:1px solid var(--border);border-radius:8px;padding:4px 0;margin-bottom:14px"></div>
 
@@ -3970,6 +3977,8 @@ async function openSTR(purchaseId) {
   }
 
   // Populate modal
+  const rcvdEl = document.getElementById('str-rcvd');
+  if(rcvdEl) rcvdEl.value = new Date().toISOString().slice(0,10);
   document.getElementById('str-header').textContent =
     (pur.suppliers?.name||'Unknown supplier') + ' · ' + fmtD(pur.purchase_date) +
     (pur.invoice_number ? ' · Invoice: '+pur.invoice_number : '');
@@ -4210,7 +4219,8 @@ async function strDoPost(closeOrder) {
     const strPurchaseDate = strPurHdr && strPurHdr[0] ? strPurHdr[0].purchase_date : null;
     const strRcvExisting  = strPurHdr && strPurHdr[0] ? strPurHdr[0].received_date : null;
     // B3: the wall tests the RECEIPT date, falling back to purchase_date when null.
-    const strPurDate = strRcvExisting || strPurchaseDate;
+    const strTypedForWall = (document.getElementById('str-rcvd')?.value || '').trim() || null;
+    const strPurDate = strTypedForWall || strRcvExisting || strPurchaseDate;
     const strLastCount = await getLastCountDate();
     if(strPurDate && strLastCount && strPurDate < strLastCount){
       hideL();
@@ -4224,7 +4234,10 @@ async function strDoPost(closeOrder) {
     const now = new Date().toISOString();
     // B3: receipts carry the date the goods arrived, not entry time.
     // Reuse an existing received_date — never overwrite it.
-    const strRcvDate  = strRcvExisting || now.slice(0,10);
+    // B4: the date on the receive modal is deliberate user intent and outranks
+    // the stored value. It defaults to today, so the normal case needs no action.
+    const strRcvTyped = (document.getElementById('str-rcvd')?.value || '').trim() || null;
+    const strRcvDate  = strRcvTyped || strRcvExisting || now.slice(0,10);
     const strRcvStamp = new Date(strRcvDate+'T12:00:00').toISOString();
 
     for(const l of linesToPost){
