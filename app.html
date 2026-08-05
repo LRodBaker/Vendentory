@@ -4268,7 +4268,10 @@ async function strDoPost(closeOrder) {
         SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',
         {headers:wh}
       );
-      const comps = compResp.ok ? await compResp.json() : [];
+      // A3: a failed read is not "no components". Posting on that assumption puts
+      // units on the pack instead of exploding them into the components that sell.
+      if(!compResp.ok){ hideL(); toast('\u26D4 Could not read component links for a line \u2014 receipt cancelled so units are not posted to the wrong product. Try again.','err'); return; }
+      const comps = await compResp.json();
 
       if(comps.length){
         // Variety/bulk pack — distribute units proportionally across components
@@ -4395,7 +4398,8 @@ async function markPurReceived(id){
         const wacProductIds=[];
         for(const l of lines){
           const compResp=await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
-          const comps=compResp.ok?await compResp.json():[];
+          if(!compResp.ok){ hideL(); toast('\u26D4 Could not read component links \u2014 stopped before updating costs on the wrong product. Try again.','err'); return; }
+          const comps=await compResp.json();
           if(comps.length){comps.forEach(c=>wacProductIds.push(c.component_product_id));}
           else{wacProductIds.push(l.product_id);}
         }
@@ -4422,7 +4426,8 @@ async function markPurReceived(id){
     const invTxns=[];const wacUpdates=[];
     for(const l of lines){
       const compResp=await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
-      const comps=compResp.ok?await compResp.json():[];
+      if(!compResp.ok){ hideL(); toast('\u26D4 Could not read component links for a line \u2014 receipt cancelled so units are not posted to the wrong product. Try again.','err'); return; }
+      const comps=await compResp.json();
       if(comps.length){
         const tip=comps.reduce((s,x)=>s+x.qty_per_pack,0);
         for(const c of comps){
@@ -5507,7 +5512,9 @@ async function savePur() {
     const prod = AP.find(p => p.id === l.product_id || p.product_id === l.product_id);
     // Check for base product links (works for variety packs AND regular bulk products)
     const compResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
-    const comps = compResp.ok ? await compResp.json() : [];
+    // A3: abort rather than post units to the pack record.
+    if(!compResp.ok){ hideL(); toast('\u26D4 Could not read component links for a line \u2014 save stopped so units are not posted to the wrong product. Try again.','err'); return; }
+    const comps = await compResp.json();
     if(comps.length) {
       // l.units is already the individual unit count (cases × qty_per_pack entered by user).
       // For bulk (1 component): all units go to the single component at l.unit_cost.
