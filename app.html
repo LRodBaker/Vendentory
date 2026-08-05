@@ -5388,10 +5388,18 @@ async function savePur() {
   const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
   const purBody={supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,discount_amount:dis,status:status==='ordered'?'draft':'received',notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex-dis};
   let purId;
+  let hadPriorTxns=false;
   if(_editPurId) {
     // Editing: reverse old inventory transactions and lines, then patch the header.
     // Both DELETEs must succeed before we re-insert — checked explicitly to prevent double-posting.
-    const delTxnResp=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
+    // Did this purchase already post inventory? If so the edit must RESTORE it —
+    // the pre-count wall applies only to purchases that never posted.
+    const priorTxnResp=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&transaction_type=eq.purchase_receipt&reference_id=eq.'+_editPurId+'&select=id&limit=1',{headers:wh});
+    if(!priorTxnResp.ok){hideL();toast('Could not read existing inventory transactions — edit aborted. Try again.','err');return;}
+    hadPriorTxns=(await priorTxnResp.json()).length>0;
+    // Scoped to purchase_receipt: manual quantity_adjustment rows attached to this
+    // purchase (e.g. hand-entered return corrections) must survive an edit.
+    const delTxnResp=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&transaction_type=eq.purchase_receipt&reference_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
     if(!delTxnResp.ok&&delTxnResp.status!==404){hideL();toast('Could not reverse old inventory transactions — edit aborted to prevent double-counting. Try again.','err');return;}
     const delLinesResp=await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
     if(!delLinesResp.ok&&delLinesResp.status!==404){hideL();toast('Could not remove old purchase lines — edit aborted. Try again.','err');return;}
@@ -5425,7 +5433,7 @@ async function savePur() {
   // The count is the baseline — this purchase affects books/WAC only.
   const purDateVal = document.getElementById('pud').value;
   const lastCountVal = await getLastCountDate();
-  const purIsPreCount = !!(status === 'received' && purDateVal && lastCountVal && purDateVal < lastCountVal);
+  const purIsPreCount = !!(status === 'received' && purDateVal && lastCountVal && purDateVal < lastCountVal && !hadPriorTxns);
   if(purIsPreCount){
     toast('\u26A0 Purchase date '+purDateVal+' is before your last count ('+lastCountVal+'). Saved for bookkeeping — inventory NOT adjusted (count is the baseline).','warn');
   }
