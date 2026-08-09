@@ -5466,11 +5466,13 @@ async function savePur() {
   // purBody so the edit reuses it. Overwriting is what moved 114 units into August.
   // Aborts on a failed read: a network failure must not look like "no date yet".
   let spRcvExisting = null;
+  let spStoredStatus = null;
   if(_editPurId){
-    const rcvChk = await fetch(SURL+'/rest/v1/purchases?id=eq.'+_editPurId+'&select=received_date',{headers:wh});
+    const rcvChk = await fetch(SURL+'/rest/v1/purchases?id=eq.'+_editPurId+'&select=received_date,status',{headers:wh});
     if(!rcvChk.ok){hideL();toast('Could not read the existing received date — edit aborted. Try again.','err');return;}
     const rcvRows = await rcvChk.json();
     spRcvExisting = rcvRows[0]?.received_date || null;
+    spStoredStatus = rcvRows[0]?.status || null;
   }
   // B4: a date typed into the form is deliberate user intent and outranks the
   // stored value. Blank field keeps B3's behaviour: reuse existing, else today.
@@ -5488,10 +5490,34 @@ async function savePur() {
     const priorTxnResp=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&transaction_type=eq.purchase_receipt&reference_id=eq.'+_editPurId+'&select=id&limit=1',{headers:wh});
     if(!priorTxnResp.ok){hideL();toast('Could not read existing inventory transactions — edit aborted. Try again.','err');return;}
     hadPriorTxns=(await priorTxnResp.json()).length>0;
-    // Scoped to purchase_receipt: manual quantity_adjustment rows attached to this
-    // purchase (e.g. hand-entered return corrections) must survive an edit.
-    const delTxnResp=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&transaction_type=eq.purchase_receipt&reference_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
-    if(!delTxnResp.ok&&delTxnResp.status!==404){hideL();toast('Could not reverse old inventory transactions — edit aborted to prevent double-counting. Try again.','err');return;}
+    // ── RECEIVING IS THE ONLY DOOR ────────────────────────────────────────────
+    // Rod's rule, 2026-08-09: units enter inventory when they are checked in on
+    // the Receive screen, and anything not checked in is simply waiting. Editing
+    // a purchase is paperwork — supplier, invoice, dates, prices, tip — and must
+    // never move stock.
+    //
+    // What this replaces: the DELETE below ran unconditionally while the re-post
+    // is gated on status==='received', so saving an already-received purchase as
+    // anything else deleted its receipt rows and never rewrote them. Worse, the
+    // receipt rows ARE the only record of what arrived — the Receive screen
+    // derives "already posted" from them — so the delete erased the delivery
+    // itself, not just the stock. Confirmed live: Sam's 10446534297 lost its
+    // entire 22-row batch on 2026-08-09 and came back reading "0 of 52 cases".
+    // Third instance of this class after F-066 and the unchecked POST at 9,864.
+    //
+    // So: if this purchase has already posted inventory, leave the ledger alone
+    // and keep the stored status. 'partial' survives an edit for the first time.
+    if(hadPriorTxns){
+      purBody.status = spStoredStatus || purBody.status;
+      purBody.received_date = spRcvTyped || spRcvExisting;
+    } else {
+      // Never posted — nothing to protect, original behaviour.
+      // Scoped to purchase_receipt: manual quantity_adjustment rows attached to this
+      // purchase (e.g. hand-entered return corrections) must survive an edit.
+      const delTxnResp=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&transaction_type=eq.purchase_receipt&reference_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
+      if(!delTxnResp.ok&&delTxnResp.status!==404){hideL();toast('Could not reverse old inventory transactions — edit aborted to prevent double-counting. Try again.','err');return;}
+    }
+    // ── END RECEIVING IS THE ONLY DOOR ────────────────────────────────────────
     const delLinesResp=await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
     if(!delLinesResp.ok&&delLinesResp.status!==404){hideL();toast('Could not remove old purchase lines — edit aborted. Try again.','err');return;}
     const patchResp=await fetch(SURL+'/rest/v1/purchases?id=eq.'+_editPurId,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(purBody)});
@@ -5544,7 +5570,9 @@ async function savePur() {
   // ── END PRE-COUNT WALL ────────────────────────────────────────────────────────
 
   // Only update inventory if status is 'received' AND not pre-count — not for ordered-only records
-  if(status === 'received' && !purIsPreCount) for(const l of vl) {
+  // hadPriorTxns: the receipt rows were left in place above, so rebuilding them
+  // here would double-post. Stock is whatever receiving recorded.
+  if(!hadPriorTxns && status === 'received' && !purIsPreCount) for(const l of vl) {
     const prod = AP.find(p => p.id === l.product_id || p.product_id === l.product_id);
     // Check for base product links (works for variety packs AND regular bulk products)
     const compResp = await fetch(SURL+'/rest/v1/product_components?pack_product_id=eq.'+l.product_id+'&select=component_product_id,qty_per_pack',{headers:wh});
@@ -5599,7 +5627,7 @@ async function savePur() {
   }
   hideL();
   const wasEdit=!!_editPurId; _editPurId=null;
-  toast(wasEdit?'Purchase updated!':status==='ordered'?'Order saved! Inventory will update when marked received.':'Purchase received! Inventory updated.','ok');
+  toast(wasEdit?(hadPriorTxns?'Purchase details updated — inventory unchanged. Use Receive Order to change what arrived.':'Purchase updated!'):status==='ordered'?'Order saved! Inventory will update when marked received.':'Purchase received! Inventory updated.','ok');
   clrPur(); await loadProds2(); renderProds(); loadPurHistory();
 }
 
