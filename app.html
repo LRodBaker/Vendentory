@@ -403,7 +403,8 @@ body.ro #ro-badge{display:flex!important}
                 <div class="fg"><label class="fl">Status</label><select class="fs" id="pustat" onchange="updPurSaveBtn()"><option value="ordered" selected>Ordered — save now, receive later</option><option value="received">Received — post inventory now</option></select><div id="pustat-hint" style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4"></div></div>
                 <div class="fg"><label class="fl">Shipping ($)</label><input class="fi" type="number" id="push" value="0" step="0.01" oninput="updPT()"></div>
                 <div class="fg"><label class="fl">Tax ($)</label><input class="fi" type="number" id="putx" value="0" step="0.01" oninput="updPT()"></div>
-                <div class="fg"><label class="fl">Extra costs ($)</label><input class="fi" type="number" id="puex" value="0" step="0.01" oninput="updPT()" placeholder="Tips, fees, etc."></div>
+                <div class="fg"><label class="fl">Driver tip ($)</label><input class="fi" type="number" id="putip" value="0" step="0.01" oninput="updPT()" placeholder="Sam's driver tip"></div>
+                <div class="fg"><label class="fl">Delivery fee ($)</label><input class="fi" type="number" id="pufee" value="0" step="0.01" oninput="updPT()" placeholder="Delivery / service fee"></div>
                 <div class="fg"><label class="fl">Discount ($)</label><input class="fi" type="number" id="pudis" value="0" step="0.01" min="0" oninput="updPT()" placeholder="Coupons, promotions, etc."></div>
               </div>
               <div class="fg"><label class="fl">Notes</label><input class="fi" id="pun" placeholder="Optional"></div>
@@ -415,7 +416,7 @@ body.ro #ro-badge{display:flex!important}
               <div style="height:0.5px;background:var(--border);margin:12px 0"></div>
               <div id="pu-recon"></div>
               <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-                <div style="font-size:13px" class="tm">Subtotal: <span id="pts">$0.00</span> · Ship: <span id="ptsh">$0.00</span> · Tax: <span id="pttx">$0.00</span> · Extra: <span id="ptex">$0.00</span> · Discount: <span id="ptdis">$0.00</span></div>
+                <div style="font-size:13px" class="tm">Subtotal: <span id="pts">$0.00</span> · Ship: <span id="ptsh">$0.00</span> · Tax: <span id="pttx">$0.00</span> · Tip: <span id="pttip">$0.00</span> · Delivery: <span id="ptfee">$0.00</span> · Discount: <span id="ptdis">$0.00</span></div>
                 <div style="font-size:18px;font-weight:700;font-family:var(--font-head)">Total: <span id="ptt">$0.00</span></div>
               </div>
               <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;justify-content:space-between;align-items:center">
@@ -3843,7 +3844,7 @@ function updPL(i,f,v){
 }
 
 function rmPL(i){PL.splice(i,1);renderPL();}
-function clrPur(){_editPurId=null;_RECEIPT_TOTAL=null;PL=[];renderPL();['pui','pun','pud','purcv'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});['push','putx','puex','pudis'].forEach(id=>document.getElementById(id).value='0');document.getElementById('pustat').value='ordered';const supEl=document.getElementById('pus');if(supEl)supEl.value='';updPurSaveBtn();}
+function clrPur(){_editPurId=null;_RECEIPT_TOTAL=null;PL=[];renderPL();['pui','pun','pud','purcv'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});['push','putx','putip','pufee','pudis'].forEach(id=>document.getElementById(id).value='0');document.getElementById('pustat').value='ordered';const supEl=document.getElementById('pus');if(supEl)supEl.value='';updPurSaveBtn();}
 
 function updPurSaveBtn(){
   const s=document.getElementById('pustat').value;
@@ -4641,7 +4642,8 @@ function checkReceiptBalance() {
   const sub = PL.reduce((s,l)=>s+(l.total||0), 0);
   const sh  = parseFloat(document.getElementById('push').value)  || 0;
   const tx  = parseFloat(document.getElementById('putx').value)  || 0;
-  const ex  = parseFloat(document.getElementById('puex').value)  || 0;
+  const ex  = (parseFloat(document.getElementById('putip').value) || 0)
+            + (parseFloat(document.getElementById('pufee').value) || 0);
   const dis = parseFloat(document.getElementById('pudis').value) || 0;
   const computed = sub + sh + tx + ex - dis;
   const gap = Math.round((_RECEIPT_TOTAL - computed) * 100) / 100;
@@ -4654,7 +4656,7 @@ function checkReceiptBalance() {
     <div style="font-weight:700;margin-bottom:4px">Does not balance to the receipt</div>
     <div style="margin-bottom:8px">Receipt total <strong>$${_RECEIPT_TOTAL.toFixed(2)}</strong> &middot; this purchase computes to <strong>$${computed.toFixed(2)}</strong> &middot; difference <strong>${gap<0?'-':''}$${Math.abs(gap).toFixed(2)}</strong>.
     Check the line quantities first — an unlisted member discount or fee is the usual cause.</div>
-    <button class="btn btn-sm" onclick="applyReconGap(${gap})">${gap>0?'Add':'Subtract'} $${Math.abs(gap).toFixed(2)} ${gap>0?'to Extra':'as Discount'}</button>
+    <button class="btn btn-sm" onclick="applyReconGap(${gap})">${gap>0?'Add':'Subtract'} $${Math.abs(gap).toFixed(2)} ${gap>0?'to Driver tip':'as Discount'}</button>
     <button class="btn btn-sm" onclick="_RECEIPT_TOTAL=null;checkReceiptBalance();">Dismiss</button>
   </div>`;
 }
@@ -4663,8 +4665,8 @@ function checkReceiptBalance() {
 // Never called automatically — a guessed number is what caused the original bug.
 function applyReconGap(gap) {
   if(gap > 0) {
-    const cur = parseFloat(document.getElementById('puex').value) || 0;
-    document.getElementById('puex').value = (cur + gap).toFixed(2);
+    const cur = parseFloat(document.getElementById('putip').value) || 0;
+    document.getElementById('putip').value = (cur + gap).toFixed(2);
   } else {
     const cur = parseFloat(document.getElementById('pudis').value) || 0;
     document.getElementById('pudis').value = (cur + Math.abs(gap)).toFixed(2);
@@ -4688,7 +4690,8 @@ function openAIImportPreview(data) {
   // a displayed Extra of 3.36 and a total $4.64 below the receipt.
   const _ex = parseFloat(data.extra_costs) || 0;
   const _dis = parseFloat(data.discount) || 0;
-  document.getElementById('puex').value  = _ex  > 0 ? _ex.toFixed(2)  : '0';
+  document.getElementById('putip').value = _ex  > 0 ? _ex.toFixed(2)  : '0';
+  document.getElementById('pufee').value = '0';
   document.getElementById('pudis').value = _dis > 0 ? _dis.toFixed(2) : '0';
   // AI import = receipt already in hand → default to Received
   document.getElementById('pustat').value = 'ordered';
@@ -5317,7 +5320,8 @@ async function editPurchase(id) {
   document.getElementById('pun').value = p.notes || '';
   document.getElementById('push').value = p.shipping_cost || 0;
   document.getElementById('putx').value = p.tax_amount || 0;
-  document.getElementById('puex').value = p.extra_costs || 0;
+  document.getElementById('putip').value = p.driver_tip || 0;
+  document.getElementById('pufee').value = p.delivery_fee || 0;
   document.getElementById('pudis').value = p.discount_amount || 0;
   document.getElementById('pustat').value = (p.status==='received') ? 'received' : 'ordered';
   const supEl = document.getElementById('pus');
@@ -5377,12 +5381,15 @@ function updPT(){
   const sub=PL.reduce((s,l)=>s+l.total,0);
   const sh=parseFloat(document.getElementById('push').value)||0;
   const tx=parseFloat(document.getElementById('putx').value)||0;
-  const ex=parseFloat(document.getElementById('puex').value)||0;
+  const tip=parseFloat(document.getElementById('putip').value)||0;
+  const fee=parseFloat(document.getElementById('pufee').value)||0;
+  const ex=tip+fee;
   const dis=parseFloat(document.getElementById('pudis').value)||0;
   document.getElementById('pts').textContent=fmt(sub);
   document.getElementById('ptsh').textContent=fmt(sh);
   document.getElementById('pttx').textContent=fmt(tx);
-  document.getElementById('ptex').textContent=fmt(ex);
+  document.getElementById('pttip').textContent=fmt(tip);
+  document.getElementById('ptfee').textContent=fmt(fee);
   document.getElementById('ptdis').textContent=fmt(dis);
   document.getElementById('ptt').textContent=fmt(sub+sh+tx+ex-dis);
   if(typeof checkReceiptBalance==='function') checkReceiptBalance();
@@ -5449,7 +5456,9 @@ async function savePur() {
   const sub=vl.reduce((s,l)=>s+l.total,0);
   const sh=parseFloat(document.getElementById('push').value)||0;
   const tx=parseFloat(document.getElementById('putx').value)||0;
-  const ex=parseFloat(document.getElementById('puex').value)||0;
+  const tip=parseFloat(document.getElementById('putip').value)||0;
+  const fee=parseFloat(document.getElementById('pufee').value)||0;
+  const ex=tip+fee;
   const dis=parseFloat(document.getElementById('pudis').value)||0;
   const tok = await getAuthToken();
   const wh = {'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
@@ -5468,7 +5477,7 @@ async function savePur() {
   const spRcvTyped = (document.getElementById('purcv')?.value || '').trim() || null;
   const spRcvDate  = spRcvTyped || spRcvExisting || new Date().toISOString().slice(0,10);
   const spRcvStamp = new Date(spRcvDate+'T12:00:00').toISOString();
-  const purBody={supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,extra_costs:ex,discount_amount:dis,status:status==='ordered'?'draft':'received',received_date:status==='ordered'?(spRcvTyped||spRcvExisting):spRcvDate,notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex-dis};
+  const purBody={supplier_id:document.getElementById('pus').value||null,invoice_number:document.getElementById('pui').value||null,purchase_date:document.getElementById('pud').value,shipping_cost:sh,tax_amount:tx,driver_tip:tip,delivery_fee:fee,extra_costs:ex,discount_amount:dis,status:status==='ordered'?'draft':'received',received_date:status==='ordered'?(spRcvTyped||spRcvExisting):spRcvDate,notes:document.getElementById('pun').value||null,subtotal_amount:sub,total_amount:sub+sh+tx+ex-dis};
   let purId;
   let hadPriorTxns=false;
   if(_editPurId) {
