@@ -5565,14 +5565,22 @@ async function savePur() {
   // This is the last line of defence against double-posting if an edit DELETE failed silently.
   if(invTxns.length) {
     const existChk=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.purchase&reference_id=eq.'+purId+'&select=id&limit=1',{headers:wh});
-    const existRows=existChk.ok?await existChk.json():[];
+    if(!existChk.ok){ hideL(); toast('\u26D4 Could not verify existing inventory for this purchase \u2014 save stopped so units are not double-posted. Try again.','err'); return; }
+    const existRows=await existChk.json();
     if(existRows.length>0){
       hideL();
       toast('⚠ Inventory transactions already exist for this purchase — not re-posting to prevent double-counting. If this was an edit, go to Stock Control → Inventory Audit to check for duplicates.','err');
       clrPur(); await loadProds2(); loadPurHistory();
       return;
     }
-    await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
+    const postResp=await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(invTxns)});
+    if(!postResp.ok){
+      let detail=''; try{ detail=(await postResp.text()||'').slice(0,200); }catch(e){}
+      hideL();
+      toast('\u26D4 Purchase header saved but INVENTORY WAS NOT POSTED ('+postResp.status+'). Stock is unchanged, and any prior transactions for this purchase were removed by the edit. Re-open this purchase and save again. '+detail,'err');
+      loadPurHistory();
+      return;
+    }
   }
 
   // Recalculate WAC from full purchase history for each affected product
@@ -6753,12 +6761,15 @@ async function getLastCountDate() {
     const tok = await getAuthToken();
     // A2(a): a count writes write_off for shortages and quantity_adjustment for
     // overages. Reading only the latter misses any count with no overage at all.
-    // A2(b): the baseline-correction writer notes do not start 'Physical count ',
-    // so also match on reason_code.
+    // A2(b): the baseline-correction writer notes do not START with 'Physical
+    // count ' but do CONTAIN it, so match case-insensitively anywhere in the note.
+    // Do NOT match on reason_code: L6439 assigns count_correction/missing from the
+    // variance sign alone (D9), so ordinary adjustments carry those codes. Matching
+    // them moved the wall to 2026-07-21 on a '"Freebies" from smartmarkets' row.
     const resp = await fetch(
       SURL + '/rest/v1/inventory_transactions'
         + '?transaction_type=in.(quantity_adjustment,write_off)'
-        + '&or=(notes.like.Physical count *,reason_code.in.(count_correction,missing))'
+        + '&notes=ilike.*physical count*'
         + '&order=transaction_date.desc&limit=1&select=transaction_date',
       { headers: { 'apikey': SKEY, 'Authorization': 'Bearer ' + tok } }
     );
