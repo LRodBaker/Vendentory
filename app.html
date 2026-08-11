@@ -5474,6 +5474,45 @@ async function savePur() {
     spRcvExisting = rcvRows[0]?.received_date || null;
     spStoredStatus = rcvRows[0]?.status || null;
   }
+  // ── LINE SNAPSHOT + DISCOUNT CARRY-FORWARD 2026-08-10 ─────────────────────
+  // Read the existing lines BEFORE any destructive work, for two reasons:
+  //   (1) restore them if the re-insert fails;
+  //   (2) carry discount_percent forward, which build 9,901 otherwise DROPS on
+  //       every edit. discount_percent exists in the table but appears ZERO
+  //       times in this file: editPurchase's PL mapping does not carry it and
+  //       the insert below never wrote it, so a delete-and-reinsert silently
+  //       reset it to the column default of 0.
+  // Columns are the full production set minus id/created_at (generated) and
+  // purchase_id (supplied by the caller). Nothing invented.
+  // A failed read aborts: deleting lines with no way back is the failure being
+  // repaired, and guessing at discounts would be worse than not saving.
+  let spLineSnapshot = null;
+  let spDiscByProduct = null;
+  if(_editPurId){
+    const lineSnapResp = await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+_editPurId+'&select=product_id,cases,cost_per_case,units_received,unit_cost,discount_percent,line_total',{headers:wh});
+    if(!lineSnapResp.ok){hideL();toast('Could not read the existing purchase lines — edit aborted so nothing is deleted without a way back. Try again.','err');return;}
+    spLineSnapshot = await lineSnapResp.json();
+    // Map product_id -> discount_percent so the rebuilt lines keep it.
+    // If one product appears on two lines with DIFFERENT non-zero discounts the
+    // mapping is ambiguous, and guessing would corrupt a real figure. Abort.
+    spDiscByProduct = {};
+    let spDiscAmbiguous = null;
+    for(const l of spLineSnapshot){
+      const dp = parseFloat(l.discount_percent)||0;
+      if(Object.prototype.hasOwnProperty.call(spDiscByProduct,l.product_id)){
+        if(spDiscByProduct[l.product_id] !== dp && (spDiscByProduct[l.product_id] || dp)) spDiscAmbiguous = l.product_id;
+      } else {
+        spDiscByProduct[l.product_id] = dp;
+      }
+    }
+    if(spDiscAmbiguous){
+      hideL();
+      toast('\u26D4 This purchase has the same product on two lines with different discount percentages. Saving would have to guess which discount applies, so the edit was stopped. Nothing has been changed.','err');
+      return;
+    }
+  }
+  // ── END LINE SNAPSHOT ─────────────────────────────────────────────────────
+
   // B4: a date typed into the form is deliberate user intent and outranks the
   // stored value. Blank field keeps B3's behaviour: reuse existing, else today.
   const spRcvTyped = (document.getElementById('purcv')?.value || '').trim() || null;
@@ -5501,8 +5540,11 @@ async function savePur() {
     // anything else deleted its receipt rows and never rewrote them. Worse, the
     // receipt rows ARE the only record of what arrived — the Receive screen
     // derives "already posted" from them — so the delete erased the delivery
-    // itself, not just the stock. Confirmed live: Sam's 10446534297 lost its
-    // entire 22-row batch on 2026-08-09 and came back reading "0 of 52 cases".
+    // itself, not just the stock. Confirmed live: Sam's 10446534297 lost 14
+    // receipt rows on 2026-08-09 and came back reading "0 of 52 cases". The
+    // Receive-screen repair then created 22 rows — restoring the 14 deleted AND
+    // correcting an 8-line under-post that predated the incident. 14 lost,
+    // 22 created; do not conflate them.
     // Third instance of this class after F-066 and the unchecked POST at 9,864.
     //
     // So: if this purchase has already posted inventory, leave the ledger alone
@@ -5518,10 +5560,13 @@ async function savePur() {
       if(!delTxnResp.ok&&delTxnResp.status!==404){hideL();toast('Could not reverse old inventory transactions — edit aborted to prevent double-counting. Try again.','err');return;}
     }
     // ── END RECEIVING IS THE ONLY DOOR ────────────────────────────────────────
-    const delLinesResp=await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
-    if(!delLinesResp.ok&&delLinesResp.status!==404){hideL();toast('Could not remove old purchase lines — edit aborted. Try again.','err');return;}
+    // ORDERING FIX 2026-08-10: header PATCH runs BEFORE the line DELETE.
+    // Previously lines were deleted first, so a failed PATCH returned early and
+    // left the purchase with ZERO lines and no re-insert.
     const patchResp=await fetch(SURL+'/rest/v1/purchases?id=eq.'+_editPurId,{method:'PATCH',headers:{...wh,'Prefer':'return=minimal'},body:JSON.stringify(purBody)});
     if(!patchResp.ok){hideL();toast('Error updating purchase','err');return;}
+    const delLinesResp=await fetch(SURL+'/rest/v1/purchase_lines?purchase_id=eq.'+_editPurId,{method:'DELETE',headers:wh});
+    if(!delLinesResp.ok&&delLinesResp.status!==404){hideL();toast('\u26D4 Your header changes WERE SAVED. The LINE changes were NOT saved ('+delLinesResp.status+') — this purchase still has its previous lines. Nothing was lost. Re-open it and make the line changes again.','err');return;}
     purId=_editPurId;
   } else {
     const purResp=await fetch(SURL+'/rest/v1/purchases',{method:'POST',headers:{...wh,'Prefer':'return=representation'},body:JSON.stringify({...purBody,created_by:CU?.id})});
@@ -5532,12 +5577,47 @@ async function savePur() {
     purId=pur.id;
   }
 
-  // Insert purchase lines
-  await fetch(SURL+'/rest/v1/purchase_lines', {
+  // ── CHECKED LINE INSERT + DISCOUNT CARRY-FORWARD + RESTORE 2026-08-10 ─────
+  // Response is now checked. discount_percent is carried forward from the
+  // snapshot by product_id; a brand-new line has no prior value and the key is
+  // omitted so the column default applies. On a new purchase there is no
+  // snapshot and the field is never sent.
+  const lineRows = vl.map(l=>{
+    const row = {purchase_id:purId,product_id:l.product_id,cases:l.cases,cost_per_case:l.cost_per_case,units_received:l.units,unit_cost:l.unit_cost,line_total:l.total};
+    if(spDiscByProduct && Object.prototype.hasOwnProperty.call(spDiscByProduct,l.product_id)) row.discount_percent = spDiscByProduct[l.product_id];
+    return row;
+  });
+  const lineInsResp = await fetch(SURL+'/rest/v1/purchase_lines', {
     method:'POST',
     headers:{...wh,'Prefer':'return=minimal'},
-    body:JSON.stringify(vl.map(l=>({purchase_id:purId,product_id:l.product_id,cases:l.cases,cost_per_case:l.cost_per_case,units_received:l.units,unit_cost:l.unit_cost,line_total:l.total})))
+    body:JSON.stringify(lineRows)
   });
+  if(!lineInsResp.ok){
+    let insDetail=''; try{ insDetail=(await lineInsResp.text()||'').slice(0,200); }catch(e){}
+    if(_editPurId && spLineSnapshot && spLineSnapshot.length){
+      // Put the original lines back, every meaningful field included.
+      // Row ids and created_at are NOT preserved — these are new rows carrying
+      // the original values.
+      const restoreResp = await fetch(SURL+'/rest/v1/purchase_lines', {
+        method:'POST',
+        headers:{...wh,'Prefer':'return=minimal'},
+        body:JSON.stringify(spLineSnapshot.map(l=>({purchase_id:_editPurId,product_id:l.product_id,cases:l.cases,cost_per_case:l.cost_per_case,units_received:l.units_received,unit_cost:l.unit_cost,discount_percent:l.discount_percent,line_total:l.line_total})))
+      });
+      hideL();
+      if(restoreResp.ok){
+        toast('\u26D4 Could not save the new purchase lines ('+lineInsResp.status+'). The original '+spLineSnapshot.length+' line(s) have been restored and no line data was lost. Your header changes WERE saved. Re-open and try the line changes again. '+insDetail,'err');
+      } else {
+        toast('\u26D4 STOP. This purchase now has NO LINES. The new lines failed to save ('+lineInsResp.status+') AND restoring the original '+spLineSnapshot.length+' line(s) also failed ('+restoreResp.status+'). Receipt transactions and stock are UNCHANGED. DO NOT edit or re-save this purchase. Leave it exactly as it is. Write down the invoice number ('+(invoiceNum||'(none)')+') and the time ('+new Date().toLocaleString()+'). The surviving database state must be MEASURED before anything is rebuilt — do NOT re-enter lines from the paper invoice until that measurement is done and reconstruction is explicitly authorized. '+insDetail,'err');
+      }
+      loadPurHistory();
+      return;
+    }
+    hideL();
+    toast('\u26D4 Purchase header saved but its LINES WERE NOT SAVED ('+lineInsResp.status+'). No inventory was posted. Re-open this purchase and add the lines again. '+insDetail,'err');
+    loadPurHistory();
+    return;
+  }
+  // ── END CHECKED LINE INSERT ───────────────────────────────────────────────
 
 
 
