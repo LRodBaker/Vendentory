@@ -6958,27 +6958,25 @@ async function checkStrandedPreCountReceipts(countDate) {
 
     const bodyHTML = `
       <div style="background:var(--red-light);border:1px solid var(--red-mid);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px">
-        <strong style="color:var(--red)">${rows.length} purchase receipt${rows.length !== 1 ? 's' : ''} (${totalUnits} units)</strong> are dated before your
-        <strong>${fmtD(cutoff)}</strong> physical count but are still adding to inventory.
-        These units were already captured in your count — they are inflating your on-hand numbers.
+        <strong style="color:var(--red)">${rows.length} purchase receipt${rows.length !== 1 ? 's' : ''} (${totalUnits} units)</strong> were entered before your
+        <strong>${fmtD(cutoff)}</strong> physical count and are still contributing to inventory.
+        They may already have been captured by that count, or they may be legitimate receipts. Review is required to tell the difference.
       </div>
       <div style="max-height:200px;overflow-y:auto;margin-bottom:12px;border:0.5px solid var(--border);border-radius:8px;padding:0 12px">
         ${prodLines}
       </div>
       <div style="font-size:12px;color:var(--gray-600);line-height:1.6">
-        <strong>Fix:</strong> Delete these transactions. Your count is the baseline — these receipts
-        should have been saved for bookkeeping only, with no inventory impact.<br><br>
-        Run this SQL in Supabase to remove them:<br>
-        <code style="background:var(--gray-900);color:#e2e8f0;padding:6px 10px;border-radius:6px;display:block;margin-top:6px;font-size:11px;word-break:break-all">
-          DELETE FROM inventory_transactions WHERE transaction_type = 'purchase_receipt' AND created_at &lt; '${cutoff}T00:00:00+00';
-        </code>
+        <strong>Review required.</strong> These receipt transactions predate the last physical count and may
+        require an inventory correction.<br><br>
+        <strong>Do not delete receipt history.</strong> Receipt rows are the record of what was actually
+        delivered, not just a stock entry. Review this before making any adjustment.
       </div>`;
 
     // Show the warning modal
     await showImportDecision(
       '⚠️ Stranded Pre-Count Receipts Found',
       bodyHTML,
-      [{label: 'OK — I will fix this in Supabase', value: 'ok', style: 'btn-p'}]
+      [{label: 'OK — review required', value: 'ok', style: 'btn-p'}]
     );
 
     // Also set/refresh the dashboard integrity banner
@@ -7036,15 +7034,13 @@ function _setIntegrityBanner(rowCount, unitCount, cutoff) {
     <div style="flex:1">
       <div style="font-weight:700;color:var(--red);font-size:14px;margin-bottom:4px">Inventory Integrity Problem</div>
       <div style="font-size:13px;color:var(--gray-700);line-height:1.6">
-        <strong>${rowCount} purchase receipt${rowCount !== 1 ? 's' : ''} (${unitCount} units)</strong> are dated before your
-        last count on <strong>${fmtD(cutoff)}</strong> but are still inflating inventory.
-        These are phantom units — your physical count already captured what was on hand.
+        <strong>${rowCount} purchase receipt${rowCount !== 1 ? 's' : ''} (${unitCount} units)</strong> were entered before your
+        last count on <strong>${fmtD(cutoff)}</strong> and are still contributing to inventory.
+        They may already have been captured by that count, or they may be legitimate receipts.
       </div>
       <div style="margin-top:8px;font-size:12px;color:var(--gray-600)">
-        Go to <strong>Supabase → SQL Editor</strong> and run:<br>
-        <code style="background:var(--gray-900);color:#e2e8f0;padding:5px 9px;border-radius:6px;display:inline-block;margin-top:4px;font-size:11px;word-break:break-all">
-          DELETE FROM inventory_transactions WHERE transaction_type = 'purchase_receipt' AND created_at &lt; '${cutoff}T00:00:00+00';
-        </code>
+        <strong>Review required</strong> before any inventory correction is made.
+        <strong>Do not delete receipt history.</strong>
       </div>
     </div>`;
 }
