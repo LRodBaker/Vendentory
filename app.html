@@ -7784,22 +7784,9 @@ async function loadIH(){
 }
 
 async function deleteImport(id, sd, ed){
+  if(_roBlock('deleteImport')) return;
   const label=sd&&ed?`${fmtD(sd)} → ${fmtD(ed)}`:'this import';
-  if(!confirm(`Delete import: ${label}?\n\nThis will remove all sales lines and reverse the inventory transactions from this import. This cannot be undone.`))return;
-  showL('Deleting import...');
-  const tok=await getAuthToken();
-  const h={'apikey':SKEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json'};
-  // 1. Reverse inventory transactions (sales_consumption linked to this import)
-  await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.import&reference_id=eq.'+id,{method:'DELETE',headers:h});
-  // 2. Delete sales lines
-  await fetch(SURL+'/rest/v1/sales_lines?sales_import_id=eq.'+id,{method:'DELETE',headers:h});
-  // 3. Delete the import record
-  const resp=await fetch(SURL+'/rest/v1/sales_imports?id=eq.'+id,{method:'DELETE',headers:h});
-  hideL();
-  if(!resp.ok){toast('Delete failed — check DB permissions','err');return;}
-  toast('Import deleted and inventory reversed','ok');
-  await loadProds2();
-  loadIH();
+  toast('Manual import deletion is temporarily disabled for safety. No data was changed. Review '+label+' before any corrective action.','warn');
 }
 
 
