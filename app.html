@@ -7245,20 +7245,23 @@ async function confImport(){
     );
     if(proceed !== 'ok'){ toast('Import cancelled','warn'); return; }
 
-    // Delete old import atomically (inventory_transactions → sales_lines → sales_imports)
-    showL('Replacing old import...');
+    // BUILD FIRST — RETIRE OLD LAST.
+    // The old import is left completely untouched until the replacement header,
+    // sales_lines, and delta inventory transactions have ALL been written
+    // successfully. PostgREST gives us no multi-statement transaction, so the
+    // only safe ordering is to build the replacement first and retire the old
+    // record last. If any replacement write fails we clean up ONLY the new
+    // records (scoped to the new import id) and leave the old import intact.
+    showL('Building replacement import...');
     const tok2=await getAuthToken();
     const dh={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json','Prefer':'return=minimal'};
-    await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.import&reference_id=eq.'+old.id,{method:'DELETE',headers:dh});
-    await fetch(SURL+'/rest/v1/sales_lines?sales_import_id=eq.'+old.id,{method:'DELETE',headers:dh});
-    await fetch(SURL+'/rest/v1/sales_imports?id=eq.'+old.id,{method:'DELETE',headers:dh});
 
-    // Create new import record
+    // Create new import record (old import still live at this point)
     const ih={'apikey':SKEY,'Authorization':'Bearer '+tok2,'Content-Type':'application/json'};
     const irResp=await fetch(SURL+'/rest/v1/sales_imports',{method:'POST',headers:{...ih,'Prefer':'return=representation'},body:JSON.stringify({source_system:(impSource&&impSource.source)||'Unknown',source_filename:(impSource&&impSource.fileName)||null,report_start_date:sd||null,report_end_date:ed||null,status:'imported',imported_by:CU?.id})});
-    if(!irResp.ok){hideL();toast('Error creating import record','err');return;}
+    if(!irResp.ok){hideL();toast('\u26D4 Extension failed \u2014 could not create the replacement import record. Your existing '+oldLabel+' import was NOT changed. Nothing was posted \u2014 you can retry.','err');return;}
     const irArr=await irResp.json(); const ir=Array.isArray(irArr)?irArr[0]:irArr;
-    if(!ir?.id){hideL();toast('Error: could not get import ID','err');return;}
+    if(!ir?.id){hideL();toast('\u26D4 Extension failed \u2014 the replacement import record has no usable id, so it cannot be cleaned up automatically. Your existing '+oldLabel+' import was NOT changed. Check Import History for a stray '+newLabel+' record before retrying.','err');return;}
 
     // Insert full sales_lines for new period
     const deltaTxnStamp = new Date((ed||new Date().toISOString().split('T')[0])+'T12:00:00').toISOString();
@@ -7278,12 +7281,54 @@ async function confImport(){
         invTxnsBatch.push({product_id:matched.id,transaction_type:'sales_consumption',transaction_date:deltaTxnStamp,quantity_change:-delta,warehouse_quantity_change:-delta,reference_type:'import',reference_id:ir.id,notes:'Sales import '+sd+' to '+ed+' (delta from '+old.report_end_date+')',created_by:CU?.id});
       }
     }
-    if(lines.length) await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
-    if(invTxnsBatch.length) await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(invTxnsBatch)});
+    // Roll back ONLY the new replacement records. Every filter is scoped to
+    // ir.id so this can never reach the old import's rows or its inventory.
+    const _extRollbackNew = async () => {
+      const r1=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.import&reference_id=eq.'+ir.id,{method:'DELETE',headers:dh});
+      const r2=await fetch(SURL+'/rest/v1/sales_lines?sales_import_id=eq.'+ir.id,{method:'DELETE',headers:dh});
+      const r3=await fetch(SURL+'/rest/v1/sales_imports?id=eq.'+ir.id,{method:'DELETE',headers:dh});
+      return r1.ok&&r2.ok&&r3.ok;
+    };
+    const _extFail = async (what) => {
+      const cleaned=await _extRollbackNew();
+      hideL();
+      if(cleaned){
+        toast('\u26D4 Extension failed ('+what+'). Your existing '+oldLabel+' import was NOT changed and is still intact. Nothing was posted \u2014 you can retry.','err');
+      } else {
+        toast('\u26D4 Extension failed ('+what+') and cleanup of the partial new import did not fully succeed. Your existing '+oldLabel+' import is still intact. Do NOT retry \u2014 check Import History for a duplicate '+newLabel+' record first.','err');
+      }
+    };
+
+    if(lines.length){
+      const slPost=await fetch(SURL+'/rest/v1/sales_lines',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(lines)});
+      if(!slPost.ok){ await _extFail('could not write sales lines'); return; }
+    }
+    if(invTxnsBatch.length){
+      const itPost=await fetch(SURL+'/rest/v1/inventory_transactions',{method:'POST',headers:{...ih,'Prefer':'return=minimal'},body:JSON.stringify(invTxnsBatch)});
+      if(!itPost.ok){ await _extFail('could not post delta inventory'); return; }
+    }
+
+    // Replacement is fully built and verified. Only now retire the old import.
+    // Every filter is scoped to old.id; the new delta transactions carry
+    // reference_id=ir.id and are therefore out of reach of these deletes.
+    showL('Retiring old import...');
+    const delOldTxn=await fetch(SURL+'/rest/v1/inventory_transactions?reference_type=eq.import&reference_id=eq.'+old.id,{method:'DELETE',headers:dh});
+    const delOldLines=await fetch(SURL+'/rest/v1/sales_lines?sales_import_id=eq.'+old.id,{method:'DELETE',headers:dh});
+    const delOldHdr=await fetch(SURL+'/rest/v1/sales_imports?id=eq.'+old.id,{method:'DELETE',headers:dh});
+    const oldRetired=delOldTxn.ok&&delOldLines.ok&&delOldHdr.ok;
+
     hideL();
     const unmatched=lines.filter(l=>!l.product_id);
     await loadProds2();
     loadIH();
+    if(!oldRetired){
+      const stillThere=[!delOldTxn.ok?'inventory rows':null,!delOldLines.ok?'sales lines':null,!delOldHdr.ok?'import record':null].filter(Boolean).join(', ');
+      toast('\u26A0\uFE0F New '+newLabel+' import created and '+totalDelta+' delta units posted, BUT the old '+oldLabel+' import was not fully removed ('+stillThere+' remain). Both may now appear in Import History \u2014 review before importing again.','err');
+      cancImport();
+      if(unmatched.length) showUnmatchedModal(unmatched);
+      if(inactiveMatched.length) showInactiveMatchAlert(inactiveMatched);
+      return;
+    }
     toast('\u2705 Extended '+oldLabel+' \u2192 '+newLabel+' \u2014 '+totalDelta+' new units posted to inventory'+(unmatched.length?' \u00B7 '+unmatched.length+' unmatched':''),'ok');
     cancImport();
     if(unmatched.length) showUnmatchedModal(unmatched);
